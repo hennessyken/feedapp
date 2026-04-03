@@ -1,0 +1,21 @@
+# Virtual environment
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Secrets
+.env
+
+# Runtime output
+runs/
+*.log
+
+# VS Code
+.vscode/
+
+# IB Gateway (if inside project)
+ibgateway/

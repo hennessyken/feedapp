@@ -1,0 +1,3953 @@
+{
+  "meta": {
+    "version": "3.0",
+    "description": "Production EU/UK → US ADR latency watchlist with feeds",
+    "strategy": "home_market_news → ADR/OTC lag. Run feeds continuously during US hours (09:30-16:00 EST). Edge exists whenever home feed publishes AND US OTC is open, regardless of whether home market is open or closed. Post-close window (home closed, US open) = largest mispricing.",
+    "trading_window_est": "09:30-11:30",
+    "total_companies": 219,
+    "feeds_count": 16
+  },
+  "feeds": {
+    "LSE_RNS": {
+      "description": "London Stock Exchange RNS — search by TIDM (home_ticker)",
+      "search_url": "https://api.londonstockexchange.com/api/gw/lse/instruments/{tidm}/announcements",
+      "identifier": "tidm",
+      "home_exchange": "London Stock Exchange",
+      "home_close_local": "16:30 GMT/BST",
+      "home_close_est_winter": "11:30",
+      "home_close_est_summer": "11:30",
+      "seasonal_shift": false,
+      "window_type": "partial_then_closed",
+      "us_overlap_window": "09:30–11:30",
+      "us_overlap_mins": 120,
+      "us_postcls_window_winter": "11:30–16:00",
+      "us_postcls_window_summer": "11:30–16:00",
+      "us_postcls_mins_winter": 270,
+      "us_postcls_mins_summer": 270,
+      "trading_days": "Mon–Fri",
+      "language": "en",
+      "dst_note": "UK (BST) and US (EDT) change clocks at similar times — net offset stays 5 hrs year-round",
+      "home_close_est": "11:30"
+    },
+    "OSLO_BORS": {
+      "description": "Oslo Stock Exchange Newsweb — issuer_id search",
+      "search_url": "https://newsweb.oslobors.no/search?category=5&issuer={issuer_id}",
+      "identifier": "issuer_id",
+      "home_exchange": "Oslo Stock Exchange (Euronext Oslo)",
+      "home_close_local": "16:20 CET/CEST",
+      "home_close_est_winter": "10:20",
+      "home_close_est_summer": "10:20",
+      "seasonal_shift": false,
+      "window_type": "partial_then_closed",
+      "us_overlap_window": "09:30–10:20",
+      "us_overlap_mins": 50,
+      "us_postcls_window_winter": "10:20–16:00",
+      "us_postcls_window_summer": "10:20–16:00",
+      "us_postcls_mins_winter": 340,
+      "us_postcls_mins_summer": 340,
+      "trading_days": "Mon–Fri",
+      "language": "no/en",
+      "dst_note": "Norway follows CET/CEST — 10:20 stable year-round. Overlap is only 50 minutes; effectively a post-close feed",
+      "home_close_est": "10:00"
+    },
+    "EURONEXT": {
+      "description": "Euronext — Paris, Amsterdam, Brussels, Lisbon — ISIN + MIC search",
+      "search_url": "https://live.euronext.com/en/ajax/getNewsForISIN",
+      "identifier": "isin",
+      "home_exchange": "Euronext",
+      "home_close_local": "17:30 CET/CEST",
+      "home_close_est_winter": "11:30",
+      "home_close_est_summer": "11:30",
+      "seasonal_shift": false,
+      "window_type": "partial_then_closed",
+      "us_overlap_window": "09:30–11:30",
+      "us_overlap_mins": 120,
+      "us_postcls_window_winter": "11:30–16:00",
+      "us_postcls_window_summer": "11:30–16:00",
+      "us_postcls_mins_winter": 270,
+      "us_postcls_mins_summer": 270,
+      "trading_days": "Mon–Fri",
+      "language": "en/fr/nl",
+      "dst_note": "CET/CEST and EST/EDT change together — 11:30 is stable year-round. Exception: ~2-week DST gap in March/October where close shifts to 12:30 or 10:30 EDT",
+      "home_close_est": "11:30"
+    },
+    "XETRA": {
+      "description": "Deutsche Boerse Xetra — DGAP ad-hoc announcements — ISIN search",
+      "search_url": "https://www.dgap.de/dgap/News/adhoc/?isin={isin}",
+      "identifier": "isin",
+      "home_exchange": "Deutsche Boerse (Xetra)",
+      "home_close_local": "17:30 CET/CEST",
+      "home_close_est_winter": "11:30",
+      "home_close_est_summer": "11:30",
+      "seasonal_shift": false,
+      "window_type": "partial_then_closed",
+      "us_overlap_window": "09:30–11:30",
+      "us_overlap_mins": 120,
+      "us_postcls_window_winter": "11:30–16:00",
+      "us_postcls_window_summer": "11:30–16:00",
+      "us_postcls_mins_winter": 270,
+      "us_postcls_mins_summer": 270,
+      "trading_days": "Mon–Fri",
+      "language": "de/en",
+      "dst_note": "CET/CEST and EST/EDT change together — 11:30 stable. ~3-week DST gap spring/autumn shifts ±1 hr",
+      "home_close_est": "11:30"
+    },
+    "SIX": {
+      "description": "SIX Swiss Exchange — valor (home_identifier) search",
+      "search_url": "https://www.six-group.com/exchanges/shares/companies/{valor}/company-news_EN.html",
+      "identifier": "valor",
+      "home_exchange": "SIX Swiss Exchange",
+      "home_close_local": "17:30 CET/CEST",
+      "home_close_est_winter": "11:30",
+      "home_close_est_summer": "11:30",
+      "seasonal_shift": false,
+      "window_type": "partial_then_closed",
+      "us_overlap_window": "09:30–11:30",
+      "us_overlap_mins": 120,
+      "us_postcls_window_winter": "11:30–16:00",
+      "us_postcls_window_summer": "11:30–16:00",
+      "us_postcls_mins_winter": 270,
+      "us_postcls_mins_summer": 270,
+      "trading_days": "Mon–Fri",
+      "language": "de/en",
+      "dst_note": "Switzerland follows CET/CEST — same as Germany",
+      "home_close_est": "11:30"
+    },
+    "NASDAQ_NORDIC": {
+      "description": "Nasdaq Nordic — Stockholm (XSTO), Copenhagen (XCSE), Helsinki (XHEL) — instrument_id search",
+      "search_url": "https://api.nasdaq.com/api/nordic/instruments/{instrument_id}/news",
+      "identifier": "nordic_instrument_id",
+      "home_exchange": "Nasdaq Nordic (Stockholm / Copenhagen / Helsinki)",
+      "home_close_local": "17:30 CET/CEST (Stockholm/Helsinki 17:30, Copenhagen 17:00)",
+      "home_close_est_winter": "11:30",
+      "home_close_est_summer": "11:30",
+      "seasonal_shift": false,
+      "window_type": "partial_then_closed",
+      "us_overlap_window": "09:30–11:30",
+      "us_overlap_mins": 120,
+      "us_postcls_window_winter": "11:30–16:00",
+      "us_postcls_window_summer": "11:30–16:00",
+      "us_postcls_mins_winter": 270,
+      "us_postcls_mins_summer": 270,
+      "trading_days": "Mon–Fri",
+      "language": "sv/da/fi/en",
+      "dst_note": "Stockholm/Helsinki 11:30 EST; Copenhagen closes slightly earlier (17:00 CET = 11:00 EST) but treated as 11:30 for simplicity",
+      "home_close_est": "11:30"
+    },
+    "CNMV": {
+      "description": "CNMV Spain — hechos relevantes RSS, filter by ISIN",
+      "rss_url": "https://www.cnmv.es/rssfeed/HechosRelevantes.aspx",
+      "search_url": "https://www.cnmv.es/portal/hr/busquedahr.aspx?entidad={cnmv_entity_id}",
+      "identifier": "cnmv_entity_id",
+      "home_exchange": "BME (Bolsa de Madrid)",
+      "home_close_local": "17:30 CET/CEST",
+      "home_close_est_winter": "11:30",
+      "home_close_est_summer": "11:30",
+      "seasonal_shift": false,
+      "window_type": "partial_then_closed",
+      "us_overlap_window": "09:30–11:30",
+      "us_overlap_mins": 120,
+      "us_postcls_window_winter": "11:30–16:00",
+      "us_postcls_window_summer": "11:30–16:00",
+      "us_postcls_mins_winter": 270,
+      "us_postcls_mins_summer": 270,
+      "trading_days": "Mon–Fri",
+      "language": "es",
+      "dst_note": "Spain follows CET/CEST — same as Germany/France",
+      "home_close_est": "11:30"
+    },
+    "TSE": {
+      "description": "Tokyo Stock Exchange TDnet — tse_code (4-digit) search",
+      "disclosure_url": "https://www.release.tdnet.info/inbs/I_main_00.html",
+      "rss_url": "https://www.release.tdnet.info/inbs/i_list_rss.aspx",
+      "search_url": "https://www.release.tdnet.info/inbs/I_list_title_{tse_code}.html",
+      "identifier": "tse_code",
+      "home_exchange": "Tokyo Stock Exchange",
+      "home_close_local": "15:30 JST",
+      "home_close_est_winter": "01:30",
+      "home_close_est_summer": "02:30",
+      "seasonal_shift": false,
+      "window_type": "home_closed_us_open",
+      "us_overlap_window": "none",
+      "us_overlap_mins": 0,
+      "us_postcls_window_winter": "09:30–16:00",
+      "us_postcls_window_summer": "09:30–16:00",
+      "us_postcls_mins_winter": 390,
+      "us_postcls_mins_summer": 390,
+      "trading_days": "Mon–Fri",
+      "language": "ja",
+      "dst_note": "Japan has no DST. Home always closed before US opens. Full 6h30m session is home-closed. Filings in Japanese — primary source of information asymmetry edge",
+      "home_close_est": "02:30"
+    },
+    "KRX": {
+      "description": "Korea Exchange DART — dart_corp_code search. Requires DART_API_KEY env var",
+      "dart_url": "https://opendart.fss.or.kr/api/list.json",
+      "search_url": "https://opendart.fss.or.kr/api/list.json?corp_code={dart_corp_code}",
+      "identifier": "dart_corp_code",
+      "home_exchange": "Korea Exchange",
+      "home_close_local": "15:30 KST",
+      "home_close_est_winter": "01:30",
+      "home_close_est_summer": "02:30",
+      "seasonal_shift": false,
+      "window_type": "home_closed_us_open",
+      "us_overlap_window": "none",
+      "us_overlap_mins": 0,
+      "us_postcls_window_winter": "09:30–16:00",
+      "us_postcls_window_summer": "09:30–16:00",
+      "us_postcls_mins_winter": 390,
+      "us_postcls_mins_summer": 390,
+      "trading_days": "Mon–Fri",
+      "language": "ko",
+      "dart_api_key_required": true,
+      "dst_note": "Korea has no DST. Home always closed before US opens. DART free API key required from dart.fss.or.kr. Filings in Korean",
+      "home_close_est": "01:00"
+    },
+    "HKEX": {
+      "description": "Hong Kong Stock Exchange — hkex_stock_code search",
+      "search_url": "https://www1.hkexnews.hk/search/titlesearch.xhtml?lang=en&ss={hkex_stock_code}",
+      "rss_url": "https://www1.hkexnews.hk/rss/latestnews_en.rss",
+      "identifier": "hkex_stock_code",
+      "home_exchange": "Hong Kong Stock Exchange",
+      "home_close_local": "16:00 HKT",
+      "home_close_est_winter": "03:00",
+      "home_close_est_summer": "04:00",
+      "seasonal_shift": false,
+      "window_type": "home_closed_us_open",
+      "us_overlap_window": "none",
+      "us_overlap_mins": 0,
+      "us_postcls_window_winter": "09:30–16:00",
+      "us_postcls_window_summer": "09:30–16:00",
+      "us_postcls_mins_winter": 390,
+      "us_postcls_mins_summer": 390,
+      "trading_days": "Mon–Fri",
+      "language": "en/zh",
+      "dst_note": "Hong Kong has no DST. Home always closed before US opens. English filings available",
+      "home_close_est": "04:00"
+    },
+    "ASX": {
+      "description": "Australian Securities Exchange — asx_code JSON API search",
+      "search_url": "https://www.asx.com.au/asx/1/company/{asx_code}/announcements",
+      "identifier": "asx_code",
+      "home_exchange": "Australian Securities Exchange",
+      "home_close_local": "16:00 AEST/AEDT",
+      "home_close_est_winter": "01:00",
+      "home_close_est_summer": "01:00",
+      "seasonal_shift": false,
+      "window_type": "home_closed_us_open",
+      "us_overlap_window": "none",
+      "us_overlap_mins": 0,
+      "us_postcls_window_winter": "09:30–16:00",
+      "us_postcls_window_summer": "09:30–16:00",
+      "us_postcls_mins_winter": 390,
+      "us_postcls_mins_summer": 390,
+      "trading_days": "Mon–Fri",
+      "language": "en",
+      "dst_note": "Australia observes DST Oct–Apr (AEDT=UTC+11), but this is US winter, so offsets roughly cancel. Home always closes ~01:00 EST regardless of season. English filings",
+      "home_close_est": "01:00"
+    },
+    "NSE": {
+      "description": "India NSE/BSE — nse_symbol / bse_scrip_code search",
+      "nse_url": "https://www.nseindia.com/api/corp-info?symbol={nse_symbol}",
+      "bse_url": "https://api.bseindia.com/BseIndiaAPI/api/AnnSubCategoryGetData/w",
+      "search_url": "https://api.bseindia.com/BseIndiaAPI/api/AnnSubCategoryGetData/w?strScrip={bse_scrip_code}",
+      "identifier": "nse_symbol",
+      "home_exchange": "National Stock Exchange of India / BSE",
+      "home_close_local": "15:30 IST",
+      "home_close_est_winter": "05:00",
+      "home_close_est_summer": "06:00",
+      "seasonal_shift": false,
+      "window_type": "home_closed_us_open",
+      "us_overlap_window": "none",
+      "us_overlap_mins": 0,
+      "us_postcls_window_winter": "09:30–16:00",
+      "us_postcls_window_summer": "09:30–16:00",
+      "us_postcls_mins_winter": 390,
+      "us_postcls_mins_summer": 390,
+      "trading_days": "Mon–Fri",
+      "language": "en",
+      "dst_note": "India has no DST (IST = UTC+5:30 always). Home always closed well before US opens. English filings",
+      "home_close_est": "05:30"
+    },
+    "JSE": {
+      "description": "JSE SENS announcements — jse_code search",
+      "search_url": "https://data.jse.co.za/api/v1/announcement/company/{jse_code}",
+      "identifier": "jse_code",
+      "home_exchange": "Johannesburg Stock Exchange",
+      "home_close_local": "17:00 SAST",
+      "home_close_est_winter": "10:00",
+      "home_close_est_summer": "11:00",
+      "seasonal_shift": true,
+      "window_type": "partial_then_closed",
+      "us_overlap_window_winter": "09:30–10:00",
+      "us_overlap_window_summer": "09:30–11:00",
+      "us_overlap_mins_winter": 30,
+      "us_overlap_mins_summer": 90,
+      "us_postcls_window_winter": "10:00–16:00",
+      "us_postcls_window_summer": "11:00–16:00",
+      "us_postcls_mins_winter": 360,
+      "us_postcls_mins_summer": 300,
+      "trading_days": "Mon–Fri",
+      "language": "en",
+      "dst_note": "SAST = UTC+2 always (South Africa has no DST). US clock changes cause 1-hour seasonal shift. Winter: home closes 10:00 EST (6h post-close). Summer: home closes 11:00 EDT (5h post-close)",
+      "home_close_est": "11:00"
+    },
+    "TASE": {
+      "description": "Tel Aviv Stock Exchange MAYA — tase_company_id search",
+      "search_url": "https://mayaapi.tase.co.il/api/company/allreports?companyId={tase_company_id}",
+      "identifier": "tase_company_id",
+      "home_exchange": "Tel Aviv Stock Exchange",
+      "home_close_local": "17:30 IST/IDT",
+      "home_close_est_winter": "10:30",
+      "home_close_est_summer": "10:30",
+      "seasonal_shift": false,
+      "window_type": "partial_then_closed",
+      "us_overlap_window": "09:30–10:30",
+      "us_overlap_mins": 60,
+      "us_postcls_window_winter": "10:30–16:00",
+      "us_postcls_window_summer": "10:30–16:00",
+      "us_postcls_mins_winter": 330,
+      "us_postcls_mins_summer": 330,
+      "trading_days": "Sun–Thu",
+      "language": "he/en",
+      "dst_note": "Israel DST (IDT=UTC+3) roughly aligns with US DST so offset stays ~10:30 EST year-round. TRADES SUNDAY–THURSDAY ONLY — no Friday signals",
+      "home_close_est": "10:25"
+    },
+    "B3": {
+      "description": "Brazil B3/CVM — fatos relevantes RSS, filter by CVM code or ISIN. Simultaneous with US market. Edge from language/attention gap only.",
+      "rss_url": "https://cvmweb.cvm.gov.br/SWB/Sistemas/SCW/CPublica/NoticiasExt.aspx",
+      "search_url": "https://www.rad.cvm.gov.br/ENET/frmConsultaExternaCVM.aspx",
+      "identifier": "cvm_code",
+      "home_exchange": "B3 (Bolsa do Brasil)",
+      "home_close_local": "17:30 BRT",
+      "home_close_est_winter": "15:30",
+      "home_close_est_summer": "16:30",
+      "seasonal_shift": true,
+      "window_type": "simultaneous",
+      "us_overlap_window_winter": "09:30–15:30",
+      "us_overlap_window_summer": "09:30–16:00",
+      "us_overlap_mins_winter": 360,
+      "us_overlap_mins_summer": 390,
+      "us_postcls_window_winter": "15:30–16:00",
+      "us_postcls_window_summer": "none",
+      "us_postcls_mins_winter": 30,
+      "us_postcls_mins_summer": 0,
+      "trading_days": "Mon–Fri",
+      "language": "pt",
+      "dst_note": "Brazil abolished DST in 2019 — BRT=UTC-3 always. US clock changes cause a seasonal shift: winter gives a 30-minute post-close window (15:30–16:00 EST); summer B3 closes after US (16:30 EDT) so home is never closed during US session. Edge is primarily language and attention gap, not structural mispricing from closed home market. Filings in Portuguese.",
+      "home_close_est": "16:30"
+    },
+    "BMV": {
+      "description": "Mexico BMV EMISNET — eventos relevantes, search by bmv_ticker. Simultaneous with US market all year. Edge from language/attention gap only.",
+      "emisnet_url": "https://www.bmv.com.mx/es/grupos_emisoras/buscar_emisora.html",
+      "search_url": "https://www.bmv.com.mx/umbraco/surface/emision/GetRelevantEvents",
+      "identifier": "bmv_ticker",
+      "home_exchange": "Bolsa Mexicana de Valores (BMV)",
+      "home_close_local": "15:00 CST/CDT",
+      "home_close_est_winter": "16:00",
+      "home_close_est_summer": "16:00",
+      "seasonal_shift": false,
+      "window_type": "simultaneous",
+      "us_overlap_window_winter": "09:30–16:00",
+      "us_overlap_window_summer": "09:30–16:00",
+      "us_overlap_mins_winter": 390,
+      "us_overlap_mins_summer": 390,
+      "us_postcls_window_winter": "none",
+      "us_postcls_window_summer": "none",
+      "us_postcls_mins_winter": 0,
+      "us_postcls_mins_summer": 0,
+      "trading_days": "Mon–Fri",
+      "language": "es",
+      "dst_note": "Mexico observes CDT in summer (UTC-5), CST in winter (UTC-6), tracking closely with US Eastern. BMV closes at exactly 16:00 US Eastern year-round — simultaneous with US close, zero post-close window. Edge is purely language and attention gap. Filings in Spanish.",
+      "home_close_est": "16:00"
+    }
+  },
+  "tiers": {
+    "A": {
+      "priority": "always_process",
+      "description": "MAX EDGE — OTC ADRs",
+      "companies": [
+        {
+          "symbol": "CPKFF",
+          "name": "Covestro",
+          "feed": "XETRA",
+          "isin": "DE0006062144",
+          "adr_type": "unsponsored",
+          "edge": 9.8,
+          "home_ticker": "1COV",
+          "home_exchange_code": "XETRA",
+          "aliases": [
+            "Covestro AG",
+            "Covestro Deutschland",
+            "Bayer MaterialScience"
+          ]
+        },
+        {
+          "symbol": "BAYRY",
+          "name": "Bayer",
+          "feed": "XETRA",
+          "isin": "DE000BAY0017",
+          "adr_type": "unsponsored",
+          "edge": 9.5,
+          "home_ticker": "BAYN",
+          "home_exchange_code": "XETRA",
+          "aliases": [
+            "Bayer AG",
+            "Bayer Group",
+            "Bayer Aktiengesellschaft",
+            "Monsanto"
+          ]
+        },
+        {
+          "symbol": "BASFY",
+          "name": "BASF",
+          "feed": "XETRA",
+          "isin": "DE000BASF111",
+          "adr_type": "unsponsored",
+          "edge": 9.5,
+          "home_ticker": "BAS",
+          "home_exchange_code": "XETRA",
+          "aliases": [
+            "BASF SE",
+            "BASF Group",
+            "Badische Anilin",
+            "BASF Aktiengesellschaft"
+          ]
+        },
+        {
+          "symbol": "VLKAY",
+          "name": "Volkswagen",
+          "feed": "XETRA",
+          "isin": "DE0007664039",
+          "adr_type": "unsponsored",
+          "edge": 9.3,
+          "home_ticker": "VOW3",
+          "home_exchange_code": "XETRA",
+          "aliases": [
+            "Volkswagen AG",
+            "Volkswagen Group",
+            "VW",
+            "VW Group",
+            "Porsche SE parent"
+          ]
+        },
+        {
+          "symbol": "MKKGY",
+          "name": "Merck KGaA",
+          "feed": "XETRA",
+          "isin": "DE0006599905",
+          "adr_type": "unsponsored",
+          "edge": 9.6,
+          "home_ticker": "MRK",
+          "home_exchange_code": "XETRA",
+          "aliases": [
+            "Merck KGaA",
+            "Merck Group",
+            "EMD",
+            "MilliporeSigma",
+            "Merck Darmstadt"
+          ]
+        },
+        {
+          "symbol": "NHYDY",
+          "name": "Norsk Hydro",
+          "feed": "OSLO_BORS",
+          "isin": "NO0005052605",
+          "adr_type": "unsponsored",
+          "edge": 9.7,
+          "home_ticker": "NHY",
+          "home_exchange_code": "OSL",
+          "aliases": [
+            "Norsk Hydro ASA",
+            "Hydro",
+            "Norsk Hydro"
+          ]
+        },
+        {
+          "symbol": "YARIY",
+          "name": "Yara",
+          "feed": "OSLO_BORS",
+          "isin": "NO0010208051",
+          "adr_type": "unsponsored",
+          "edge": 9.7,
+          "home_ticker": "YAR",
+          "home_exchange_code": "OSL",
+          "aliases": [
+            "Yara International ASA",
+            "Yara International",
+            "Hydro Agri",
+            "Yara"
+          ]
+        },
+        {
+          "symbol": "DNBHF",
+          "name": "DNB",
+          "feed": "OSLO_BORS",
+          "isin": "NO0010161896",
+          "adr_type": "unsponsored",
+          "edge": 9.8,
+          "home_ticker": "DNB",
+          "home_exchange_code": "OSL",
+          "aliases": [
+            "DNB ASA",
+            "DNB Bank",
+            "Den Norske Bank"
+          ]
+        },
+        {
+          "symbol": "SGBAF",
+          "name": "SES",
+          "feed": "EURONEXT",
+          "isin": "LU0088087324",
+          "mic": "XPAR",
+          "adr_type": "unsponsored",
+          "edge": 9.8,
+          "home_ticker": "SESG",
+          "home_exchange_code": "EPA",
+          "aliases": [
+            "SES SA",
+            "SES Global",
+            "SES Satellites",
+            "Societe Europeenne des Satellites"
+          ]
+        },
+        {
+          "symbol": "ZFSVF",
+          "name": "Zurich Insurance",
+          "feed": "SIX",
+          "valor": "1107539",
+          "adr_type": "unsponsored",
+          "edge": 9.6,
+          "home_ticker": "ZURN",
+          "home_exchange_code": "SIX",
+          "aliases": [
+            "Zurich Insurance Group AG",
+            "Zurich Insurance",
+            "Zurich Group",
+            "ZURN"
+          ],
+          "isin": "CH0011075394"
+        },
+        {
+          "symbol": "RYCEY",
+          "name": "Rolls-Royce",
+          "feed": "LSE_RNS",
+          "tidm": "RR.",
+          "adr_type": "unsponsored",
+          "edge": 9.2,
+          "home_ticker": "RR.",
+          "home_exchange_code": "LSE",
+          "aliases": [
+            "Rolls-Royce Holdings plc",
+            "Rolls Royce",
+            "Rolls-Royce",
+            "RR"
+          ],
+          "isin": "GB00B63H8491"
+        },
+        {
+          "symbol": "RBGLY",
+          "name": "Reckitt",
+          "feed": "LSE_RNS",
+          "tidm": "RKT",
+          "adr_type": "unsponsored",
+          "edge": 9.4,
+          "home_ticker": "RKT",
+          "home_exchange_code": "LSE",
+          "aliases": [
+            "Reckitt Benckiser Group plc",
+            "Reckitt",
+            "Reckitt Benckiser",
+            "RB",
+            "Dettol parent",
+            "Durex parent"
+          ],
+          "isin": "GB00B24CGK77"
+        },
+        {
+          "symbol": "SCBFY",
+          "name": "Standard Chartered",
+          "feed": "LSE_RNS",
+          "tidm": "STAN",
+          "adr_type": "unsponsored",
+          "edge": 9.6,
+          "home_ticker": "STAN",
+          "home_exchange_code": "LSE",
+          "aliases": [
+            "Standard Chartered plc",
+            "Standard Chartered Bank",
+            "Standard Chartered",
+            "StanChart"
+          ],
+          "isin": "GB0004082847"
+        },
+        {
+          "symbol": "EXPGY",
+          "name": "Experian",
+          "feed": "LSE_RNS",
+          "tidm": "EXPN",
+          "adr_type": "unsponsored",
+          "edge": 9.2,
+          "home_ticker": "EXPN",
+          "home_exchange_code": "LSE",
+          "aliases": [
+            "Experian plc",
+            "Experian"
+          ],
+          "isin": "GB00B19NLV48"
+        },
+        {
+          "symbol": "HVRRY",
+          "name": "Henkel",
+          "feed": "XETRA",
+          "isin": "DE0006048432",
+          "adr_type": "unsponsored",
+          "edge": 9.3,
+          "home_ticker": "HENKA",
+          "home_exchange_code": "XETRA",
+          "aliases": [
+            "Henkel AG & Co KGaA",
+            "Henkel AG",
+            "Henkel Group",
+            "Persil",
+            "Loctite"
+          ]
+        },
+        {
+          "symbol": "EONGY",
+          "name": "E.ON",
+          "feed": "XETRA",
+          "isin": "DE000ENAG999",
+          "adr_type": "unsponsored",
+          "edge": 9.4,
+          "home_ticker": "EOAN",
+          "home_exchange_code": "XETRA",
+          "aliases": [
+            "E.ON SE",
+            "E.ON Group",
+            "Eon",
+            "EON"
+          ]
+        },
+        {
+          "symbol": "RWEOY",
+          "name": "RWE",
+          "feed": "XETRA",
+          "isin": "DE0007037129",
+          "adr_type": "unsponsored",
+          "edge": 9.4,
+          "home_ticker": "RWE",
+          "home_exchange_code": "XETRA",
+          "aliases": [
+            "RWE AG",
+            "RWE Group",
+            "RWE Aktiengesellschaft"
+          ]
+        },
+        {
+          "symbol": "CTTAY",
+          "name": "Continental",
+          "feed": "XETRA",
+          "isin": "DE0005439004",
+          "adr_type": "unsponsored",
+          "edge": 9.2,
+          "home_ticker": "CON",
+          "home_exchange_code": "XETRA",
+          "aliases": [
+            "Continental AG",
+            "Continental Aktiengesellschaft",
+            "Conti"
+          ]
+        },
+        {
+          "symbol": "FMCQF",
+          "name": "Fresenius Medical",
+          "feed": "XETRA",
+          "isin": "DE0005785802",
+          "adr_type": "unsponsored",
+          "edge": 9.3,
+          "home_ticker": "FME",
+          "home_exchange_code": "XETRA",
+          "aliases": [
+            "Fresenius Medical Care AG",
+            "FMC",
+            "Fresenius Medical Care"
+          ]
+        },
+        {
+          "symbol": "FSNUY",
+          "name": "Fresenius SE",
+          "feed": "XETRA",
+          "isin": "DE0005785604",
+          "adr_type": "unsponsored",
+          "edge": 9.1,
+          "home_ticker": "FRE",
+          "home_exchange_code": "XETRA",
+          "aliases": [
+            "Fresenius SE & Co KGaA",
+            "Fresenius SE",
+            "Fresenius Group",
+            "Helios Health"
+          ]
+        },
+        {
+          "symbol": "LNXSF",
+          "name": "Lanxess",
+          "feed": "XETRA",
+          "isin": "DE0005470405",
+          "adr_type": "unsponsored",
+          "edge": 9.4,
+          "home_ticker": "LXS",
+          "home_exchange_code": "XETRA",
+          "aliases": [
+            "Lanxess AG",
+            "Lanxess Deutschland",
+            "LANXESS"
+          ]
+        },
+        {
+          "symbol": "BNTGY",
+          "name": "Brenntag",
+          "feed": "XETRA",
+          "isin": "DE000A1DAHH0",
+          "adr_type": "unsponsored",
+          "edge": 9.0,
+          "home_ticker": "BNR",
+          "home_exchange_code": "XETRA",
+          "aliases": [
+            "Brenntag SE",
+            "Brenntag Group",
+            "Brenntag AG"
+          ]
+        },
+        {
+          "symbol": "HDELY",
+          "name": "HeidelbergMaterials",
+          "feed": "XETRA",
+          "isin": "DE0006047004",
+          "adr_type": "unsponsored",
+          "edge": 9.1,
+          "home_ticker": "HEI",
+          "home_exchange_code": "XETRA",
+          "aliases": [
+            "HeidelbergMaterials AG",
+            "Heidelberg Materials",
+            "HeidelbergCement",
+            "Heidelberg Cement"
+          ]
+        },
+        {
+          "symbol": "SYIEY",
+          "name": "Symrise",
+          "feed": "XETRA",
+          "isin": "DE000SYM9999",
+          "adr_type": "unsponsored",
+          "edge": 9.2,
+          "home_ticker": "SY1",
+          "home_exchange_code": "XETRA",
+          "aliases": [
+            "Symrise AG",
+            "Symrise Group"
+          ]
+        },
+        {
+          "symbol": "EVKIY",
+          "name": "Evonik",
+          "feed": "XETRA",
+          "isin": "DE000EVNK013",
+          "adr_type": "unsponsored",
+          "edge": 9.3,
+          "home_ticker": "EVK",
+          "home_exchange_code": "XETRA",
+          "aliases": [
+            "Evonik Industries AG",
+            "Evonik Industries",
+            "Evonik"
+          ]
+        },
+        {
+          "symbol": "MHGVY",
+          "name": "Mowi",
+          "feed": "OSLO_BORS",
+          "isin": "NO0003054108",
+          "adr_type": "unsponsored",
+          "edge": 9.5,
+          "home_ticker": "MOWI",
+          "home_exchange_code": "OSL",
+          "aliases": [
+            "Mowi ASA",
+            "Marine Harvest",
+            "Mowi"
+          ]
+        },
+        {
+          "symbol": "KBGGY",
+          "name": "Kongsberg Gruppen",
+          "feed": "OSLO_BORS",
+          "isin": "NO0003043309",
+          "adr_type": "unsponsored",
+          "edge": 9.6,
+          "home_ticker": "KOG",
+          "home_exchange_code": "OSL",
+          "aliases": [
+            "Kongsberg Gruppen ASA",
+            "Kongsberg",
+            "KGX",
+            "Kongsberg Defence"
+          ]
+        },
+        {
+          "symbol": "SUBCY",
+          "name": "Subsea 7",
+          "feed": "OSLO_BORS",
+          "isin": "LU0075646355",
+          "adr_type": "unsponsored",
+          "edge": 9.4,
+          "home_ticker": "SUBC",
+          "home_exchange_code": "OSL",
+          "aliases": [
+            "Subsea 7 SA",
+            "Subsea7",
+            "Acergy"
+          ]
+        },
+        {
+          "symbol": "AKRBY",
+          "name": "Aker BP",
+          "feed": "OSLO_BORS",
+          "isin": "NO0010345853",
+          "adr_type": "unsponsored",
+          "edge": 9.5,
+          "home_ticker": "AKRBP",
+          "home_exchange_code": "OSL",
+          "aliases": [
+            "Aker BP ASA",
+            "AkerBP",
+            "Aker BP"
+          ]
+        },
+        {
+          "symbol": "BRGAY",
+          "name": "Borregaard",
+          "feed": "OSLO_BORS",
+          "isin": "NO0010657505",
+          "adr_type": "unsponsored",
+          "edge": 9.7,
+          "home_ticker": "BRG",
+          "home_exchange_code": "OSL",
+          "aliases": [
+            "Borregaard ASA",
+            "Borregaard"
+          ]
+        },
+        {
+          "symbol": "TMRAY",
+          "name": "Tomra",
+          "feed": "OSLO_BORS",
+          "isin": "NO0005668905",
+          "adr_type": "unsponsored",
+          "edge": 9.3,
+          "home_ticker": "TOM",
+          "home_exchange_code": "OSL",
+          "aliases": [
+            "Tomra Systems ASA",
+            "Tomra",
+            "TOMRA"
+          ]
+        },
+        {
+          "symbol": "BAESY",
+          "name": "BAE Systems",
+          "feed": "LSE_RNS",
+          "tidm": "BA.",
+          "isin": "GB0002634946",
+          "adr_type": "unsponsored",
+          "edge": 9.0,
+          "home_ticker": "BA.",
+          "home_exchange_code": "LSE",
+          "aliases": [
+            "BAE Systems plc",
+            "BAE Systems",
+            "British Aerospace",
+            "BAE"
+          ]
+        },
+        {
+          "symbol": "NWBKY",
+          "name": "NatWest",
+          "feed": "LSE_RNS",
+          "tidm": "NWG",
+          "isin": "GB00B7T77214",
+          "adr_type": "unsponsored",
+          "edge": 9.2,
+          "home_ticker": "NWG",
+          "home_exchange_code": "LSE",
+          "aliases": [
+            "NatWest Group plc",
+            "NatWest",
+            "Royal Bank of Scotland",
+            "RBS"
+          ]
+        },
+        {
+          "symbol": "CMPGY",
+          "name": "Compass Group",
+          "feed": "LSE_RNS",
+          "tidm": "CPG",
+          "isin": "GB00BD6K4575",
+          "adr_type": "unsponsored",
+          "edge": 9.1,
+          "home_ticker": "CPG",
+          "home_exchange_code": "LSE",
+          "aliases": [
+            "Compass Group plc",
+            "Compass Group PLC",
+            "Compass"
+          ]
+        },
+        {
+          "symbol": "SNN",
+          "name": "Smith & Nephew",
+          "feed": "LSE_RNS",
+          "tidm": "SN.",
+          "isin": "GB0009223206",
+          "adr_type": "unsponsored",
+          "edge": 9.0,
+          "home_ticker": "SN.",
+          "home_exchange_code": "LSE",
+          "aliases": [
+            "Smith & Nephew plc",
+            "Smith and Nephew",
+            "Smith & Nephew"
+          ]
+        },
+        {
+          "symbol": "FERGY",
+          "name": "Ferguson",
+          "feed": "LSE_RNS",
+          "tidm": "FERG",
+          "isin": "GB00BWFGQN14",
+          "adr_type": "unsponsored",
+          "edge": 9.0,
+          "home_ticker": "FERG",
+          "home_exchange_code": "LSE",
+          "aliases": [
+            "Ferguson Enterprises",
+            "Ferguson plc",
+            "Wolseley"
+          ]
+        },
+        {
+          "symbol": "HLNCF",
+          "name": "Haleon",
+          "feed": "LSE_RNS",
+          "tidm": "HLN",
+          "isin": "GB00BMX86B70",
+          "adr_type": "unsponsored",
+          "edge": 9.1,
+          "home_ticker": "HLN",
+          "home_exchange_code": "LSE",
+          "aliases": [
+            "Haleon plc",
+            "Haleon",
+            "GSK Consumer Healthcare"
+          ]
+        },
+        {
+          "symbol": "CPYYY",
+          "name": "Centrica",
+          "feed": "LSE_RNS",
+          "tidm": "CNA",
+          "isin": "GB00B033F229",
+          "adr_type": "unsponsored",
+          "edge": 9.3,
+          "home_ticker": "CNA",
+          "home_exchange_code": "LSE",
+          "aliases": [
+            "Centrica plc",
+            "Centrica",
+            "British Gas"
+          ]
+        },
+        {
+          "symbol": "IMIAY",
+          "name": "IMI",
+          "feed": "LSE_RNS",
+          "tidm": "IMI",
+          "isin": "GB0004544929",
+          "adr_type": "unsponsored",
+          "edge": 9.2,
+          "home_ticker": "IMI",
+          "home_exchange_code": "LSE",
+          "aliases": [
+            "IMI plc",
+            "IMI PLC"
+          ]
+        },
+        {
+          "symbol": "HEINY",
+          "name": "Heineken",
+          "feed": "EURONEXT",
+          "isin": "NL0000009165",
+          "mic": "XAMS",
+          "adr_type": "unsponsored",
+          "edge": 9.1,
+          "home_ticker": "HEIA",
+          "home_exchange_code": "AMS",
+          "aliases": [
+            "Heineken NV",
+            "Heineken Holding",
+            "Heineken"
+          ]
+        },
+        {
+          "symbol": "RANJY",
+          "name": "Randstad",
+          "feed": "EURONEXT",
+          "isin": "NL0000379121",
+          "mic": "XAMS",
+          "adr_type": "unsponsored",
+          "edge": 9.2,
+          "home_ticker": "RAND",
+          "home_exchange_code": "AMS",
+          "aliases": [
+            "Randstad NV",
+            "Randstad Group",
+            "Randstad Holding"
+          ]
+        },
+        {
+          "symbol": "DSMFF",
+          "name": "DSM-Firmenich",
+          "feed": "EURONEXT",
+          "isin": "NL0000009827",
+          "mic": "XAMS",
+          "adr_type": "unsponsored",
+          "edge": 9.3,
+          "home_ticker": "DSFIR",
+          "home_exchange_code": "AMS",
+          "aliases": [
+            "DSM-Firmenich AG",
+            "dsm-firmenich",
+            "Royal DSM",
+            "Firmenich"
+          ]
+        },
+        {
+          "symbol": "NNGRY",
+          "name": "NN Group",
+          "feed": "EURONEXT",
+          "isin": "NL0010773842",
+          "mic": "XAMS",
+          "adr_type": "unsponsored",
+          "edge": 9.2,
+          "home_ticker": "NN",
+          "home_exchange_code": "AMS",
+          "aliases": [
+            "NN Group NV",
+            "NN Group",
+            "Nationale Nederlanden",
+            "ING Insurance"
+          ]
+        },
+        {
+          "symbol": "TTFNF",
+          "name": "TotalEnergies",
+          "feed": "EURONEXT",
+          "isin": "FR0014000MR3",
+          "mic": "XPAR",
+          "adr_type": "unsponsored",
+          "edge": 9.0,
+          "home_ticker": "TTE",
+          "home_exchange_code": "EPA",
+          "aliases": [
+            "TotalEnergies SE",
+            "TotalEnergies",
+            "Total SA",
+            "Total Energies"
+          ]
+        },
+        {
+          "symbol": "PUBGY",
+          "name": "Publicis",
+          "feed": "EURONEXT",
+          "isin": "FR0000130577",
+          "mic": "XPAR",
+          "adr_type": "unsponsored",
+          "edge": 9.2,
+          "home_ticker": "PUB",
+          "home_exchange_code": "EPA",
+          "aliases": [
+            "Publicis Groupe SA",
+            "Publicis Group",
+            "Publicis Groupe",
+            "Leo Burnett parent",
+            "Saatchi parent"
+          ]
+        },
+        {
+          "symbol": "VEOEY",
+          "name": "Veolia",
+          "feed": "EURONEXT",
+          "isin": "FR0000124141",
+          "mic": "XPAR",
+          "adr_type": "unsponsored",
+          "edge": 9.1,
+          "home_ticker": "VIE",
+          "home_exchange_code": "EPA",
+          "aliases": [
+            "Veolia Environnement SA",
+            "Veolia Environment",
+            "Veolia"
+          ]
+        },
+        {
+          "symbol": "MGDDY",
+          "name": "Michelin",
+          "feed": "EURONEXT",
+          "isin": "FR0000121261",
+          "mic": "XPAR",
+          "adr_type": "unsponsored",
+          "edge": 9.0,
+          "home_ticker": "ML",
+          "home_exchange_code": "EPA",
+          "aliases": [
+            "Compagnie Generale des Etablissements Michelin",
+            "Michelin",
+            "Michelin Group",
+            "CGEM"
+          ]
+        },
+        {
+          "symbol": "LGRDY",
+          "name": "Legrand",
+          "feed": "EURONEXT",
+          "isin": "FR0010307819",
+          "mic": "XPAR",
+          "adr_type": "unsponsored",
+          "edge": 9.1,
+          "home_ticker": "LR",
+          "home_exchange_code": "EPA",
+          "aliases": [
+            "Legrand SA",
+            "Legrand Group"
+          ]
+        },
+        {
+          "symbol": "PDRDY",
+          "name": "Pernod Ricard",
+          "feed": "EURONEXT",
+          "isin": "FR0000120693",
+          "mic": "XPAR",
+          "adr_type": "unsponsored",
+          "edge": 9.3,
+          "home_ticker": "RI",
+          "home_exchange_code": "EPA",
+          "aliases": [
+            "Pernod Ricard SA",
+            "Pernod Ricard Group",
+            "Jameson",
+            "Absolut Vodka parent"
+          ]
+        },
+        {
+          "symbol": "ENGIY",
+          "name": "Engie",
+          "feed": "EURONEXT",
+          "isin": "FR0010208488",
+          "mic": "XPAR",
+          "adr_type": "unsponsored",
+          "edge": 9.4,
+          "home_ticker": "ENGI",
+          "home_exchange_code": "EPA",
+          "aliases": [
+            "Engie SA",
+            "ENGIE",
+            "GDF Suez",
+            "Gaz de France"
+          ]
+        },
+        {
+          "symbol": "TLPFY",
+          "name": "Teleperformance",
+          "feed": "EURONEXT",
+          "isin": "FR0000051807",
+          "mic": "XPAR",
+          "adr_type": "unsponsored",
+          "edge": 9.5,
+          "home_ticker": "TEP",
+          "home_exchange_code": "EPA",
+          "aliases": [
+            "Teleperformance SE",
+            "Teleperformance",
+            "TP"
+          ]
+        },
+        {
+          "symbol": "AGESY",
+          "name": "Ageas",
+          "feed": "EURONEXT",
+          "isin": "BE0974264930",
+          "mic": "XBRU",
+          "adr_type": "unsponsored",
+          "edge": 9.1,
+          "home_ticker": "AGS",
+          "home_exchange_code": "EBR",
+          "aliases": [
+            "Ageas SA",
+            "Ageas NV",
+            "Ageas Group",
+            "Fortis Insurance"
+          ]
+        },
+        {
+          "symbol": "BGAOF",
+          "name": "Proximus",
+          "feed": "EURONEXT",
+          "isin": "BE0003810273",
+          "mic": "XBRU",
+          "adr_type": "unsponsored",
+          "edge": 9.3,
+          "home_ticker": "PROX",
+          "home_exchange_code": "EBR",
+          "aliases": [
+            "Proximus Group",
+            "Proximus NV",
+            "Belgacom"
+          ]
+        },
+        {
+          "symbol": "SLVYY",
+          "name": "Solvay",
+          "feed": "EURONEXT",
+          "isin": "BE0003470755",
+          "mic": "XBRU",
+          "adr_type": "unsponsored",
+          "edge": 9.2,
+          "home_ticker": "SOLB",
+          "home_exchange_code": "EBR",
+          "aliases": [
+            "Solvay SA",
+            "Solvay Group",
+            "Solvay NV"
+          ]
+        },
+        {
+          "symbol": "NVSEF",
+          "name": "Novartis",
+          "feed": "SIX",
+          "isin": "CH0012221716",
+          "valor": "1222171",
+          "adr_type": "unsponsored",
+          "edge": 9.0,
+          "home_ticker": "NOVN",
+          "home_exchange_code": "SIX",
+          "aliases": [
+            "Novartis AG",
+            "Novartis Group",
+            "Novartis International"
+          ]
+        },
+        {
+          "symbol": "ABBNY",
+          "name": "ABB",
+          "feed": "SIX",
+          "isin": "CH0012005734",
+          "valor": "1222171",
+          "adr_type": "unsponsored",
+          "edge": 9.1,
+          "home_ticker": "ABBN",
+          "home_exchange_code": "SIX",
+          "aliases": [
+            "ABB Ltd",
+            "ASEA Brown Boveri",
+            "ABB Group"
+          ]
+        },
+        {
+          "symbol": "SSREY",
+          "name": "Swiss Re",
+          "feed": "SIX",
+          "isin": "CH0126881561",
+          "valor": "12688156",
+          "adr_type": "unsponsored",
+          "edge": 9.5,
+          "home_ticker": "SREN",
+          "home_exchange_code": "SIX",
+          "aliases": [
+            "Swiss Re Ltd",
+            "Swiss Re Group",
+            "Swiss Reinsurance",
+            "SwissRe"
+          ]
+        },
+        {
+          "symbol": "SXYAY",
+          "name": "Sika",
+          "feed": "SIX",
+          "isin": "CH0418792922",
+          "valor": "41879292",
+          "adr_type": "unsponsored",
+          "edge": 9.2,
+          "home_ticker": "SIKA",
+          "home_exchange_code": "SIX",
+          "aliases": [
+            "Sika AG",
+            "Sika Group"
+          ]
+        },
+        {
+          "symbol": "HCMLY",
+          "name": "Holcim",
+          "feed": "SIX",
+          "isin": "CH0012214059",
+          "valor": "1221405",
+          "adr_type": "unsponsored",
+          "edge": 9.1,
+          "home_ticker": "HOLN",
+          "home_exchange_code": "SIX",
+          "aliases": [
+            "Holcim Ltd",
+            "Holcim Group",
+            "LafargeHolcim",
+            "Lafarge"
+          ]
+        },
+        {
+          "symbol": "LZAGY",
+          "name": "Lonza",
+          "feed": "SIX",
+          "isin": "CH0013841017",
+          "valor": "1384101",
+          "adr_type": "unsponsored",
+          "edge": 9.4,
+          "home_ticker": "LONN",
+          "home_exchange_code": "SIX",
+          "aliases": [
+            "Lonza Group AG",
+            "Lonza Group",
+            "Lonza"
+          ]
+        },
+        {
+          "symbol": "SAUHF",
+          "name": "Straumann",
+          "feed": "SIX",
+          "isin": "CH1175448666",
+          "valor": "117544866",
+          "adr_type": "unsponsored",
+          "edge": 9.3,
+          "home_ticker": "STMN",
+          "home_exchange_code": "SIX",
+          "aliases": [
+            "Straumann Holding AG",
+            "Straumann Group",
+            "Straumann"
+          ]
+        },
+        {
+          "symbol": "PGPHF",
+          "name": "Partners Group",
+          "feed": "SIX",
+          "isin": "CH0024608827",
+          "valor": "2460882",
+          "adr_type": "unsponsored",
+          "edge": 9.4,
+          "home_ticker": "PGHN",
+          "home_exchange_code": "SIX",
+          "aliases": [
+            "Partners Group Holding AG",
+            "Partners Group",
+            "PGHN"
+          ]
+        },
+        {
+          "symbol": "ERIXF",
+          "name": "Ericsson",
+          "feed": "NASDAQ_NORDIC",
+          "isin": "SE0000108656",
+          "home_ticker": "ERIC-B",
+          "home_mic": "XSTO",
+          "adr_type": "unsponsored",
+          "edge": 9.5,
+          "home_exchange_code": "STO",
+          "aliases": [
+            "Ericsson",
+            "Telefonaktiebolaget LM Ericsson",
+            "LM Ericsson",
+            "ERIC"
+          ]
+        },
+        {
+          "symbol": "VOLVY",
+          "name": "Volvo",
+          "feed": "NASDAQ_NORDIC",
+          "isin": "SE0000115446",
+          "home_ticker": "VOLV-B",
+          "home_mic": "XSTO",
+          "adr_type": "unsponsored",
+          "edge": 9.4,
+          "home_exchange_code": "STO",
+          "aliases": [
+            "Volvo AB",
+            "AB Volvo",
+            "Volvo Group",
+            "Volvo Trucks"
+          ]
+        },
+        {
+          "symbol": "ATLKY",
+          "name": "Atlas Copco",
+          "feed": "NASDAQ_NORDIC",
+          "isin": "SE0011166610",
+          "home_ticker": "ATCO-A",
+          "home_mic": "XSTO",
+          "adr_type": "unsponsored",
+          "edge": 9.3,
+          "home_exchange_code": "STO",
+          "aliases": [
+            "Atlas Copco AB",
+            "Atlas Copco",
+            "ATCO"
+          ]
+        },
+        {
+          "symbol": "HNNMY",
+          "name": "H&M",
+          "feed": "NASDAQ_NORDIC",
+          "isin": "SE0000106270",
+          "home_ticker": "HM-B",
+          "home_mic": "XSTO",
+          "adr_type": "unsponsored",
+          "edge": 9.2,
+          "home_exchange_code": "STO",
+          "aliases": [
+            "H & M Hennes & Mauritz AB",
+            "H&M",
+            "Hennes and Mauritz",
+            "Hennes & Mauritz"
+          ]
+        },
+        {
+          "symbol": "SDVKY",
+          "name": "Sandvik",
+          "feed": "NASDAQ_NORDIC",
+          "isin": "SE0000667891",
+          "home_ticker": "SAND",
+          "home_mic": "XSTO",
+          "adr_type": "unsponsored",
+          "edge": 9.3,
+          "home_exchange_code": "STO",
+          "aliases": [
+            "Sandvik AB",
+            "Sandvik Group",
+            "Sandvik"
+          ]
+        },
+        {
+          "symbol": "HXGBY",
+          "name": "Hexagon",
+          "feed": "NASDAQ_NORDIC",
+          "isin": "SE0015961909",
+          "home_ticker": "HEXA-B",
+          "home_mic": "XSTO",
+          "adr_type": "unsponsored",
+          "edge": 9.4,
+          "home_exchange_code": "STO",
+          "aliases": [
+            "Hexagon AB",
+            "Hexagon"
+          ]
+        },
+        {
+          "symbol": "SKFRY",
+          "name": "SKF",
+          "feed": "NASDAQ_NORDIC",
+          "isin": "SE0000108227",
+          "home_ticker": "SKF-B",
+          "home_mic": "XSTO",
+          "adr_type": "unsponsored",
+          "edge": 9.2,
+          "home_exchange_code": "STO",
+          "aliases": [
+            "SKF AB",
+            "SKF Group",
+            "Svenska Kullagerfabriken"
+          ]
+        },
+        {
+          "symbol": "NRDBY",
+          "name": "Nordea",
+          "feed": "NASDAQ_NORDIC",
+          "isin": "FI4000297767",
+          "home_ticker": "NDA-FI",
+          "home_mic": "XSTO",
+          "adr_type": "unsponsored",
+          "edge": 9.1,
+          "home_exchange_code": "HEL",
+          "aliases": [
+            "Nordea Bank Abp",
+            "Nordea Bank",
+            "Nordea Group",
+            "Nordea"
+          ]
+        },
+        {
+          "symbol": "SVNLY",
+          "name": "Svenska Handelsbanken",
+          "feed": "NASDAQ_NORDIC",
+          "isin": "SE0007100599",
+          "home_ticker": "SHB-A",
+          "home_mic": "XSTO",
+          "adr_type": "unsponsored",
+          "edge": 9.2,
+          "home_exchange_code": "STO",
+          "aliases": [
+            "Svenska Handelsbanken AB",
+            "Handelsbanken",
+            "Svenska Handelsbanken"
+          ]
+        },
+        {
+          "symbol": "SXSBY",
+          "name": "SEB",
+          "feed": "NASDAQ_NORDIC",
+          "isin": "SE0000148884",
+          "home_ticker": "SEB-A",
+          "home_mic": "XSTO",
+          "adr_type": "unsponsored",
+          "edge": 9.1,
+          "home_exchange_code": "STO",
+          "aliases": [
+            "Skandinaviska Enskilda Banken AB",
+            "SEB Group",
+            "SEB Bank",
+            "SEB"
+          ]
+        },
+        {
+          "symbol": "IVSBF",
+          "name": "Investor AB",
+          "feed": "NASDAQ_NORDIC",
+          "isin": "SE0015811955",
+          "home_ticker": "INVE-A",
+          "home_mic": "XSTO",
+          "adr_type": "unsponsored",
+          "edge": 9.0,
+          "home_exchange_code": "STO",
+          "aliases": [
+            "Investor AB",
+            "Investor AB B",
+            "Investor Group"
+          ]
+        },
+        {
+          "symbol": "ESSYY",
+          "name": "Essity",
+          "feed": "NASDAQ_NORDIC",
+          "isin": "SE0009922164",
+          "home_ticker": "ESSITY-B",
+          "home_mic": "XSTO",
+          "adr_type": "unsponsored",
+          "edge": 9.1,
+          "home_exchange_code": "STO",
+          "aliases": [
+            "Essity AB",
+            "Essity",
+            "SCA hygiene",
+            "Svenska Cellulosa"
+          ]
+        },
+        {
+          "symbol": "GNGBY",
+          "name": "Getinge",
+          "feed": "NASDAQ_NORDIC",
+          "isin": "SE0000202624",
+          "home_ticker": "GETI-B",
+          "home_mic": "XSTO",
+          "adr_type": "unsponsored",
+          "edge": 9.2,
+          "home_exchange_code": "STO",
+          "aliases": [
+            "Getinge AB",
+            "Getinge"
+          ]
+        },
+        {
+          "symbol": "ASGLY",
+          "name": "Alfa Laval",
+          "feed": "NASDAQ_NORDIC",
+          "isin": "SE0000695876",
+          "home_ticker": "ALFA",
+          "home_mic": "XSTO",
+          "adr_type": "unsponsored",
+          "edge": 9.1,
+          "home_exchange_code": "STO",
+          "aliases": [
+            "Alfa Laval AB",
+            "Alfa Laval"
+          ]
+        },
+        {
+          "symbol": "EPZNY",
+          "name": "Epiroc",
+          "feed": "NASDAQ_NORDIC",
+          "isin": "SE0011166933",
+          "home_ticker": "EPI-A",
+          "home_mic": "XSTO",
+          "adr_type": "unsponsored",
+          "edge": 9.2,
+          "home_exchange_code": "STO",
+          "aliases": [
+            "Epiroc AB",
+            "Epiroc",
+            "Atlas Copco drilling"
+          ]
+        },
+        {
+          "symbol": "SWDBY",
+          "name": "Swedbank",
+          "feed": "NASDAQ_NORDIC",
+          "isin": "SE0000242455",
+          "home_ticker": "SWED-A",
+          "home_mic": "XSTO",
+          "adr_type": "unsponsored",
+          "edge": 9.0,
+          "home_exchange_code": "STO",
+          "aliases": [
+            "Swedbank AB",
+            "Sparbanken Sverige",
+            "Swedbank"
+          ]
+        },
+        {
+          "symbol": "DNNGY",
+          "name": "Orsted",
+          "feed": "NASDAQ_NORDIC",
+          "isin": "DK0060094928",
+          "home_ticker": "ORSTED",
+          "home_mic": "XCSE",
+          "adr_type": "unsponsored",
+          "edge": 9.5,
+          "home_exchange_code": "CSE",
+          "aliases": [
+            "Orsted A/S",
+            "Ørsted",
+            "Orsted",
+            "DONG Energy"
+          ]
+        },
+        {
+          "symbol": "CLPBY",
+          "name": "Coloplast",
+          "feed": "NASDAQ_NORDIC",
+          "isin": "DK0060448595",
+          "home_ticker": "COLO-B",
+          "home_mic": "XCSE",
+          "adr_type": "unsponsored",
+          "edge": 9.4,
+          "home_exchange_code": "CSE",
+          "aliases": [
+            "Coloplast A/S",
+            "Coloplast"
+          ]
+        },
+        {
+          "symbol": "AMKBY",
+          "name": "AP Moller-Maersk",
+          "feed": "NASDAQ_NORDIC",
+          "isin": "DK0010244508",
+          "home_ticker": "MAERSK-B",
+          "home_mic": "XCSE",
+          "adr_type": "unsponsored",
+          "edge": 9.5,
+          "home_exchange_code": "CSE",
+          "aliases": [
+            "A.P. Moller-Maersk",
+            "AP Moller Maersk",
+            "Maersk",
+            "A.P. Møller-Mærsk",
+            "APMM"
+          ]
+        },
+        {
+          "symbol": "DSDVY",
+          "name": "DSV",
+          "feed": "NASDAQ_NORDIC",
+          "isin": "DK0060079531",
+          "home_ticker": "DSV",
+          "home_mic": "XCSE",
+          "adr_type": "unsponsored",
+          "edge": 9.3,
+          "home_exchange_code": "CSE",
+          "aliases": [
+            "DSV A/S",
+            "DSV Panalpina",
+            "DSV Logistics",
+            "Panalpina"
+          ]
+        },
+        {
+          "symbol": "GMAB",
+          "name": "Genmab",
+          "feed": "NASDAQ_NORDIC",
+          "isin": "DK0010272202",
+          "home_ticker": "GMAB",
+          "home_mic": "XCSE",
+          "adr_type": "sponsored",
+          "edge": 8.5,
+          "home_exchange_code": "CSE",
+          "aliases": [
+            "Genmab A/S",
+            "Genmab"
+          ]
+        },
+        {
+          "symbol": "VKGRY",
+          "name": "Vestas Wind",
+          "feed": "NASDAQ_NORDIC",
+          "isin": "DK0061539921",
+          "home_ticker": "VWS",
+          "home_mic": "XCSE",
+          "adr_type": "unsponsored",
+          "edge": 9.4,
+          "home_exchange_code": "CSE",
+          "aliases": [
+            "Vestas Wind Systems A/S",
+            "Vestas Wind Systems",
+            "Vestas"
+          ]
+        },
+        {
+          "symbol": "NTOIY",
+          "name": "Neste",
+          "feed": "NASDAQ_NORDIC",
+          "isin": "FI0009013403",
+          "home_ticker": "NESTE",
+          "home_mic": "XHEL",
+          "adr_type": "unsponsored",
+          "edge": 9.3,
+          "home_exchange_code": "HEL",
+          "aliases": [
+            "Neste Oyj",
+            "Neste Oil",
+            "Neste Corporation"
+          ]
+        },
+        {
+          "symbol": "KNYJY",
+          "name": "Kone",
+          "feed": "NASDAQ_NORDIC",
+          "isin": "FI0009013296",
+          "home_ticker": "KNEBV",
+          "home_mic": "XHEL",
+          "adr_type": "unsponsored",
+          "edge": 9.2,
+          "home_exchange_code": "HEL",
+          "aliases": [
+            "Kone Oyj",
+            "KONE Corporation",
+            "KONE"
+          ]
+        },
+        {
+          "symbol": "WRTBY",
+          "name": "Wartsila",
+          "feed": "NASDAQ_NORDIC",
+          "isin": "FI0009003727",
+          "home_ticker": "WRT1V",
+          "home_mic": "XHEL",
+          "adr_type": "unsponsored",
+          "edge": 9.1,
+          "home_exchange_code": "HEL",
+          "aliases": [
+            "Wartsila Oyj Abp",
+            "Wartsila",
+            "Wärtsilä Corporation"
+          ]
+        },
+        {
+          "symbol": "UPMKY",
+          "name": "UPM-Kymmene",
+          "feed": "NASDAQ_NORDIC",
+          "isin": "FI0009005987",
+          "home_ticker": "UPM",
+          "home_mic": "XHEL",
+          "adr_type": "unsponsored",
+          "edge": 9.0,
+          "home_exchange_code": "HEL",
+          "aliases": [
+            "UPM-Kymmene Oyj",
+            "UPM",
+            "UPM Kymmene"
+          ]
+        },
+        {
+          "symbol": "SEOAY",
+          "name": "Stora Enso",
+          "feed": "NASDAQ_NORDIC",
+          "isin": "FI0009005961",
+          "home_ticker": "STERV",
+          "home_mic": "XHEL",
+          "adr_type": "unsponsored",
+          "edge": 9.1,
+          "home_exchange_code": "HEL",
+          "aliases": [
+            "Stora Enso Oyj",
+            "Stora Enso",
+            "StoraEnso"
+          ]
+        },
+        {
+          "symbol": "FOJCF",
+          "name": "Fortum",
+          "feed": "NASDAQ_NORDIC",
+          "isin": "FI0009007884",
+          "home_ticker": "FORTUM",
+          "home_mic": "XHEL",
+          "adr_type": "unsponsored",
+          "edge": 9.0,
+          "home_exchange_code": "HEL",
+          "aliases": [
+            "Fortum Oyj",
+            "Fortum Corporation",
+            "Fortum"
+          ]
+        },
+        {
+          "symbol": "IBDRY",
+          "name": "Iberdrola",
+          "feed": "CNMV",
+          "isin": "ES0144580Y14",
+          "home_ticker": "IBE",
+          "cnmv_entity_id": "1252",
+          "adr_type": "unsponsored",
+          "edge": 9.0,
+          "home_exchange_code": "BME",
+          "aliases": [
+            "Iberdrola SA",
+            "Iberdrola",
+            "Avangrid"
+          ]
+        },
+        {
+          "symbol": "IDEXY",
+          "name": "Inditex",
+          "feed": "CNMV",
+          "isin": "ES0148396007",
+          "home_ticker": "ITX",
+          "cnmv_entity_id": "234",
+          "adr_type": "unsponsored",
+          "edge": 9.1,
+          "home_exchange_code": "BME",
+          "aliases": [
+            "Industria de Diseno Textil SA",
+            "Inditex",
+            "Zara",
+            "Inditex Group",
+            "Zara parent"
+          ]
+        },
+        {
+          "symbol": "REPYY",
+          "name": "Repsol",
+          "feed": "CNMV",
+          "isin": "ES0173516115",
+          "home_ticker": "REP",
+          "cnmv_entity_id": "65",
+          "adr_type": "unsponsored",
+          "edge": 9.1,
+          "home_exchange_code": "BME",
+          "aliases": [
+            "Repsol SA",
+            "Repsol Group"
+          ]
+        },
+        {
+          "symbol": "CAIXY",
+          "name": "CaixaBank",
+          "feed": "CNMV",
+          "isin": "ES0140609018",
+          "home_ticker": "CABK",
+          "cnmv_entity_id": "4683",
+          "adr_type": "unsponsored",
+          "edge": 9.0,
+          "home_exchange_code": "BME",
+          "aliases": [
+            "CaixaBank SA",
+            "Caixa Bank",
+            "la Caixa",
+            "CriteriaCaixa"
+          ]
+        },
+        {
+          "symbol": "ENGGY",
+          "name": "Enagas",
+          "feed": "CNMV",
+          "isin": "ES0130960018",
+          "home_ticker": "ENG",
+          "cnmv_entity_id": "1341",
+          "adr_type": "unsponsored",
+          "edge": 9.0,
+          "home_exchange_code": "BME",
+          "aliases": [
+            "Enagas SA",
+            "Enagas",
+            "Enagás"
+          ]
+        },
+        {
+          "symbol": "ELEZY",
+          "name": "Endesa",
+          "feed": "CNMV",
+          "isin": "ES0130670112",
+          "home_ticker": "ELE",
+          "cnmv_entity_id": "23",
+          "adr_type": "unsponsored",
+          "edge": 9.0,
+          "home_exchange_code": "BME",
+          "aliases": [
+            "Endesa SA",
+            "Endesa Spain",
+            "Empresa Nacional de Electricidad"
+          ]
+        },
+        {
+          "symbol": "ACSAY",
+          "name": "ACS",
+          "feed": "CNMV",
+          "isin": "ES0167050915",
+          "home_ticker": "ACS",
+          "cnmv_entity_id": "26529",
+          "adr_type": "unsponsored",
+          "edge": 9.0,
+          "home_exchange_code": "BME",
+          "aliases": [
+            "ACS Group",
+            "Actividades de Construccion y Servicios",
+            "ACS Actividades"
+          ]
+        },
+        {
+          "symbol": "ICAGY",
+          "name": "IAG",
+          "feed": "CNMV",
+          "isin": "ES0177542018",
+          "home_ticker": "IAG",
+          "cnmv_entity_id": "4857",
+          "adr_type": "unsponsored",
+          "edge": 9.1,
+          "home_exchange_code": "BME",
+          "aliases": [
+            "International Airlines Group",
+            "IAG",
+            "British Airways",
+            "Iberia",
+            "Vueling"
+          ]
+        },
+        {
+          "symbol": "CLLNY",
+          "name": "Cellnex",
+          "feed": "CNMV",
+          "isin": "ES0105093003",
+          "home_ticker": "CLNX",
+          "cnmv_entity_id": "4717",
+          "adr_type": "unsponsored",
+          "edge": 9.2,
+          "home_exchange_code": "BME",
+          "aliases": [
+            "Cellnex Telecom SA",
+            "Cellnex",
+            "Cellnex Telecom"
+          ]
+        },
+        {
+          "symbol": "EDRVY",
+          "name": "EDP Renovaveis",
+          "feed": "CNMV",
+          "isin": "PTEDP0AM0009",
+          "home_ticker": "EDPR",
+          "cnmv_entity_id": "4686",
+          "adr_type": "unsponsored",
+          "edge": 9.1,
+          "home_exchange_code": "ELI",
+          "aliases": [
+            "EDP Renovaveis SA",
+            "EDPR",
+            "EDP Renewables"
+          ]
+        },
+        {
+          "symbol": "ANYYY",
+          "name": "Aena",
+          "feed": "CNMV",
+          "isin": "ES0105046009",
+          "home_ticker": "AENA",
+          "cnmv_entity_id": "4755",
+          "adr_type": "unsponsored",
+          "edge": 9.2,
+          "home_exchange_code": "BME",
+          "aliases": [
+            "Aena SME SA",
+            "Aena Aeropuertos",
+            "Aena S.M.E."
+          ]
+        },
+        {
+          "symbol": "CRPAY",
+          "name": "Acciona",
+          "feed": "CNMV",
+          "isin": "ES0125220311",
+          "home_ticker": "ANA",
+          "cnmv_entity_id": "3538",
+          "adr_type": "unsponsored",
+          "edge": 9.1,
+          "home_exchange_code": "BME",
+          "aliases": [
+            "Acciona SA",
+            "Acciona Group",
+            "Grupo Acciona"
+          ]
+        },
+        {
+          "symbol": "BNDSY",
+          "name": "Banco Sabadell",
+          "feed": "CNMV",
+          "isin": "ES0113860A34",
+          "home_ticker": "SAB",
+          "cnmv_entity_id": "5070",
+          "adr_type": "unsponsored",
+          "edge": 9.1,
+          "home_exchange_code": "BME",
+          "aliases": [
+            "Banco de Sabadell SA",
+            "Banco Sabadell",
+            "Sabadell"
+          ]
+        },
+        {
+          "symbol": "TOYOY",
+          "name": "Toyota",
+          "feed": "TSE",
+          "isin": "JP3633400001",
+          "adr_type": "unsponsored",
+          "edge": 9.2,
+          "tse_code": "7203",
+          "home_ticker": "7203",
+          "home_exchange_code": "TSE",
+          "aliases": [
+            "Toyota Motor Corp",
+            "Toyota Motor Corporation",
+            "トヨタ自動車",
+            "Toyota Motor"
+          ]
+        },
+        {
+          "symbol": "HTHIY",
+          "name": "Hitachi",
+          "feed": "TSE",
+          "isin": "JP3788600009",
+          "adr_type": "unsponsored",
+          "edge": 9.5,
+          "tse_code": "6501",
+          "home_ticker": "6501",
+          "home_exchange_code": "TSE",
+          "aliases": [
+            "Hitachi Ltd",
+            "Hitachi Limited",
+            "日立製作所",
+            "Hitachi Group"
+          ]
+        },
+        {
+          "symbol": "FANUY",
+          "name": "Fanuc",
+          "feed": "TSE",
+          "isin": "JP3802400006",
+          "adr_type": "unsponsored",
+          "edge": 9.6,
+          "tse_code": "6954",
+          "home_ticker": "6954",
+          "home_exchange_code": "TSE",
+          "aliases": [
+            "Fanuc Corp",
+            "Fanuc Corporation",
+            "ファナック",
+            "FANUC"
+          ]
+        },
+        {
+          "symbol": "DKILY",
+          "name": "Daikin",
+          "feed": "TSE",
+          "isin": "JP3477600002",
+          "adr_type": "unsponsored",
+          "edge": 9.4,
+          "tse_code": "6367",
+          "home_ticker": "6367",
+          "home_exchange_code": "TSE",
+          "aliases": [
+            "Daikin Industries",
+            "Daikin Industries Ltd",
+            "ダイキン工業"
+          ]
+        },
+        {
+          "symbol": "DNZOY",
+          "name": "Denso",
+          "feed": "TSE",
+          "isin": "JP3551500006",
+          "adr_type": "unsponsored",
+          "edge": 9.3,
+          "tse_code": "6902",
+          "home_ticker": "6902",
+          "home_exchange_code": "TSE",
+          "aliases": [
+            "Denso Corp",
+            "Denso Corporation",
+            "デンソー",
+            "Nippon Denso"
+          ]
+        },
+        {
+          "symbol": "KEYCY",
+          "name": "Keyence",
+          "feed": "TSE",
+          "isin": "JP3236400009",
+          "adr_type": "unsponsored",
+          "edge": 9.7,
+          "tse_code": "6861",
+          "home_ticker": "6861",
+          "home_exchange_code": "TSE",
+          "aliases": [
+            "Keyence Corp",
+            "Keyence Corporation",
+            "キーエンス"
+          ]
+        },
+        {
+          "symbol": "ITOCY",
+          "name": "Itochu",
+          "feed": "TSE",
+          "isin": "JP3143600009",
+          "adr_type": "unsponsored",
+          "edge": 9.4,
+          "tse_code": "8001",
+          "home_ticker": "8001",
+          "home_exchange_code": "TSE",
+          "aliases": [
+            "Itochu Corp",
+            "Itochu Corporation",
+            "伊藤忠商事",
+            "ITOCHU"
+          ]
+        },
+        {
+          "symbol": "MSBHY",
+          "name": "Mitsubishi",
+          "feed": "TSE",
+          "isin": "JP3900000005",
+          "adr_type": "unsponsored",
+          "edge": 9.3,
+          "tse_code": "8058",
+          "home_ticker": "8058",
+          "home_exchange_code": "TSE",
+          "aliases": [
+            "Mitsubishi Corp",
+            "Mitsubishi Corporation",
+            "三菱商事",
+            "MC Corp"
+          ]
+        },
+        {
+          "symbol": "MITSF",
+          "name": "Mitsui",
+          "feed": "TSE",
+          "isin": "JP3893600001",
+          "adr_type": "unsponsored",
+          "edge": 9.3,
+          "tse_code": "8031",
+          "home_ticker": "8031",
+          "home_exchange_code": "TSE",
+          "aliases": [
+            "Mitsui & Co Ltd",
+            "Mitsui & Co",
+            "三井物産",
+            "Mitsui and Co"
+          ]
+        },
+        {
+          "symbol": "SSUMY",
+          "name": "Sumitomo",
+          "feed": "TSE",
+          "isin": "JP3404600003",
+          "adr_type": "unsponsored",
+          "edge": 9.2,
+          "tse_code": "8053",
+          "home_ticker": "8053",
+          "home_exchange_code": "TSE",
+          "aliases": [
+            "Sumitomo Corp",
+            "Sumitomo Corporation",
+            "住友商事"
+          ]
+        },
+        {
+          "symbol": "MARUY",
+          "name": "Marubeni",
+          "feed": "TSE",
+          "isin": "JP3877600001",
+          "adr_type": "unsponsored",
+          "edge": 9.1,
+          "tse_code": "8002",
+          "home_ticker": "8002",
+          "home_exchange_code": "TSE",
+          "aliases": [
+            "Marubeni Corp",
+            "Marubeni Corporation",
+            "丸紅"
+          ]
+        },
+        {
+          "symbol": "SMFG",
+          "name": "Sumitomo Mitsui",
+          "feed": "TSE",
+          "isin": "JP3890350006",
+          "adr_type": "unsponsored",
+          "edge": 9.0,
+          "tse_code": "8316",
+          "home_ticker": "8316",
+          "home_exchange_code": "TSE",
+          "aliases": [
+            "Sumitomo Mitsui Financial Group",
+            "SMFG",
+            "三井住友フィナンシャルグループ",
+            "SMBC"
+          ]
+        },
+        {
+          "symbol": "DSNKY",
+          "name": "Daiichi Sankyo",
+          "feed": "TSE",
+          "isin": "JP3475350009",
+          "adr_type": "unsponsored",
+          "edge": 9.5,
+          "tse_code": "4568",
+          "home_ticker": "4568",
+          "home_exchange_code": "TSE",
+          "aliases": [
+            "Daiichi Sankyo Co",
+            "Daiichi Sankyo Company",
+            "第一三共",
+            "Daiichi"
+          ]
+        },
+        {
+          "symbol": "CHGCY",
+          "name": "Chugai Pharma",
+          "feed": "TSE",
+          "isin": "JP3519400000",
+          "adr_type": "unsponsored",
+          "edge": 9.4,
+          "tse_code": "4519",
+          "home_ticker": "4519",
+          "home_exchange_code": "TSE",
+          "aliases": [
+            "Chugai Pharmaceutical",
+            "Chugai Pharma Co",
+            "中外製薬",
+            "Roche Chugai"
+          ]
+        },
+        {
+          "symbol": "ESAIY",
+          "name": "Eisai",
+          "feed": "TSE",
+          "isin": "JP3160400002",
+          "adr_type": "unsponsored",
+          "edge": 9.3,
+          "tse_code": "4523",
+          "home_ticker": "4523",
+          "home_exchange_code": "TSE",
+          "aliases": [
+            "Eisai Co Ltd",
+            "Eisai Company",
+            "エーザイ"
+          ]
+        },
+        {
+          "symbol": "ALPMY",
+          "name": "Astellas Pharma",
+          "feed": "TSE",
+          "isin": "JP3942400007",
+          "adr_type": "unsponsored",
+          "edge": 9.2,
+          "tse_code": "4503",
+          "home_ticker": "4503",
+          "home_exchange_code": "TSE",
+          "aliases": [
+            "Astellas Pharma Inc",
+            "Astellas",
+            "アステラス製薬"
+          ]
+        },
+        {
+          "symbol": "HOCPY",
+          "name": "Hoya",
+          "feed": "TSE",
+          "isin": "JP3837800006",
+          "adr_type": "unsponsored",
+          "edge": 9.5,
+          "tse_code": "7741",
+          "home_ticker": "7741",
+          "home_exchange_code": "TSE",
+          "aliases": [
+            "Hoya Corp",
+            "Hoya Corporation",
+            "HOYAコーポレーション"
+          ]
+        },
+        {
+          "symbol": "FUJIY",
+          "name": "Fujifilm",
+          "feed": "TSE",
+          "isin": "JP3814000000",
+          "adr_type": "unsponsored",
+          "edge": 9.2,
+          "tse_code": "4901",
+          "home_ticker": "4901",
+          "home_exchange_code": "TSE",
+          "aliases": [
+            "Fujifilm Holdings Corp",
+            "Fujifilm",
+            "FUJIFILM",
+            "富士フイルム"
+          ]
+        },
+        {
+          "symbol": "KAOOY",
+          "name": "Kao",
+          "feed": "TSE",
+          "isin": "JP3205800000",
+          "adr_type": "unsponsored",
+          "edge": 9.1,
+          "tse_code": "4452",
+          "home_ticker": "4452",
+          "home_exchange_code": "TSE",
+          "aliases": [
+            "Kao Corp",
+            "Kao Corporation",
+            "花王"
+          ]
+        },
+        {
+          "symbol": "AJINY",
+          "name": "Ajinomoto",
+          "feed": "TSE",
+          "isin": "JP3119600009",
+          "adr_type": "unsponsored",
+          "edge": 9.2,
+          "tse_code": "2802",
+          "home_ticker": "2802",
+          "home_exchange_code": "TSE",
+          "aliases": [
+            "Ajinomoto Co",
+            "Ajinomoto Company",
+            "味の素"
+          ]
+        },
+        {
+          "symbol": "BRDCY",
+          "name": "Bridgestone",
+          "feed": "TSE",
+          "isin": "JP3830800003",
+          "adr_type": "unsponsored",
+          "edge": 9.1,
+          "tse_code": "5108",
+          "home_ticker": "5108",
+          "home_exchange_code": "TSE",
+          "aliases": [
+            "Bridgestone Corp",
+            "Bridgestone Corporation",
+            "ブリヂストン"
+          ]
+        },
+        {
+          "symbol": "FRCOY",
+          "name": "Fast Retailing",
+          "feed": "TSE",
+          "isin": "JP3802300008",
+          "adr_type": "unsponsored",
+          "edge": 9.4,
+          "tse_code": "9983",
+          "home_ticker": "9983",
+          "home_exchange_code": "TSE",
+          "aliases": [
+            "Fast Retailing Co",
+            "ファーストリテイリング",
+            "Uniqlo",
+            "Uniqlo parent"
+          ]
+        },
+        {
+          "symbol": "KWHIY",
+          "name": "Kawasaki Heavy",
+          "feed": "TSE",
+          "isin": "JP3224200000",
+          "adr_type": "unsponsored",
+          "edge": 9.3,
+          "tse_code": "7012",
+          "home_ticker": "7012",
+          "home_exchange_code": "TSE",
+          "aliases": [
+            "Kawasaki Heavy Industries",
+            "Kawasaki Heavy Industries Ltd",
+            "川崎重工業",
+            "KHI"
+          ]
+        },
+        {
+          "symbol": "IBIDY",
+          "name": "Ibiden",
+          "feed": "TSE",
+          "isin": "JP3142800009",
+          "adr_type": "unsponsored",
+          "edge": 9.5,
+          "tse_code": "4062",
+          "home_ticker": "4062",
+          "home_exchange_code": "TSE",
+          "aliases": [
+            "Ibiden Co Ltd",
+            "Ibiden",
+            "イビデン"
+          ]
+        },
+        {
+          "symbol": "DSCSY",
+          "name": "Disco",
+          "feed": "TSE",
+          "isin": "JP3548600009",
+          "adr_type": "unsponsored",
+          "edge": 9.6,
+          "tse_code": "6146",
+          "home_ticker": "6146",
+          "home_exchange_code": "TSE",
+          "aliases": [
+            "Disco Corp",
+            "Disco Corporation",
+            "ディスコ"
+          ]
+        },
+        {
+          "symbol": "SMSNY",
+          "name": "Samsung Electronics",
+          "feed": "KRX",
+          "isin": "KR7005930003",
+          "adr_type": "unsponsored",
+          "edge": 9.3,
+          "dart_corp_code": "00126380",
+          "home_ticker": "005930",
+          "home_exchange_code": "KRX",
+          "aliases": [
+            "Samsung Electronics Co Ltd",
+            "삼성전자",
+            "Samsung Electronics",
+            "Samsung"
+          ]
+        },
+        {
+          "symbol": "HXSCL",
+          "name": "Hyundai Motor",
+          "feed": "KRX",
+          "isin": "KR7005380001",
+          "adr_type": "unsponsored",
+          "edge": 9.2,
+          "dart_corp_code": "00164779",
+          "home_ticker": "005380",
+          "home_exchange_code": "KRX",
+          "aliases": [
+            "Hyundai Motor Company",
+            "Hyundai Motor",
+            "현대자동차",
+            "HMC"
+          ]
+        },
+        {
+          "symbol": "LGEIY",
+          "name": "LG Electronics",
+          "feed": "KRX",
+          "isin": "KR7066570003",
+          "adr_type": "unsponsored",
+          "edge": 9.3,
+          "dart_corp_code": "00401731",
+          "home_ticker": "066570",
+          "home_exchange_code": "KRX",
+          "aliases": [
+            "LG Electronics Inc",
+            "LG전자",
+            "LG Electronics"
+          ]
+        },
+        {
+          "symbol": "PCRFY",
+          "name": "POSCO",
+          "feed": "KRX",
+          "isin": "KR7005490008",
+          "adr_type": "unsponsored",
+          "edge": 9.2,
+          "dart_corp_code": "00107591",
+          "home_ticker": "005490",
+          "home_exchange_code": "KRX",
+          "aliases": [
+            "POSCO Holdings Inc",
+            "POSCO",
+            "포스코",
+            "Pohang Steel"
+          ]
+        },
+        {
+          "symbol": "SKHYY",
+          "name": "SK Hynix",
+          "feed": "KRX",
+          "isin": "KR7000660001",
+          "adr_type": "unsponsored",
+          "edge": 9.5,
+          "dart_corp_code": "00797488",
+          "home_ticker": "000660",
+          "home_exchange_code": "KRX",
+          "aliases": [
+            "SK Hynix Inc",
+            "SK하이닉스",
+            "Hynix",
+            "SK Hynix"
+          ]
+        },
+        {
+          "symbol": "KBSTY",
+          "name": "KB Financial",
+          "feed": "KRX",
+          "isin": "KR7105560005",
+          "adr_type": "unsponsored",
+          "edge": 9.1,
+          "dart_corp_code": "00591791",
+          "home_ticker": "105560",
+          "home_exchange_code": "KRX",
+          "aliases": [
+            "KB Financial Group",
+            "Kookmin Bank",
+            "KB국민은행",
+            "KB Financial"
+          ]
+        },
+        {
+          "symbol": "SSNLF",
+          "name": "Samsung SDI",
+          "feed": "KRX",
+          "isin": "KR7006400006",
+          "adr_type": "unsponsored",
+          "edge": 9.4,
+          "dart_corp_code": "00149655",
+          "home_ticker": "006400",
+          "home_exchange_code": "KRX",
+          "aliases": [
+            "Samsung SDI Co Ltd",
+            "삼성SDI",
+            "Samsung SDI"
+          ]
+        },
+        {
+          "symbol": "LGCLF",
+          "name": "LG Chem",
+          "feed": "KRX",
+          "isin": "KR7051910008",
+          "adr_type": "unsponsored",
+          "edge": 9.4,
+          "dart_corp_code": "00109513",
+          "home_ticker": "051910",
+          "home_exchange_code": "KRX",
+          "aliases": [
+            "LG Chem Ltd",
+            "LG화학",
+            "LG Chem"
+          ]
+        },
+        {
+          "symbol": "NCNTY",
+          "name": "NAVER",
+          "feed": "KRX",
+          "isin": "KR7035420009",
+          "adr_type": "unsponsored",
+          "edge": 9.3,
+          "dart_corp_code": "00293886",
+          "home_ticker": "035420",
+          "home_exchange_code": "KRX",
+          "aliases": [
+            "NAVER Corporation",
+            "네이버",
+            "NAVER Corp",
+            "Naver"
+          ]
+        },
+        {
+          "symbol": "BHPGF",
+          "name": "BHP Group",
+          "feed": "ASX",
+          "isin": "AU000000BHP4",
+          "adr_type": "unsponsored",
+          "edge": 9.0,
+          "asx_code": "BHP",
+          "home_ticker": "BHP",
+          "home_exchange_code": "ASX",
+          "aliases": [
+            "BHP Group Limited",
+            "BHP Billiton",
+            "Broken Hill Proprietary",
+            "BHP Group"
+          ]
+        },
+        {
+          "symbol": "CSLLY",
+          "name": "CSL",
+          "feed": "ASX",
+          "isin": "AU000000CSL8",
+          "adr_type": "unsponsored",
+          "edge": 9.4,
+          "asx_code": "CSL",
+          "home_ticker": "CSL",
+          "home_exchange_code": "ASX",
+          "aliases": [
+            "CSL Limited",
+            "Commonwealth Serum Laboratories",
+            "CSL Behring",
+            "CSL Vifor"
+          ]
+        },
+        {
+          "symbol": "WBKLY",
+          "name": "Westpac",
+          "feed": "ASX",
+          "isin": "AU000000WBC1",
+          "adr_type": "unsponsored",
+          "edge": 9.0,
+          "asx_code": "WBC",
+          "home_ticker": "WBC",
+          "home_exchange_code": "ASX",
+          "aliases": [
+            "Westpac Banking Corp",
+            "Westpac Banking Corporation",
+            "Westpac"
+          ]
+        },
+        {
+          "symbol": "ANZBY",
+          "name": "ANZ Banking",
+          "feed": "ASX",
+          "isin": "AU000000ANZ3",
+          "adr_type": "unsponsored",
+          "edge": 9.1,
+          "asx_code": "ANZ",
+          "home_ticker": "ANZ",
+          "home_exchange_code": "ASX",
+          "aliases": [
+            "ANZ Bank",
+            "Australia and New Zealand Banking Group",
+            "ANZ Banking Group"
+          ]
+        },
+        {
+          "symbol": "NABZY",
+          "name": "NAB",
+          "feed": "ASX",
+          "isin": "AU000000NAB4",
+          "adr_type": "unsponsored",
+          "edge": 9.0,
+          "asx_code": "NAB",
+          "home_ticker": "NAB",
+          "home_exchange_code": "ASX",
+          "aliases": [
+            "National Australia Bank",
+            "NAB Bank",
+            "National Australia Bank Limited"
+          ]
+        },
+        {
+          "symbol": "CMWAY",
+          "name": "CBA",
+          "feed": "ASX",
+          "isin": "AU000000CBA7",
+          "adr_type": "unsponsored",
+          "edge": 9.1,
+          "asx_code": "CBA",
+          "home_ticker": "CBA",
+          "home_exchange_code": "ASX",
+          "aliases": [
+            "Commonwealth Bank of Australia",
+            "CommBank",
+            "CBA"
+          ]
+        },
+        {
+          "symbol": "WLSYY",
+          "name": "Woolworths",
+          "feed": "ASX",
+          "isin": "AU000000WOW2",
+          "adr_type": "unsponsored",
+          "edge": 9.0,
+          "asx_code": "WOW",
+          "home_ticker": "WOW",
+          "home_exchange_code": "ASX",
+          "aliases": [
+            "Woolworths Group Limited",
+            "Woolworths Group",
+            "Woolworths Australia",
+            "WooliesX"
+          ]
+        },
+        {
+          "symbol": "MQBKY",
+          "name": "Macquarie",
+          "feed": "ASX",
+          "isin": "AU000000MQG1",
+          "adr_type": "unsponsored",
+          "edge": 9.2,
+          "asx_code": "MQG",
+          "home_ticker": "MQG",
+          "home_exchange_code": "ASX",
+          "aliases": [
+            "Macquarie Group Limited",
+            "Macquarie Bank",
+            "Macquarie Group",
+            "Macquarie"
+          ]
+        },
+        {
+          "symbol": "WFAFY",
+          "name": "Wesfarmers",
+          "feed": "ASX",
+          "isin": "AU000000WES1",
+          "adr_type": "unsponsored",
+          "edge": 9.1,
+          "asx_code": "WES",
+          "home_ticker": "WES",
+          "home_exchange_code": "ASX",
+          "aliases": [
+            "Wesfarmers Limited",
+            "Wesfarmers",
+            "Bunnings parent",
+            "Kmart Australia parent"
+          ]
+        },
+        {
+          "symbol": "MBFY",
+          "name": "Mahindra",
+          "feed": "NSE",
+          "isin": "INE101A01026",
+          "adr_type": "unsponsored",
+          "edge": 9.1,
+          "nse_symbol": "M&M",
+          "home_ticker": "M&M",
+          "home_exchange_code": "NSE",
+          "aliases": [
+            "Mahindra and Mahindra Limited",
+            "Mahindra & Mahindra",
+            "M&M",
+            "Mahindra"
+          ]
+        },
+        {
+          "symbol": "TTKLY",
+          "name": "Tata Consultancy",
+          "feed": "NSE",
+          "isin": "INE467B01029",
+          "adr_type": "unsponsored",
+          "edge": 9.0,
+          "nse_symbol": "TCS",
+          "home_ticker": "TCS",
+          "home_exchange_code": "NSE",
+          "aliases": [
+            "Tata Consultancy Services Limited",
+            "TCS",
+            "Tata Consultancy Services"
+          ]
+        },
+        {
+          "symbol": "VEDLF",
+          "name": "Vedanta",
+          "feed": "NSE",
+          "isin": "INE205A01025",
+          "adr_type": "unsponsored",
+          "edge": 9.2,
+          "nse_symbol": "VEDL",
+          "home_ticker": "VEDL",
+          "home_exchange_code": "NSE",
+          "aliases": [
+            "Vedanta Limited",
+            "Vedanta Resources",
+            "Vedanta"
+          ]
+        },
+        {
+          "symbol": "BAJFY",
+          "name": "Bajaj Finance",
+          "feed": "NSE",
+          "isin": "INE296A01024",
+          "adr_type": "unsponsored",
+          "edge": 9.3,
+          "nse_symbol": "BAJFINANCE",
+          "home_ticker": "BAJFINANCE",
+          "home_exchange_code": "NSE",
+          "aliases": [
+            "Bajaj Finance Limited",
+            "Bajaj Finance Ltd",
+            "Bajaj Finserv"
+          ]
+        },
+        {
+          "symbol": "AHHHY",
+          "name": "AIA Group",
+          "feed": "HKEX",
+          "isin": "HK0000069689",
+          "adr_type": "unsponsored",
+          "edge": 9.2,
+          "hkex_stock_code": "1299",
+          "home_ticker": "1299",
+          "home_exchange_code": "HKEX",
+          "aliases": [
+            "AIA Group Limited",
+            "AIA",
+            "American International Assurance"
+          ]
+        },
+        {
+          "symbol": "HSNGY",
+          "name": "Hang Seng Bank",
+          "feed": "HKEX",
+          "isin": "HK0000060141",
+          "adr_type": "unsponsored",
+          "edge": 9.1,
+          "hkex_stock_code": "11",
+          "home_ticker": "0011",
+          "home_exchange_code": "HKEX",
+          "aliases": [
+            "Hang Seng Bank Limited",
+            "Hang Seng Bank",
+            "恒生銀行"
+          ]
+        },
+        {
+          "symbol": "LNCGY",
+          "name": "Lenovo",
+          "feed": "HKEX",
+          "isin": "HK0992009065",
+          "adr_type": "unsponsored",
+          "edge": 9.3,
+          "hkex_stock_code": "992",
+          "home_ticker": "0992",
+          "home_exchange_code": "HKEX",
+          "aliases": [
+            "Lenovo Group Limited",
+            "Lenovo Group",
+            "联想集团",
+            "Lenovo"
+          ]
+        },
+        {
+          "symbol": "CKHUY",
+          "name": "CK Hutchison",
+          "feed": "HKEX",
+          "isin": "HK0001000014",
+          "adr_type": "unsponsored",
+          "edge": 9.2,
+          "hkex_stock_code": "1",
+          "home_ticker": "0001",
+          "home_exchange_code": "HKEX",
+          "aliases": [
+            "CK Hutchison Holdings",
+            "Hutchison Whampoa",
+            "Cheung Kong",
+            "CKH"
+          ]
+        },
+        {
+          "symbol": "SEHKY",
+          "name": "HK Exchanges",
+          "feed": "HKEX",
+          "isin": "HK0388045442",
+          "adr_type": "unsponsored",
+          "edge": 9.4,
+          "hkex_stock_code": "388",
+          "home_ticker": "0388",
+          "home_exchange_code": "HKEX",
+          "aliases": [
+            "Hong Kong Exchanges and Clearing",
+            "HKEX",
+            "HKEx",
+            "香港交易所"
+          ]
+        },
+        {
+          "symbol": "ANGPY",
+          "name": "Anglo American",
+          "feed": "JSE",
+          "isin": "ZAE000104392",
+          "adr_type": "unsponsored",
+          "edge": 9.0,
+          "jse_code": "AGL",
+          "home_ticker": "AGL",
+          "home_exchange_code": "JSE",
+          "aliases": [
+            "Anglo American plc",
+            "Anglo American"
+          ]
+        },
+        {
+          "symbol": "NSRGY",
+          "name": "Naspers",
+          "feed": "JSE",
+          "isin": "ZAE000015889",
+          "adr_type": "unsponsored",
+          "edge": 9.3,
+          "jse_code": "NPN",
+          "home_ticker": "NPN",
+          "home_exchange_code": "JSE",
+          "aliases": [
+            "Naspers Limited",
+            "Naspers",
+            "Prosus"
+          ]
+        },
+        {
+          "symbol": "WEGZY",
+          "name": "Weg SA",
+          "feed": "B3",
+          "isin": "BRWEGEACNOR0",
+          "adr_type": "unsponsored",
+          "edge": 9.1,
+          "cvm_code": "7370",
+          "home_ticker": "WEGE3",
+          "home_exchange_code": "B3",
+          "aliases": [
+            "WEG SA",
+            "WEG Industrias SA",
+            "WEG Equipamentos Eletricos"
+          ]
+        },
+        {
+          "symbol": "LZRFY",
+          "name": "Localiza",
+          "feed": "B3",
+          "isin": "BRRENTA3NOR1",
+          "adr_type": "unsponsored",
+          "edge": 9.2,
+          "cvm_code": "9959",
+          "home_ticker": "RENT3",
+          "home_exchange_code": "B3",
+          "aliases": [
+            "Localiza Rent a Car SA",
+            "Localiza",
+            "Localiza Hertz",
+            "Unidas"
+          ]
+        },
+        {
+          "symbol": "CPFEY",
+          "name": "CPFL Energia",
+          "feed": "B3",
+          "isin": "BRCPFEACNOR0",
+          "adr_type": "unsponsored",
+          "edge": 9.0,
+          "cvm_code": "8133",
+          "home_ticker": "CPFE3",
+          "home_exchange_code": "B3",
+          "aliases": [
+            "CPFL Energia SA",
+            "CPFL",
+            "Companhia Paulista de Forca e Luz"
+          ]
+        },
+        {
+          "symbol": "WMMVY",
+          "name": "Walmart Mexico",
+          "feed": "BMV",
+          "isin": "MX01WA000004",
+          "adr_type": "unsponsored",
+          "edge": 9.1,
+          "bmv_ticker": "WALMEX",
+          "home_ticker": "WALMEX",
+          "home_exchange_code": "BMV",
+          "aliases": [
+            "Walmart de Mexico SAB de CV",
+            "Walmart Mexico",
+            "Walmex",
+            "Bodega Aurrera parent"
+          ]
+        },
+        {
+          "symbol": "GBOOY",
+          "name": "Banorte",
+          "feed": "BMV",
+          "isin": "MX01GF000026",
+          "adr_type": "unsponsored",
+          "edge": 9.2,
+          "bmv_ticker": "GFNORTEO",
+          "home_ticker": "GFNORTEO",
+          "home_exchange_code": "BMV",
+          "aliases": [
+            "Grupo Financiero Banorte SAB de CV",
+            "Banorte",
+            "GFNorte",
+            "Grupo Banorte"
+          ]
+        },
+        {
+          "symbol": "BMBOY",
+          "name": "Grupo Bimbo",
+          "feed": "BMV",
+          "isin": "MX01BI000018",
+          "adr_type": "unsponsored",
+          "edge": 9.0,
+          "bmv_ticker": "BIMBOA",
+          "home_ticker": "BIMBOA",
+          "home_exchange_code": "BMV",
+          "aliases": [
+            "Grupo Bimbo SAB de CV",
+            "Bimbo",
+            "Grupo Bimbo"
+          ]
+        }
+      ]
+    },
+    "B": {
+      "priority": "conditional",
+      "description": "STRONG EDGE",
+      "companies": [
+        {
+          "symbol": "UNCRY",
+          "name": "UniCredit",
+          "feed": "EURONEXT",
+          "isin": "IT0005239360",
+          "mic": "XMIL",
+          "adr_type": "unsponsored",
+          "edge": 9.0,
+          "home_ticker": "UCG",
+          "home_exchange_code": "MIL",
+          "aliases": [
+            "UniCredit SpA",
+            "UniCredit Group",
+            "HypoVereinsbank parent",
+            "UniCredit Bank"
+          ]
+        },
+        {
+          "symbol": "AMADY",
+          "name": "Amadeus",
+          "feed": "EURONEXT",
+          "isin": "ES0109067019",
+          "mic": "XMAD",
+          "adr_type": "unsponsored",
+          "edge": 9.1,
+          "home_ticker": "AMS",
+          "home_exchange_code": "BME",
+          "aliases": [
+            "Amadeus IT Group SA",
+            "Amadeus IT Group",
+            "Amadeus IT",
+            "Amadeus"
+          ]
+        },
+        {
+          "symbol": "WTKWY",
+          "name": "Wolters Kluwer",
+          "feed": "EURONEXT",
+          "isin": "NL0000395903",
+          "mic": "XAMS",
+          "adr_type": "unsponsored",
+          "edge": 9.2,
+          "home_ticker": "WKL",
+          "home_exchange_code": "AMS",
+          "aliases": [
+            "Wolters Kluwer NV",
+            "Wolters Kluwer Group",
+            "Wolters Kluwer"
+          ]
+        },
+        {
+          "symbol": "UCBJF",
+          "name": "UCB",
+          "feed": "EURONEXT",
+          "isin": "BE0003739530",
+          "mic": "XBRU",
+          "adr_type": "unsponsored",
+          "edge": 9.3,
+          "home_ticker": "UCB",
+          "home_exchange_code": "EBR",
+          "aliases": [
+            "UCB SA",
+            "UCB Group",
+            "Union Chimique Belge"
+          ]
+        },
+        {
+          "symbol": "BBVA",
+          "name": "BBVA",
+          "feed": "EURONEXT",
+          "isin": "ES0113211835",
+          "mic": "XMAD",
+          "adr_type": "sponsored",
+          "edge": 8.6,
+          "home_ticker": "BBVA",
+          "home_exchange_code": "BME",
+          "aliases": [
+            "Banco Bilbao Vizcaya Argentaria SA",
+            "BBVA Group",
+            "Banco Bilbao",
+            "BBVA"
+          ]
+        },
+        {
+          "symbol": "SAN",
+          "name": "Santander",
+          "feed": "EURONEXT",
+          "isin": "ES0113900J37",
+          "mic": "XMAD",
+          "adr_type": "sponsored",
+          "edge": 8.4,
+          "home_ticker": "SAN",
+          "home_exchange_code": "BME",
+          "aliases": [
+            "Banco Santander SA",
+            "Santander Group",
+            "Santander Bank",
+            "Banco Santander"
+          ]
+        },
+        {
+          "symbol": "BUD",
+          "name": "AB InBev",
+          "feed": "EURONEXT",
+          "isin": "BE0974293251",
+          "mic": "XBRU",
+          "adr_type": "sponsored",
+          "edge": 8.5,
+          "home_ticker": "ABI",
+          "home_exchange_code": "EBR",
+          "aliases": [
+            "Anheuser-Busch InBev SA/NV",
+            "AB InBev",
+            "ABInBev",
+            "Budweiser",
+            "Stella Artois parent",
+            "Corona parent"
+          ]
+        },
+        {
+          "symbol": "DTRUY",
+          "name": "Daimler Truck",
+          "feed": "XETRA",
+          "isin": "DE000DTR0CK8",
+          "adr_type": "sponsored",
+          "edge": 8.5,
+          "home_ticker": "DTR",
+          "home_exchange_code": "XETRA",
+          "aliases": [
+            "Daimler Truck Holding AG",
+            "Daimler Truck",
+            "Mercedes-Benz Trucks",
+            "Freightliner parent"
+          ]
+        },
+        {
+          "symbol": "BMWYY",
+          "name": "BMW",
+          "feed": "XETRA",
+          "isin": "DE0005190003",
+          "adr_type": "sponsored",
+          "edge": 8.3,
+          "home_ticker": "BMW",
+          "home_exchange_code": "XETRA",
+          "aliases": [
+            "Bayerische Motoren Werke AG",
+            "BMW Group",
+            "MINI parent",
+            "Rolls-Royce Motor Cars parent"
+          ]
+        },
+        {
+          "symbol": "DTEGY",
+          "name": "Deutsche Telekom",
+          "feed": "XETRA",
+          "isin": "DE0005557508",
+          "adr_type": "sponsored",
+          "edge": 8.4,
+          "home_ticker": "DTE",
+          "home_exchange_code": "XETRA",
+          "aliases": [
+            "Deutsche Telekom AG",
+            "Deutsche Telekom",
+            "T-Mobile parent",
+            "T-Systems",
+            "Telekom"
+          ]
+        },
+        {
+          "symbol": "IFNNY",
+          "name": "Infineon",
+          "feed": "XETRA",
+          "isin": "DE0006231004",
+          "adr_type": "sponsored",
+          "edge": 8.6,
+          "home_ticker": "IFX",
+          "home_exchange_code": "XETRA",
+          "aliases": [
+            "Infineon Technologies AG",
+            "Infineon Technologies",
+            "Infineon"
+          ]
+        },
+        {
+          "symbol": "SMNEY",
+          "name": "Siemens Energy",
+          "feed": "XETRA",
+          "isin": "DE000ENER6Y0",
+          "adr_type": "unsponsored",
+          "edge": 8.8,
+          "home_ticker": "ENR",
+          "home_exchange_code": "XETRA",
+          "aliases": [
+            "Siemens Energy AG",
+            "Siemens Energy",
+            "Gamesa parent",
+            "Siemens Gamesa parent"
+          ]
+        },
+        {
+          "symbol": "POAHY",
+          "name": "Porsche AG",
+          "feed": "XETRA",
+          "isin": "DE000PAG9113",
+          "adr_type": "unsponsored",
+          "edge": 8.7,
+          "home_ticker": "P911",
+          "home_exchange_code": "XETRA",
+          "aliases": [
+            "Dr Ing hc F Porsche AG",
+            "Porsche AG",
+            "Porsche Automobil",
+            "Porsche"
+          ]
+        },
+        {
+          "symbol": "SALRY",
+          "name": "SalMar",
+          "feed": "OSLO_BORS",
+          "isin": "NO0010310956",
+          "adr_type": "unsponsored",
+          "edge": 8.9,
+          "home_ticker": "SALM",
+          "home_exchange_code": "OSL",
+          "aliases": [
+            "SalMar ASA",
+            "SalMar",
+            "Salmar"
+          ]
+        },
+        {
+          "symbol": "VARRY",
+          "name": "Var Energi",
+          "feed": "OSLO_BORS",
+          "isin": "NO0010992052",
+          "adr_type": "unsponsored",
+          "edge": 8.8,
+          "home_ticker": "VAR",
+          "home_exchange_code": "OSL",
+          "aliases": [
+            "Var Energi ASA",
+            "Var Energi",
+            "Eni Norge"
+          ]
+        },
+        {
+          "symbol": "PSO",
+          "name": "Pearson",
+          "feed": "LSE_RNS",
+          "tidm": "PSON",
+          "isin": "GB0031215220",
+          "adr_type": "sponsored",
+          "edge": 8.2,
+          "home_ticker": "PSON",
+          "home_exchange_code": "LSE",
+          "aliases": [
+            "Pearson plc",
+            "Pearson PLC",
+            "Pearson Education"
+          ]
+        },
+        {
+          "symbol": "RELX",
+          "name": "RELX",
+          "feed": "LSE_RNS",
+          "tidm": "REL",
+          "isin": "GB00B2B0DG97",
+          "adr_type": "sponsored",
+          "edge": 8.4,
+          "home_ticker": "REL",
+          "home_exchange_code": "LSE",
+          "aliases": [
+            "RELX plc",
+            "Reed Elsevier",
+            "LexisNexis parent",
+            "Elsevier parent"
+          ]
+        },
+        {
+          "symbol": "VOD",
+          "name": "Vodafone",
+          "feed": "LSE_RNS",
+          "tidm": "VOD",
+          "isin": "GB00BH4HKS39",
+          "adr_type": "sponsored",
+          "edge": 8.1,
+          "home_ticker": "VOD",
+          "home_exchange_code": "LSE",
+          "aliases": [
+            "Vodafone Group plc",
+            "Vodafone Group",
+            "Vodafone PLC"
+          ]
+        },
+        {
+          "symbol": "DEO",
+          "name": "Diageo",
+          "feed": "LSE_RNS",
+          "tidm": "DGE",
+          "isin": "GB0002374006",
+          "adr_type": "sponsored",
+          "edge": 8.2,
+          "home_ticker": "DGE",
+          "home_exchange_code": "LSE",
+          "aliases": [
+            "Diageo plc",
+            "Diageo PLC",
+            "Johnnie Walker parent",
+            "Guinness parent",
+            "Smirnoff parent"
+          ]
+        },
+        {
+          "symbol": "RIO",
+          "name": "Rio Tinto",
+          "feed": "LSE_RNS",
+          "tidm": "RIO",
+          "isin": "GB0007188757",
+          "adr_type": "sponsored",
+          "edge": 8.0,
+          "home_ticker": "RIO",
+          "home_exchange_code": "LSE",
+          "aliases": [
+            "Rio Tinto plc",
+            "Rio Tinto Group",
+            "Rio Tinto"
+          ]
+        },
+        {
+          "symbol": "EADSY",
+          "name": "Airbus",
+          "feed": "EURONEXT",
+          "isin": "NL0000235190",
+          "mic": "XPAR",
+          "adr_type": "sponsored",
+          "edge": 8.3,
+          "home_ticker": "AIR",
+          "home_exchange_code": "EPA",
+          "aliases": [
+            "Airbus SE",
+            "Airbus Group",
+            "EADS",
+            "European Aeronautic Defence"
+          ]
+        },
+        {
+          "symbol": "LRLCY",
+          "name": "L'Oreal",
+          "feed": "EURONEXT",
+          "isin": "FR0000120321",
+          "mic": "XPAR",
+          "adr_type": "sponsored",
+          "edge": 8.2,
+          "home_ticker": "OR",
+          "home_exchange_code": "EPA",
+          "aliases": [
+            "L'Oreal SA",
+            "L'Oreal Group",
+            "L'Oréal",
+            "Loreal"
+          ]
+        },
+        {
+          "symbol": "CGEMY",
+          "name": "Capgemini",
+          "feed": "EURONEXT",
+          "isin": "FR0000125338",
+          "mic": "XPAR",
+          "adr_type": "unsponsored",
+          "edge": 8.7,
+          "home_ticker": "CAP",
+          "home_exchange_code": "EPA",
+          "aliases": [
+            "Capgemini SE",
+            "Capgemini Group",
+            "Cap Gemini"
+          ]
+        },
+        {
+          "symbol": "SBGSY",
+          "name": "Schneider Electric",
+          "feed": "EURONEXT",
+          "isin": "FR0000121972",
+          "mic": "XPAR",
+          "adr_type": "unsponsored",
+          "edge": 8.8,
+          "home_ticker": "SU",
+          "home_exchange_code": "EPA",
+          "aliases": [
+            "Schneider Electric SE",
+            "Schneider Electric",
+            "Square D parent",
+            "APC parent"
+          ]
+        },
+        {
+          "symbol": "DASTY",
+          "name": "Dassault Systemes",
+          "feed": "EURONEXT",
+          "isin": "FR0014003TT8",
+          "mic": "XPAR",
+          "adr_type": "unsponsored",
+          "edge": 8.6,
+          "home_ticker": "DSY",
+          "home_exchange_code": "EPA",
+          "aliases": [
+            "Dassault Systemes SE",
+            "Dassault Systèmes",
+            "3DEXPERIENCE",
+            "SOLIDWORKS parent"
+          ]
+        },
+        {
+          "symbol": "PPRUY",
+          "name": "Kering",
+          "feed": "EURONEXT",
+          "isin": "FR0000121485",
+          "mic": "XPAR",
+          "adr_type": "unsponsored",
+          "edge": 8.9,
+          "home_ticker": "KER",
+          "home_exchange_code": "EPA",
+          "aliases": [
+            "Kering SA",
+            "Kering Group",
+            "Gucci parent",
+            "Yves Saint Laurent parent",
+            "PPR",
+            "Pinault-Printemps-Redoute"
+          ]
+        },
+        {
+          "symbol": "VLEEY",
+          "name": "Valeo",
+          "feed": "EURONEXT",
+          "isin": "FR0013176526",
+          "mic": "XPAR",
+          "adr_type": "unsponsored",
+          "edge": 8.7,
+          "home_ticker": "FR",
+          "home_exchange_code": "EPA",
+          "aliases": [
+            "Valeo SA",
+            "Valeo Group"
+          ]
+        },
+        {
+          "symbol": "ING",
+          "name": "ING Group",
+          "feed": "EURONEXT",
+          "isin": "NL0011821202",
+          "mic": "XAMS",
+          "adr_type": "sponsored",
+          "edge": 8.1,
+          "home_ticker": "INGA",
+          "home_exchange_code": "AMS",
+          "aliases": [
+            "ING Groep NV",
+            "ING Bank",
+            "ING Group NV",
+            "Internationale Nederlanden Groep"
+          ]
+        },
+        {
+          "symbol": "GVDNY",
+          "name": "Givaudan",
+          "feed": "SIX",
+          "isin": "CH0010645932",
+          "valor": "1064593",
+          "adr_type": "unsponsored",
+          "edge": 8.8,
+          "home_ticker": "GIVN",
+          "home_exchange_code": "SIX",
+          "aliases": [
+            "Givaudan SA",
+            "Givaudan Group"
+          ]
+        },
+        {
+          "symbol": "BLHEY",
+          "name": "Baloise",
+          "feed": "SIX",
+          "isin": "CH0012410517",
+          "valor": "2786999",
+          "adr_type": "unsponsored",
+          "edge": 8.5,
+          "home_ticker": "BALN",
+          "home_exchange_code": "SIX",
+          "aliases": [
+            "Baloise Holding AG",
+            "Baloise Insurance",
+            "Basler Versicherung",
+            "Baloise"
+          ]
+        },
+        {
+          "symbol": "RIODF",
+          "name": "Rio Tinto (AU)",
+          "feed": "ASX",
+          "isin": "AU000000RIO1",
+          "adr_type": "unsponsored",
+          "edge": 8.9,
+          "asx_code": "RIO",
+          "home_ticker": "RIO",
+          "home_exchange_code": "ASX",
+          "aliases": [
+            "Rio Tinto Limited",
+            "Rio Tinto Group"
+          ]
+        },
+        {
+          "symbol": "INFY",
+          "name": "Infosys",
+          "feed": "NSE",
+          "isin": "INE009A01021",
+          "adr_type": "sponsored",
+          "edge": 8.2,
+          "nse_symbol": "INFY",
+          "home_ticker": "INFY",
+          "home_exchange_code": "NSE",
+          "aliases": [
+            "Infosys Limited",
+            "Infosys BPO",
+            "Infosys Technologies"
+          ]
+        },
+        {
+          "symbol": "WIT",
+          "name": "Wipro",
+          "feed": "NSE",
+          "isin": "INE075A01022",
+          "adr_type": "sponsored",
+          "edge": 8.1,
+          "nse_symbol": "WIPRO",
+          "home_ticker": "WIPRO",
+          "home_exchange_code": "NSE",
+          "aliases": [
+            "Wipro Limited",
+            "Wipro Technologies",
+            "Western India Products"
+          ]
+        },
+        {
+          "symbol": "HDB",
+          "name": "HDFC Bank",
+          "feed": "NSE",
+          "isin": "INE040A01034",
+          "adr_type": "sponsored",
+          "edge": 8.3,
+          "nse_symbol": "HDFCBANK",
+          "home_ticker": "HDFCBANK",
+          "home_exchange_code": "NSE",
+          "aliases": [
+            "HDFC Bank Limited",
+            "HDFC Bank",
+            "Housing Development Finance Corporation Bank"
+          ]
+        },
+        {
+          "symbol": "IBN",
+          "name": "ICICI Bank",
+          "feed": "NSE",
+          "isin": "INE090A01021",
+          "adr_type": "sponsored",
+          "edge": 8.2,
+          "nse_symbol": "ICICIBANK",
+          "home_ticker": "ICICIBANK",
+          "home_exchange_code": "NSE",
+          "aliases": [
+            "ICICI Bank Limited",
+            "ICICI Bank",
+            "Industrial Credit and Investment Corporation of India"
+          ]
+        },
+        {
+          "symbol": "AU",
+          "name": "AngloGold Ashanti",
+          "feed": "JSE",
+          "isin": "ZAE000043485",
+          "adr_type": "sponsored",
+          "edge": 8.5,
+          "jse_code": "ANG",
+          "home_ticker": "ANG",
+          "home_exchange_code": "JSE",
+          "aliases": [
+            "AngloGold Ashanti Limited",
+            "AngloGold",
+            "Anglo Gold",
+            "AngloGold Ashanti"
+          ]
+        },
+        {
+          "symbol": "GFI",
+          "name": "Gold Fields",
+          "feed": "JSE",
+          "isin": "ZAE000018123",
+          "adr_type": "sponsored",
+          "edge": 8.4,
+          "jse_code": "GFI",
+          "home_ticker": "GFI",
+          "home_exchange_code": "JSE",
+          "aliases": [
+            "Gold Fields Limited",
+            "Gold Fields Ltd",
+            "Gold Fields"
+          ]
+        },
+        {
+          "symbol": "SBSW",
+          "name": "Sibanye-Stillwater",
+          "feed": "JSE",
+          "isin": "ZAE000259701",
+          "adr_type": "sponsored",
+          "edge": 8.3,
+          "jse_code": "SSW",
+          "home_ticker": "SSW",
+          "home_exchange_code": "JSE",
+          "aliases": [
+            "Sibanye-Stillwater Limited",
+            "Sibanye Stillwater",
+            "Stillwater Mining",
+            "Sibanye Gold"
+          ]
+        },
+        {
+          "symbol": "CHKP",
+          "name": "Check Point",
+          "feed": "TASE",
+          "isin": "IL0010824113",
+          "adr_type": "sponsored",
+          "edge": 7.5,
+          "tase_company_id": "561",
+          "home_ticker": "CHKP",
+          "home_exchange_code": "TASE",
+          "aliases": [
+            "Check Point Software Technologies",
+            "Check Point Software",
+            "CheckPoint"
+          ]
+        },
+        {
+          "symbol": "NICE",
+          "name": "NICE Systems",
+          "feed": "TASE",
+          "isin": "IL0002730112",
+          "adr_type": "sponsored",
+          "edge": 7.8,
+          "tase_company_id": "2095",
+          "home_ticker": "NICE",
+          "home_exchange_code": "TASE",
+          "aliases": [
+            "NICE Ltd",
+            "NICE Systems",
+            "NICE inContact"
+          ]
+        },
+        {
+          "symbol": "ESLT",
+          "name": "Elbit Systems",
+          "feed": "TASE",
+          "isin": "IL0010811243",
+          "adr_type": "unsponsored",
+          "edge": 8.8,
+          "tase_company_id": "2588",
+          "home_ticker": "ESLT",
+          "home_exchange_code": "TASE",
+          "aliases": [
+            "Elbit Systems Ltd",
+            "Elbit Systems",
+            "Elbit"
+          ]
+        },
+        {
+          "symbol": "TEVA",
+          "name": "Teva Pharma",
+          "feed": "TASE",
+          "isin": "IL0006625771",
+          "adr_type": "sponsored",
+          "edge": 8.0,
+          "tase_company_id": "560",
+          "home_ticker": "TEVA",
+          "home_exchange_code": "TASE",
+          "aliases": [
+            "Teva Pharmaceutical Industries Ltd",
+            "Teva Pharmaceutical",
+            "Teva Pharma"
+          ]
+        },
+        {
+          "symbol": "PBR",
+          "name": "Petrobras",
+          "feed": "B3",
+          "isin": "BRPETRACNPR6",
+          "adr_type": "sponsored",
+          "edge": 8.5,
+          "cvm_code": "9512",
+          "home_ticker": "PETR4",
+          "home_exchange_code": "B3",
+          "aliases": [
+            "Petroleo Brasileiro SA",
+            "Petrobras",
+            "Petróleo Brasileiro",
+            "Petrobras Oil"
+          ]
+        },
+        {
+          "symbol": "VALE",
+          "name": "Vale",
+          "feed": "B3",
+          "isin": "BRVALEACNOR0",
+          "adr_type": "sponsored",
+          "edge": 8.4,
+          "cvm_code": "4170",
+          "home_ticker": "VALE3",
+          "home_exchange_code": "B3",
+          "aliases": [
+            "Vale SA",
+            "Vale Group",
+            "Companhia Vale do Rio Doce",
+            "CVRD"
+          ]
+        },
+        {
+          "symbol": "ITUB",
+          "name": "Itau Unibanco",
+          "feed": "B3",
+          "isin": "BRITUBACNPR1",
+          "adr_type": "sponsored",
+          "edge": 8.3,
+          "cvm_code": "19348",
+          "home_ticker": "ITUB4",
+          "home_exchange_code": "B3",
+          "aliases": [
+            "Itau Unibanco Holding SA",
+            "Itau Unibanco",
+            "Itaú",
+            "Itau Bank",
+            "ItauUnibanco"
+          ]
+        },
+        {
+          "symbol": "BBD",
+          "name": "Banco Bradesco",
+          "feed": "B3",
+          "isin": "BRBBDCACNPR8",
+          "adr_type": "sponsored",
+          "edge": 8.2,
+          "cvm_code": "906",
+          "home_ticker": "BBDC4",
+          "home_exchange_code": "B3",
+          "aliases": [
+            "Banco Bradesco SA",
+            "Bradesco",
+            "Banco Bradesco",
+            "Bradesco Bank"
+          ]
+        },
+        {
+          "symbol": "ABEV",
+          "name": "Ambev",
+          "feed": "B3",
+          "isin": "BRABEVACNOR1",
+          "adr_type": "sponsored",
+          "edge": 8.0,
+          "cvm_code": "21081",
+          "home_ticker": "ABEV3",
+          "home_exchange_code": "B3",
+          "aliases": [
+            "Ambev SA",
+            "AmBev",
+            "Anheuser-Busch InBev subsidiary",
+            "Antarctica beer Brazil"
+          ]
+        },
+        {
+          "symbol": "ERJ",
+          "name": "Embraer",
+          "feed": "B3",
+          "isin": "BREMBRACNOR3",
+          "adr_type": "sponsored",
+          "edge": 8.4,
+          "cvm_code": "12785",
+          "home_ticker": "EMBR3",
+          "home_exchange_code": "B3",
+          "aliases": [
+            "Embraer SA",
+            "Embraer Aircraft",
+            "Embraer"
+          ]
+        },
+        {
+          "symbol": "SUZ",
+          "name": "Suzano",
+          "feed": "B3",
+          "isin": "BRSUZAACNOR3",
+          "adr_type": "sponsored",
+          "edge": 8.3,
+          "cvm_code": "19615",
+          "home_ticker": "SUZB3",
+          "home_exchange_code": "B3",
+          "aliases": [
+            "Suzano SA",
+            "Suzano Papel e Celulose",
+            "Suzano Pulp"
+          ]
+        },
+        {
+          "symbol": "AMX",
+          "name": "America Movil",
+          "feed": "BMV",
+          "isin": "MX01AM000018",
+          "adr_type": "sponsored",
+          "edge": 8.2,
+          "bmv_ticker": "AMX",
+          "home_ticker": "AMXL",
+          "home_exchange_code": "BMV",
+          "aliases": [
+            "America Movil SAB de CV",
+            "America Movil",
+            "Claro",
+            "Telcel",
+            "TracFone"
+          ]
+        },
+        {
+          "symbol": "CX",
+          "name": "Cemex",
+          "feed": "BMV",
+          "isin": "MX01CE0000X6",
+          "adr_type": "sponsored",
+          "edge": 8.3,
+          "bmv_ticker": "CEMEX",
+          "home_ticker": "CEMEXCPO",
+          "home_exchange_code": "BMV",
+          "aliases": [
+            "Cemex SAB de CV",
+            "Cemex Group",
+            "CEMEX"
+          ]
+        },
+        {
+          "symbol": "FMX",
+          "name": "FEMSA",
+          "feed": "BMV",
+          "isin": "MX01FF000004",
+          "adr_type": "sponsored",
+          "edge": 8.1,
+          "bmv_ticker": "FEMSA",
+          "home_ticker": "FEMSAUBD",
+          "home_exchange_code": "BMV",
+          "aliases": [
+            "Fomento Economico Mexicano SAB de CV",
+            "FEMSA",
+            "Coca-Cola FEMSA parent",
+            "OXXO parent"
+          ]
+        }
+      ]
+    },
+    "C": {
+      "priority": "optional",
+      "description": "LOW EDGE — dual listings",
+      "companies": [
+        {
+          "symbol": "EQNR",
+          "name": "Equinor",
+          "feed": "OSLO_BORS",
+          "isin": "NO0010096985",
+          "adr_type": "dual",
+          "edge": 7.5,
+          "home_ticker": "EQNR",
+          "home_exchange_code": "OSL",
+          "aliases": [
+            "Equinor ASA",
+            "Equinor Energy",
+            "Statoil"
+          ]
+        },
+        {
+          "symbol": "PHAR",
+          "name": "Pharming",
+          "feed": "EURONEXT",
+          "isin": "NL0010908600",
+          "mic": "XAMS",
+          "edge": 8.0,
+          "home_ticker": "PHARM",
+          "home_exchange_code": "AMS",
+          "aliases": [
+            "Pharming Group NV",
+            "Pharming Group",
+            "Pharming"
+          ],
+          "adr_type": "unsponsored"
+        },
+        {
+          "symbol": "VALN",
+          "name": "Valneva",
+          "feed": "EURONEXT",
+          "isin": "FR0004056851",
+          "mic": "XPAR",
+          "edge": 8.2,
+          "home_ticker": "VLA",
+          "home_exchange_code": "EPA",
+          "aliases": [
+            "Valneva SE",
+            "Valneva",
+            "Valneva Austria"
+          ],
+          "adr_type": "unsponsored"
+        },
+        {
+          "symbol": "NBTX",
+          "name": "Nanobiotix",
+          "feed": "EURONEXT",
+          "isin": "FR0011341205",
+          "mic": "XPAR",
+          "edge": 8.4,
+          "home_ticker": "NANO",
+          "home_exchange_code": "EPA",
+          "aliases": [
+            "Nanobiotix SA",
+            "NBTX",
+            "Nanobiotix"
+          ],
+          "adr_type": "sponsored"
+        }
+      ]
+    }
+  }
+}
