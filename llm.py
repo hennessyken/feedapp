@@ -495,12 +495,16 @@ async def call_openai_responses_api(
     # Deterministic / low-overhead generation params when supported.
     model_l = (model or "").lower().strip()
 
+    # GPT-5 and o-series are reasoning models — no temperature parameter.
+    _is_reasoning = model_l.startswith(("o1", "o3", "o4", "gpt-5"))
+
     # GPT-5 family: keep reasoning budget as low as allowed.
     if model_l.startswith("gpt-5"):
         payload["reasoning"] = {"effort": "minimal"}
 
-    # Deterministic output: temperature=0 ensures reproducible decisions.
-    payload["temperature"] = 0
+    # temperature=0 for deterministic output — only non-reasoning models support it.
+    if not _is_reasoning:
+        payload["temperature"] = 0
 
     if decision_id or trace_id:
         payload["metadata"] = {"decision_id": decision_id, "trace_id": trace_id}
