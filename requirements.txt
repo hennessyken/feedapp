@@ -2,6 +2,7 @@ aiosqlite==0.20.0
 beautifulsoup4==4.13.5
 fastapi==0.115.0
 httpx==0.28.1
+ib_insync>=0.9.86
 python-dotenv==1.1.1
 tweepy==4.14.0
 uvicorn==0.30.0

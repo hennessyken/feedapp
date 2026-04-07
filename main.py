@@ -3,14 +3,16 @@ from __future__ import annotations
 """Entrypoint for the regulatory feed pipeline.
 
 Usage:
-  python main.py --once           # single poll cycle
-  python main.py --continuous     # poll forever
+  python main.py --once           # single poll cycle (feeds + LLM + Telegram)
+  python main.py --continuous     # poll forever (auto EOD at 3:50 PM ET)
+  python main.py --eod            # end-of-day sell price check only
 """
 
 import argparse
 import asyncio
 import json
 import logging
+from datetime import datetime
 from typing import Optional
 
 from config import RuntimeConfig
@@ -30,25 +32,46 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     mode = p.add_mutually_exclusive_group()
     mode.add_argument("--once", action="store_true", help="Run a single poll cycle and exit (default).")
     mode.add_argument("--continuous", action="store_true", help="Poll continuously.")
+    mode.add_argument("--eod", action="store_true", help="Run end-of-day sell price check and exit.")
     p.add_argument("--log-level", default=None, help="Log level (DEBUG, INFO, WARNING, ERROR).")
     return p.parse_args(argv)
 
 
+def _make_ib_client(config: RuntimeConfig):
+    """Create an IBClient if IB is enabled, else return None."""
+    if not config.ib_enabled:
+        return None
+    try:
+        from ib_client import IBClient
+        return IBClient(
+            host=config.ib_host,
+            port=config.ib_port,
+            client_id=config.ib_client_id,
+        )
+    except Exception as e:
+        logging.warning("Failed to create IB client: %s", e)
+        return None
+
+
 def _build_pipeline(config: RuntimeConfig) -> FeedPipeline:
-    return FeedPipeline(PipelineConfig(
-        db_path=config.db_path,
-        sec_user_agent=config.sec_user_agent,
-        edgar_days_back=config.edgar_days_back,
-        edgar_forms=config.edgar_forms,
-        fda_max_age_days=config.fda_max_age_days,
-        ema_max_age_days=config.ema_max_age_days,
-        keyword_score_threshold=config.keyword_score_threshold,
-        http_timeout_seconds=config.http_timeout_seconds,
-        openai_api_key=config.openai_api_key,
-        llm_ranker_enabled=config.llm_ranker_enabled,
-        sentry1_model=config.sentry1_model,
-        ranker_model=config.ranker_model,
-    ))
+    ib_client = _make_ib_client(config)
+    return FeedPipeline(
+        PipelineConfig(
+            db_path=config.db_path,
+            sec_user_agent=config.sec_user_agent,
+            edgar_days_back=config.edgar_days_back,
+            edgar_forms=config.edgar_forms,
+            fda_max_age_days=config.fda_max_age_days,
+            ema_max_age_days=config.ema_max_age_days,
+            keyword_score_threshold=config.keyword_score_threshold,
+            http_timeout_seconds=config.http_timeout_seconds,
+            openai_api_key=config.openai_api_key,
+            llm_ranker_enabled=config.llm_ranker_enabled,
+            sentry1_model=config.sentry1_model,
+            ranker_model=config.ranker_model,
+        ),
+        ib_client=ib_client,
+    )
 
 
 async def _run_once(config: RuntimeConfig) -> None:
@@ -57,22 +80,65 @@ async def _run_once(config: RuntimeConfig) -> None:
     logging.info("Run stats:\n%s", json.dumps(stats, indent=2))
 
 
+async def _run_eod(config: RuntimeConfig) -> None:
+    """One-shot end-of-day sell price check."""
+    from zoneinfo import ZoneInfo
+    from db import FeedDatabase
+    from eod_checker import EODPriceChecker
+
+    ib = _make_ib_client(config)
+    if ib is None:
+        logging.error("EOD check requires IB_ENABLED=true and IB Gateway running")
+        return
+
+    today_et = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
+    db = FeedDatabase(config.db_path)
+
+    await db.connect()
+    try:
+        await ib.connect()
+        checker = EODPriceChecker(db, ib)
+        stats = await checker.run(today_et)
+        logging.info("EOD stats:\n%s", json.dumps(stats, indent=2))
+    except Exception:
+        logging.exception("EOD check failed")
+    finally:
+        await ib.disconnect()
+        await db.close()
+
+
 async def _run_continuous(config: RuntimeConfig) -> None:
     logging.info("Continuous mode (poll every %ds)", config.poll_interval_seconds)
-    pipeline = _build_pipeline(config)
+    last_eod_date: Optional[str] = None
 
     while True:
         try:
+            pipeline = _build_pipeline(config)
             stats = await pipeline.run()
             logging.info(
-                "Cycle complete: %d fetched, %d new, %d relevant (%.1fs)",
+                "Cycle complete: %d fetched, %d new, %d relevant, %d signals sent (%.1fs)",
                 stats["total_fetched"],
                 stats["total_new"],
                 stats["total_relevant"],
+                stats.get("signals", {}).get("sent", 0),
                 stats["elapsed_seconds"],
             )
         except Exception:
             logging.exception("Poll cycle failed")
+
+        # Auto EOD sell-price check at 3:49-3:55 PM ET
+        if config.ib_enabled:
+            try:
+                from zoneinfo import ZoneInfo
+                now_et = datetime.now(ZoneInfo("America/New_York"))
+                today_str = now_et.strftime("%Y-%m-%d")
+                if (now_et.hour == 15 and 49 <= now_et.minute <= 55
+                        and last_eod_date != today_str):
+                    logging.info("Triggering automatic EOD sell-price check")
+                    await _run_eod(config)
+                    last_eod_date = today_str
+            except Exception:
+                logging.exception("Auto EOD check failed")
 
         await asyncio.sleep(max(1, config.poll_interval_seconds))
 
@@ -83,7 +149,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     _configure_logging(args.log_level or config.log_level)
 
     try:
-        if args.continuous:
+        if args.eod:
+            asyncio.run(_run_eod(config))
+        elif args.continuous:
             asyncio.run(_run_continuous(config))
         else:
             asyncio.run(_run_once(config))

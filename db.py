@@ -48,6 +48,30 @@ CREATE INDEX IF NOT EXISTS idx_feed_items_published ON feed_items(published_at);
 CREATE INDEX IF NOT EXISTS idx_feed_items_tweeted   ON feed_items(tweeted, status);
 """
 
+# Columns added via _migrate_columns (idempotent ALTER TABLE)
+_MIGRATE_COLUMNS = [
+    # ── Signal analysis results (written at signal generation time) ──
+    ("ticker",           "TEXT"),     # resolved ticker symbol
+    ("company_name",     "TEXT"),     # company name from metadata
+    ("event_type",       "TEXT"),     # canonical event: M_A_TARGET, EARNINGS_BEAT, etc.
+    ("polarity",         "TEXT"),     # positive / negative / neutral
+    ("impact_score",     "INTEGER"),  # 0-100 after freshness decay
+    ("confidence",       "INTEGER"),  # 0-100 combined confidence
+    ("action",           "TEXT"),     # trade / watch / ignore
+    ("freshness_mult",   "REAL"),     # 0.0-1.0 decay multiplier
+    ("latency_class",    "TEXT"),     # early / mid / late
+    ("sentry1_pass",     "INTEGER"),  # 1 if Sentry-1 passed, 0 if bypassed
+    ("llm_ranker_used",  "INTEGER"),  # 1 if LLM ranker succeeded
+    ("rationale",        "TEXT"),     # full scoring rationale string
+
+    # ── IB price tracking ──
+    ("buy_price",        "REAL"),
+    ("buy_price_at",     "TEXT"),
+    ("sell_price",       "REAL"),
+    ("sell_price_at",    "TEXT"),
+    ("signal_date",      "TEXT"),     # YYYY-MM-DD (ET) — groups signals by trading day
+]
+
 
 class FeedDatabase:
     """Async SQLite database for regulatory feed items."""
@@ -63,7 +87,28 @@ class FeedDatabase:
         await self._db.execute("PRAGMA journal_mode=WAL")
         await self._db.execute("PRAGMA foreign_keys=ON")
         await self._db.commit()
+        await self._migrate_columns()
         logger.info("Database connected: %s", self._db_path)
+
+    async def _migrate_columns(self) -> None:
+        """Add IB price tracking columns if they don't exist (idempotent)."""
+        assert self._db
+        cur = await self._db.execute("PRAGMA table_info(feed_items)")
+        existing = {row[1] for row in await cur.fetchall()}
+        added = []
+        for col_name, col_type in _MIGRATE_COLUMNS:
+            if col_name not in existing:
+                await self._db.execute(
+                    f"ALTER TABLE feed_items ADD COLUMN {col_name} {col_type}"
+                )
+                added.append(col_name)
+        if added:
+            await self._db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_feed_items_signal_date "
+                "ON feed_items(signal_date)"
+            )
+            await self._db.commit()
+            logger.info("Migrated columns: %s", ", ".join(added))
 
     async def close(self) -> None:
         if self._db:
@@ -208,6 +253,110 @@ class FeedDatabase:
                ORDER BY keyword_score DESC, published_at DESC
                LIMIT ?""",
             (min_score, limit),
+        )
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+    # ------------------------------------------------------------------
+    # IB price tracking
+    # ------------------------------------------------------------------
+
+    async def update_signal_analysis(
+        self,
+        item_id: str,
+        *,
+        ticker: str,
+        company_name: str,
+        event_type: str,
+        polarity: str,
+        impact_score: int,
+        confidence: int,
+        action: str,
+        freshness_mult: float,
+        latency_class: str,
+        sentry1_pass: bool,
+        llm_ranker_used: bool,
+        rationale: str,
+    ) -> None:
+        """Write all signal analysis fields for a feed item."""
+        assert self._db
+        await self._db.execute(
+            """UPDATE feed_items
+               SET ticker = ?, company_name = ?, event_type = ?,
+                   polarity = ?, impact_score = ?, confidence = ?,
+                   action = ?, freshness_mult = ?, latency_class = ?,
+                   sentry1_pass = ?, llm_ranker_used = ?, rationale = ?
+               WHERE item_id = ?""",
+            (
+                ticker, company_name, event_type,
+                polarity, impact_score, confidence,
+                action, freshness_mult, latency_class,
+                int(sentry1_pass), int(llm_ranker_used), rationale,
+                item_id,
+            ),
+        )
+        await self._db.commit()
+
+    async def mark_signal_pending(self, item_id: str, signal_date: str) -> None:
+        """Record that a signal was generated — buy_price to be filled later.
+
+        Called for every signal. Sets signal_date so the item is queued
+        for buy price capture at next market open.
+        """
+        assert self._db
+        await self._db.execute(
+            """UPDATE feed_items SET signal_date = ? WHERE item_id = ?""",
+            (signal_date, item_id),
+        )
+        await self._db.commit()
+
+    async def update_buy_price(
+        self, item_id: str, price: float, signal_date: str,
+    ) -> None:
+        """Record the IB buy price."""
+        assert self._db
+        now = datetime.now(timezone.utc).isoformat()
+        await self._db.execute(
+            """UPDATE feed_items
+               SET buy_price = ?, buy_price_at = ?, signal_date = ?
+               WHERE item_id = ?""",
+            (price, now, signal_date, item_id),
+        )
+        await self._db.commit()
+
+    async def get_pending_buy_prices(self) -> List[Dict[str, Any]]:
+        """Get items with a signal_date but no buy_price yet (queued overnight)."""
+        assert self._db
+        cur = await self._db.execute(
+            """SELECT * FROM feed_items
+               WHERE signal_date IS NOT NULL AND buy_price IS NULL
+               ORDER BY signal_date, published_at""",
+        )
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+    async def update_sell_price(self, item_id: str, price: float) -> None:
+        """Record the IB sell price at end of trading day."""
+        assert self._db
+        now = datetime.now(timezone.utc).isoformat()
+        await self._db.execute(
+            """UPDATE feed_items
+               SET sell_price = ?, sell_price_at = ?
+               WHERE item_id = ?""",
+            (price, now, item_id),
+        )
+        await self._db.commit()
+
+    async def get_signals_needing_sell_price(
+        self, signal_date: str,
+    ) -> List[Dict[str, Any]]:
+        """Get items with a buy_price on the given date that still lack a sell_price."""
+        assert self._db
+        cur = await self._db.execute(
+            """SELECT * FROM feed_items
+               WHERE signal_date = ? AND buy_price IS NOT NULL AND sell_price IS NULL
+               ORDER BY buy_price_at""",
+            (signal_date,),
         )
         rows = await cur.fetchall()
         return [dict(r) for r in rows]

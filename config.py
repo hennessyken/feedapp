@@ -115,6 +115,14 @@ class RuntimeConfig:
         default_factory=lambda: (os.getenv("RANKER_MODEL") or "gpt-5-mini").strip()
     )
 
+    # ── Interactive Brokers ──
+    ib_enabled: bool = field(default_factory=lambda: _env_bool("IB_ENABLED", False))
+    ib_host: str = field(
+        default_factory=lambda: (os.getenv("IB_HOST") or "127.0.0.1").strip()
+    )
+    ib_port: int = field(default_factory=lambda: _env_int("IB_PORT", 4002))
+    ib_client_id: int = field(default_factory=lambda: _env_int("IB_CLIENT_ID", 1))
+
     # ── Signal delivery (Telegram) ──
     telegram_bot_token: str = field(
         default_factory=lambda: (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
