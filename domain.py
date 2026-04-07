@@ -189,10 +189,16 @@ class KeywordScreener:
             "licence granted", "authorisation granted",
             "market authorisation", "conditional approval", "marketing authorisation",
             "nod received", "clearance received", "antitrust clearance",
+            # EMA-specific: title format is "EMA Authorised: DrugName"
+            "ema authorised", "fda approves", "fda approved",
+            "chmp positive opinion", "ec decision granted",
         ],
         "REGULATORY_NEGATIVE": [
             "licence revoked", "antitrust blocked", "regulatory rejection",
             "application denied", "marketing authorisation withdrawn",
+            # EMA-specific
+            "ema refused", "ema withdrawn", "ema suspended", "ema revoked",
+            "chmp negative opinion", "refusal of marketing authorisation",
         ],
         "CLINICAL_TRIAL": [
             "phase 3 results", "phase iii results", "pivotal trial results",
