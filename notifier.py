@@ -38,7 +38,11 @@ def _get_credentials() -> tuple[Optional[str], Optional[str]]:
     return token, chat_id
 
 
-def _format_telegram_message(signal: FormattedSignal, human_text: Optional[str] = None) -> str:
+def _format_telegram_message(
+    signal: FormattedSignal,
+    human_text: Optional[str] = None,
+    buy_price: Optional[float] = None,
+) -> str:
     """Build a Telegram-safe plain text message from a FormattedSignal."""
     polarity_emoji = {"positive": "\u2191", "negative": "\u2193", "neutral": "\u2194"}
     emoji = polarity_emoji.get(signal.polarity, "\u2194")
@@ -48,6 +52,11 @@ def _format_telegram_message(signal: FormattedSignal, human_text: Optional[str] 
         f"Impact: {signal.expected_impact.upper()} | Confidence: {signal.confidence:.0%}",
         f"Polarity: {signal.polarity} | Timing: {signal.latency_class}",
     ]
+
+    if buy_price is not None:
+        lines.append(f"Buy: ${buy_price:.4f}")
+    else:
+        lines.append("Buy: market closed — pending next open")
 
     if human_text:
         lines.append("")
@@ -63,6 +72,7 @@ async def send_signal(
     signal: FormattedSignal,
     human_text: Optional[str] = None,
     *,
+    buy_price: Optional[float] = None,
     http: Optional[httpx.AsyncClient] = None,
 ) -> bool:
     """Send a formatted signal via Telegram.
@@ -78,7 +88,7 @@ async def send_signal(
         )
         return False
 
-    message = _format_telegram_message(signal, human_text)
+    message = _format_telegram_message(signal, human_text, buy_price=buy_price)
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = {
         "chat_id": chat_id,
@@ -135,6 +145,112 @@ async def send_signal(
         logger.error("SIGNAL_FAILED: ticker=%s unexpected error=%s", signal.ticker, str(e))
         return False
 
+    finally:
+        if owns_client:
+            try:
+                await client.aclose()
+            except Exception:
+                pass
+
+
+# ---------------------------------------------------------------------------
+# EOD daily summary
+# ---------------------------------------------------------------------------
+
+from typing import Any, Dict, List
+
+
+def _format_eod_summary(signal_date: str, items: List[Dict[str, Any]]) -> str:
+    """Build an end-of-day summary message."""
+    lines = [f"--- Daily Summary: {signal_date} ---", ""]
+
+    total_return = 0.0
+    counted = 0
+
+    for item in items:
+        ticker = item.get("ticker") or item.get("feed_source") or "?"
+        company = item.get("company_name") or ticker
+        event = (item.get("event_type") or "OTHER").replace("_", " ").title()
+        buy = item.get("buy_price")
+        sell = item.get("sell_price")
+
+        if buy and sell and buy > 0:
+            change = sell - buy
+            pct = (change / buy) * 100
+            total_return += pct
+            counted += 1
+            arrow = "\u2191" if change >= 0 else "\u2193"
+            lines.append(
+                f"{arrow} {ticker} ({company})"
+            )
+            lines.append(
+                f"  {event} | Buy: ${buy:.4f} | Sell: ${sell:.4f} | {pct:+.2f}%"
+            )
+        elif buy:
+            lines.append(f"\u2194 {ticker} ({company})")
+            lines.append(f"  {event} | Buy: ${buy:.4f} | Sell: pending")
+        else:
+            lines.append(f"\u2194 {ticker} ({company})")
+            lines.append(f"  {event} | Buy: pending | Sell: pending")
+
+        lines.append("")
+
+    if counted > 0:
+        avg = total_return / counted
+        lines.append(f"Signals: {len(items)} | Priced: {counted} | Avg return: {avg:+.2f}%")
+    else:
+        lines.append(f"Signals: {len(items)} | No completed buy/sell pairs yet")
+
+    return "\n".join(lines)
+
+
+async def send_eod_summary(
+    signal_date: str,
+    items: List[Dict[str, Any]],
+    *,
+    http: Optional[httpx.AsyncClient] = None,
+) -> bool:
+    """Send end-of-day summary via Telegram.
+
+    Args:
+        signal_date: YYYY-MM-DD trading day.
+        items: List of feed_items rows with buy/sell price data.
+
+    Returns True if sent, False on failure. Never raises.
+    """
+    if not items:
+        logger.info("EOD_SUMMARY_SKIPPED: no signals for %s", signal_date)
+        return False
+
+    token, chat_id = _get_credentials()
+    if not token or not chat_id:
+        logger.info("EOD_SUMMARY_SKIPPED: Telegram credentials not configured")
+        return False
+
+    message = _format_eod_summary(signal_date, items)
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    payload = {
+        "chat_id": chat_id,
+        "text": message,
+        "disable_web_page_preview": True,
+    }
+
+    owns_client = http is None
+    client = http or httpx.AsyncClient(timeout=_TIMEOUT_SECONDS)
+
+    try:
+        resp = await client.post(url, json=payload, timeout=_TIMEOUT_SECONDS)
+        if resp.status_code == 200:
+            logger.info("EOD_SUMMARY_SENT: %s — %d signals", signal_date, len(items))
+            return True
+        logger.error(
+            "EOD_SUMMARY_FAILED: status=%d body=%s",
+            resp.status_code, resp.text[:200],
+        )
+        return False
+    except Exception as e:
+        logger.error("EOD_SUMMARY_FAILED: %s", e)
+        return False
     finally:
         if owns_client:
             try:

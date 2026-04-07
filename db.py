@@ -347,6 +347,18 @@ class FeedDatabase:
         )
         await self._db.commit()
 
+    async def get_signals_for_date(self, signal_date: str) -> List[Dict[str, Any]]:
+        """Get all signalled items for a given trading day."""
+        assert self._db
+        cur = await self._db.execute(
+            """SELECT * FROM feed_items
+               WHERE signal_date = ?
+               ORDER BY buy_price_at""",
+            (signal_date,),
+        )
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
     async def get_signals_needing_sell_price(
         self, signal_date: str,
     ) -> List[Dict[str, Any]]:

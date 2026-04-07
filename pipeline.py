@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from db import FeedDatabase
+from spend_tracker import SpendTracker
 from domain import (
     DecisionInputs,
     DeterministicEventScorer,
@@ -110,10 +111,12 @@ class FeedPipeline:
         self._db = FeedDatabase(config.db_path)
         self._screener = KeywordScreener()
         self._ib_client = ib_client  # Optional IBClient for price tracking
+        self._spend_tracker = SpendTracker(db_path=config.db_path)
 
     async def run(self) -> Dict[str, Any]:
         """Execute one full pipeline cycle. Returns summary stats."""
         await self._db.connect()
+        await self._spend_tracker.connect()
 
         # Connect IB if available (best-effort — failure disables price tracking)
         if self._ib_client is not None:
@@ -126,6 +129,7 @@ class FeedPipeline:
         try:
             return await self._execute()
         finally:
+            await self._spend_tracker.close()
             await self._db.close()
             if self._ib_client is not None:
                 await self._ib_client.disconnect()
@@ -232,6 +236,7 @@ class FeedPipeline:
         elapsed = (datetime.now(timezone.utc) - started).total_seconds()
         stats["elapsed_seconds"] = round(elapsed, 2)
         stats["finished_at"] = datetime.now(timezone.utc).isoformat()
+        stats["spend_usd"] = round(self._spend_tracker.cumulative_usd, 4)
 
         logger.info(
             "Pipeline complete: %d fetched, %d new, %d relevant, %d irrelevant, %d vetoed, "
@@ -375,6 +380,12 @@ class FeedPipeline:
                             )
                         )
 
+                        # Record sentry1 spend
+                        if llm._last_usage:
+                            await self._spend_tracker.record(
+                                llm._last_model, llm._last_usage, call_type="sentry1",
+                            )
+
                         logger.info(
                             "Sentry-1 %s: company=%d%% price=%d%% — %s",
                             ticker,
@@ -434,6 +445,12 @@ class FeedPipeline:
                                 base_form_type="",
                             )
                         )
+
+                        # Record ranker spend
+                        if llm._last_usage:
+                            await self._spend_tracker.record(
+                                llm._last_model, llm._last_usage, call_type="ranker",
+                            )
 
                         event_type = extraction.event_type
                         llm_ranker_succeeded = True
@@ -572,55 +589,56 @@ class FeedPipeline:
                 except Exception as db_err:
                     logger.warning("Failed to persist signal analysis for %s: %s", ticker, db_err)
 
+                # IB buy price — get before Telegram so we can include it
+                buy_price: Optional[float] = None
+                if self._ib_client is not None:
+                    try:
+                        from zoneinfo import ZoneInfo
+                        now_et = datetime.now(ZoneInfo("America/New_York"))
+                        signal_date = now_et.strftime("%Y-%m-%d")
+
+                        if _us_market_open(now_et):
+                            buy_price = await self._ib_client.get_price(ticker)
+                            if buy_price is not None:
+                                await self._db.update_buy_price(
+                                    item.item_id, buy_price, signal_date,
+                                )
+                                logger.info(
+                                    "IB buy_price: %s = $%.4f", ticker, buy_price,
+                                )
+                            else:
+                                await self._db.mark_signal_pending(
+                                    item.item_id, signal_date,
+                                )
+                                logger.warning(
+                                    "IB buy_price unavailable for %s — queued for retry",
+                                    ticker,
+                                )
+                        else:
+                            await self._db.mark_signal_pending(
+                                item.item_id, signal_date,
+                            )
+                            logger.info(
+                                "IB buy_price queued for %s — market closed, "
+                                "will fill at next open",
+                                ticker,
+                            )
+                    except Exception as ib_err:
+                        logger.warning(
+                            "IB buy_price failed for %s: %s", ticker, ib_err,
+                        )
+
                 try:
                     formatted = format_signal(sig)
-                    sent = await send_signal(formatted, http=http)
+                    sent = await send_signal(
+                        formatted, buy_price=buy_price, http=http,
+                    )
                     if sent:
                         stats["sent"] += 1
                         logger.info(
                             "SIGNAL SENT: %s %s — impact=%d conf=%d action=%s",
                             ticker, event_type, impact_out, final_confidence, final_action,
                         )
-
-                        # IB buy price — queue for tracking, fill now if market open
-                        if self._ib_client is not None:
-                            try:
-                                from zoneinfo import ZoneInfo
-                                now_et = datetime.now(ZoneInfo("America/New_York"))
-                                signal_date = now_et.strftime("%Y-%m-%d")
-
-                                if _us_market_open(now_et):
-                                    price = await self._ib_client.get_price(ticker)
-                                    if price is not None:
-                                        await self._db.update_buy_price(
-                                            item.item_id, price, signal_date,
-                                        )
-                                        logger.info(
-                                            "IB buy_price: %s = $%.4f", ticker, price,
-                                        )
-                                    else:
-                                        # Ticker not found — still mark pending
-                                        await self._db.mark_signal_pending(
-                                            item.item_id, signal_date,
-                                        )
-                                        logger.warning(
-                                            "IB buy_price unavailable for %s — queued for retry",
-                                            ticker,
-                                        )
-                                else:
-                                    # Market closed — queue for next open
-                                    await self._db.mark_signal_pending(
-                                        item.item_id, signal_date,
-                                    )
-                                    logger.info(
-                                        "IB buy_price queued for %s — market closed, "
-                                        "will fill at next open",
-                                        ticker,
-                                    )
-                            except Exception as ib_err:
-                                logger.warning(
-                                    "IB buy_price failed for %s: %s", ticker, ib_err,
-                                )
                     else:
                         stats["skipped"] += 1
                         logger.info(

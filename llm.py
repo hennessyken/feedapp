@@ -669,6 +669,8 @@ class OpenAiRegulatoryLlmGateway:
         self._api_key = (api_key or "").strip() or None
         self._models = models
         self._timeout = int(timeout_seconds)
+        self._last_usage: Dict[str, Any] = {}
+        self._last_model: str = ""
 
     # -----------------------------------------------------------------
     # Sentry-1 gate (dual question: company identity + price-moving)
@@ -724,7 +726,7 @@ class OpenAiRegulatoryLlmGateway:
             "otherwise be conservative."
         )
 
-        raw = await call_openai_responses_api(
+        result = await call_openai_responses_api(
             self._http,
             model=self._models.sentry1,
             system=system_prompt,
@@ -734,7 +736,10 @@ class OpenAiRegulatoryLlmGateway:
             decision_id=decision_id,
             trace_id=trace_id,
             timeout=self._timeout,
+            return_usage=True,
         )
+        raw, self._last_usage = result  # type: ignore[misc]
+        self._last_model = self._models.sentry1
 
         # Parse response
         import json as _json
@@ -824,7 +829,7 @@ class OpenAiRegulatoryLlmGateway:
         else:
             user = user_json
 
-        raw = await call_openai_responses_api(
+        result = await call_openai_responses_api(
             self._http,
             model=self._models.ranker,
             system=_build_ranker_prompt(doc_source=req.doc_source, base_form_type=base_form_type),
@@ -834,7 +839,10 @@ class OpenAiRegulatoryLlmGateway:
             decision_id=decision_id,
             trace_id=trace_id,
             timeout=self._timeout,
+            return_usage=True,
         )
+        raw, self._last_usage = result  # type: ignore[misc]
+        self._last_model = self._models.ranker
 
         if not str(raw or "").strip():
             # Treat transport / service failures as hard failures so docs remain retryable.
