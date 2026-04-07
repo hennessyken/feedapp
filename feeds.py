@@ -1261,8 +1261,8 @@ def _us_market_open(now_utc: Optional[datetime] = None) -> bool:
     automatically.  The old hardcoded UTC-5 offset caused feeds to start
     1 hour late and stop 1 hour late during EDT (Mar–Nov).
 
-    Includes NYSE holiday calendar check for consistency with application.py,
-    exit_manager.py, and watchlist.py.
+    Includes NYSE holiday calendar check for consistency with application.py
+    and watchlist.py.
     """
     global _NYSE_CAL_FEEDS
     if now_utc is None:

@@ -19,11 +19,8 @@ import httpx
 
 from application import RunRegulatorySignalScanUseCase, ScanSettings
 from config import RuntimeConfig
-from exit_manager import ExitConfig, ExitManager
 from feeds import create_feed_adapters, search_watchlist_feeds
 from infrastructure import (
-    IBMarketDataAdapter,
-    IBOrderExecutionAdapter,
     HttpDocumentTextAdapter,
     HttpRegulatoryIngestionAdapter,
     create_run_context,
@@ -34,7 +31,6 @@ from infrastructure import (
 from llm import OpenAiModels, OpenAiRegulatoryLlmGateway
 from persistence import (
     FileSystemResultsStore,
-    FileSystemTradeLedgerStore,
     FileSystemDocumentRegistryStore,
     JsonSeenStore,
     JsonTickerEventHistoryStore,
@@ -105,14 +101,6 @@ class RegulatorySignalScanner:
             log_max_mb=int(c.log_max_mb),
             log_backup_count=int(c.log_backup_count),
             company_meta_map=company_meta_map or {},
-            base_trade_usd=float(c.base_trade_usd),
-            min_otc_dollar_volume=float(c.min_otc_dollar_volume),
-            buy_collar_pct=float(getattr(c, "buy_collar_pct", 0.015) or 0.015),
-            trading_enabled=bool(getattr(c, "trading_enabled", True)),
-            max_concurrent_positions=int(getattr(c, "max_concurrent_positions", 10) or 10),
-            premarket_enabled=bool(getattr(c, "premarket_enabled", False)),
-            premarket_start_et=str(getattr(c, "premarket_start_et", "04:00") or "04:00"),
-            premarket_max_spread_pct=float(getattr(c, "premarket_max_spread_pct", 0.01) or 0.01),
         )
 
     def _validate_startup(self) -> None:
@@ -131,12 +119,6 @@ class RegulatorySignalScanner:
             key = getattr(c, 'openai_api_key', None) or os.environ.get('OPENAI_API_KEY', '')
             if not (key or '').strip():
                 errors.append("OPENAI_API_KEY required when LLM ranker is enabled")
-
-        # IB connection
-        if not getattr(c, 'ib_host', None):
-            errors.append("ib_host not configured")
-        if not getattr(c, 'ib_port', None):
-            errors.append("ib_port not configured")
 
         if errors:
             msg = "Startup validation failed:\n  - " + "\n  - ".join(errors)
@@ -187,50 +169,6 @@ class RegulatorySignalScanner:
 
         timeout = httpx.Timeout(timeout=float(self._config.http_timeout_seconds))
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as http:
-
-            # ── Phase 0: Evaluate open positions for exits ──
-            # Runs BEFORE the feed scan so exits are processed at the top of
-            # every poll cycle.  Uses dedicated IB adapter instances to avoid
-            # interfering with the scan-phase adapters created later.
-            exit_market_data = None
-            exit_order_exec = None
-            try:
-                exit_market_data = IBMarketDataAdapter(config=self._config)
-                exit_order_exec = IBOrderExecutionAdapter(
-                    config=self._config,
-                    client_id=int(self._config.ib_client_id) + 2,  # separate from scan adapters
-                )
-                exit_ledger = FileSystemTradeLedgerStore(self._config.path_trade_ledger())
-
-                exit_mgr = ExitManager(
-                    config=self._config,
-                    exit_config=ExitConfig(),
-                    ledger_store=exit_ledger,
-                    market_data=exit_market_data,
-                    order_execution=exit_order_exec,
-                    log_sink=self._log_sink,
-                )
-                exits = await exit_mgr.evaluate_exits()
-                if exits:
-                    self._log_sink.log(
-                        f"Phase 0: Closed {len(exits)} position(s)", "INFO"
-                    )
-                else:
-                    self._log_sink.log("Phase 0: No exits triggered", "DEBUG")
-            except Exception as e:
-                self._log_sink.log(f"Phase 0 (exits) failed: {e} — BLOCKING new entries this cycle", "ERROR")
-                logging.exception("Exit evaluation failed — blocking new entries")
-                _exit_healthy = False
-            else:
-                _exit_healthy = True
-            finally:
-                # Clean up exit-phase IB connections
-                for _adp in (exit_market_data, exit_order_exec):
-                    try:
-                        if _adp is not None and hasattr(_adp, "aclose"):
-                            await _adp.aclose()
-                    except Exception:
-                        pass
 
             # ── Phase 1: Home-exchange feed search (watchlist-driven) ──
             self._log_sink.log("Phase 1: Searching home-exchange feeds", "INFO")
@@ -303,11 +241,6 @@ class RegulatorySignalScanner:
             ingestion = HttpRegulatoryIngestionAdapter(http=http, config=self._config)
             ingestion.set_feed_items(feed_items)
             text_port = HttpDocumentTextAdapter(http=http, config=self._config)
-            market_data = IBMarketDataAdapter(config=self._config)
-            order_execution = IBOrderExecutionAdapter(
-                config=self._config,
-                client_id=int(self._config.ib_client_id) + 1,
-            )
             llm = OpenAiRegulatoryLlmGateway(
                 http=http,
                 api_key=self._config.openai_api_key,
@@ -326,12 +259,11 @@ class RegulatorySignalScanner:
                 self._config.path_ticker_event_history()
             )
             results_store = FileSystemResultsStore()
-            trade_ledger_store = FileSystemTradeLedgerStore(self._config.path_trade_ledger())
             document_registry_store = FileSystemDocumentRegistryStore(
                 self._config.path_document_register()
             )
 
-            # Build per-ticker weighting metadata from watchlist for signal_weighting.
+            # Build per-ticker metadata from watchlist.
             _company_meta = {}
             try:
                 _company_meta = wl.company_meta_map(now_et)
@@ -354,13 +286,10 @@ class RegulatorySignalScanner:
                 settings=self._to_settings(_company_meta),
                 ingestion=ingestion,
                 text_port=text_port,
-                market_data=market_data,
-                order_execution=order_execution,
                 llm=llm,
                 seen_store=seen_store,
                 ticker_event_history_store=ticker_event_history_store,
                 results_store=results_store,
-                trade_ledger_store=trade_ledger_store,
                 document_registry_store=document_registry_store,
                 log_sink=self._log_sink,
                 progress_sink=self._progress_sink,
@@ -368,24 +297,16 @@ class RegulatorySignalScanner:
             )
 
             signals = []
-
-            if not _exit_healthy:
-                self._log_sink.log(
-                    "Signal scan SKIPPED — exit manager failed this cycle. "
-                    "Not safe to open new positions while exit supervision is down.",
-                    "ERROR",
-                )
-            else:
-                try:
-                    entry = getattr(use_case, "execute", None) or getattr(use_case, "run", None)
-                    if not callable(entry):
-                        raise AttributeError("RunRegulatorySignalScanUseCase has no execute/run")
-                    signals = await entry(ctx) or []
-                except Exception as e:
-                    self._log_sink.log(f"Signal scan failed: {e}", "ERROR")
-                    sentry_summary.record_error("scan_failure")
-                    sentry_summary.add_alert("CRITICAL", f"Signal scan failed: {e}")
-                    logging.exception("Signal scan failed")
+            try:
+                entry = getattr(use_case, "execute", None) or getattr(use_case, "run", None)
+                if not callable(entry):
+                    raise AttributeError("RunRegulatorySignalScanUseCase has no execute/run")
+                signals = await entry(ctx) or []
+            except Exception as e:
+                self._log_sink.log(f"Signal scan failed: {e}", "ERROR")
+                sentry_summary.record_error("scan_failure")
+                sentry_summary.add_alert("CRITICAL", f"Signal scan failed: {e}")
+                logging.exception("Signal scan failed")
 
             # ── Phase 3: Generate reports ──
             self._log_sink.log("Phase 3: Generating reports", "INFO")
@@ -443,14 +364,6 @@ class RegulatorySignalScanner:
             except Exception as e:
                 logging.exception("Report generation failed: %s", e)
                 self._log_sink.log(f"Report generation failed: {e}", "ERROR")
-
-            # Cleanup — use direct references instead of fragile locals() lookup
-            for _adapter in (market_data, order_execution):
-                try:
-                    if _adapter is not None and hasattr(_adapter, "aclose"):
-                        await _adapter.aclose()
-                except Exception:
-                    logging.debug("Adapter aclose failed for %s", type(_adapter).__name__)
 
         self._log_sink.log(
             f"Run complete: {len(signals or [])} signals, {len(feed_items)} feed items",

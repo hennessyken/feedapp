@@ -1,5 +1,4 @@
-"""Tests for persistence.py — JsonSeenStore, JsonTickerEventHistoryStore,
-FileSystemTradeLedgerStore.
+"""Tests for persistence.py — JsonSeenStore, JsonTickerEventHistoryStore.
 
 All file I/O uses the tmp_path fixture to avoid polluting the real filesystem.
 """
@@ -30,7 +29,6 @@ def log_test_context(test_name: str, **kwargs):
 
 
 from persistence import (
-    FileSystemTradeLedgerStore,
     JsonSeenStore,
     JsonTickerEventHistoryStore,
 )
@@ -207,137 +205,3 @@ class TestJsonTickerEventHistoryStore:
         events = store.get_events("AAPL")
         assert len(events) == 1
         assert events[0]["event_type"] == "M_A"
-
-
-# =========================================================================
-# FileSystemTradeLedgerStore
-# =========================================================================
-
-
-class TestFileSystemTradeLedgerStore:
-    """Tests for the append-only JSONL trade ledger."""
-
-    @staticmethod
-    def _make_entry_record(trade_id, ticker="TSLA", price=100.0):
-        """Helper to build a minimal valid trade entry record."""
-        return {
-            "trade_id": trade_id,
-            "entry": {
-                "ticker": ticker,
-                "last_price": price,
-                "shares": 10,
-                "timestamp_utc": "2026-03-01T10:00:00Z",
-            },
-            "exit": None,
-        }
-
-    def test_append_trade_entry_round_trip(self, tmp_path):
-        """Basic append + get_open_positions round-trip."""
-        log_test_context("test_append_trade_entry_round_trip",
-                         store="FileSystemTradeLedgerStore")
-        store = FileSystemTradeLedgerStore(tmp_path)
-        rec = self._make_entry_record("t-001")
-        store.append_trade_entry(rec)
-
-        positions = store.get_open_positions()
-        assert len(positions) == 1
-        assert positions[0]["trade_id"] == "t-001"
-
-    def test_append_trade_entry_duplicate_rejected(self, tmp_path):
-        """Appending a record with an existing trade_id is silently rejected."""
-        log_test_context("test_append_trade_entry_duplicate_rejected",
-                         store="FileSystemTradeLedgerStore")
-        store = FileSystemTradeLedgerStore(tmp_path)
-        rec = self._make_entry_record("t-dup")
-        store.append_trade_entry(rec)
-        # Second append with same trade_id should be a no-op (logged warning)
-        store.append_trade_entry(rec)
-
-        positions = store.get_open_positions()
-        assert len(positions) == 1
-
-    def test_append_trade_entry_missing_trade_id_raises(self, tmp_path):
-        """A record without trade_id raises ValueError."""
-        log_test_context("test_append_trade_entry_missing_trade_id_raises",
-                         store="FileSystemTradeLedgerStore")
-        store = FileSystemTradeLedgerStore(tmp_path)
-        with pytest.raises(ValueError, match="trade_id"):
-            store.append_trade_entry({"entry": {"ticker": "X"}})
-
-    def test_get_open_positions(self, tmp_path):
-        """get_open_positions returns only entries without an exit."""
-        log_test_context("test_get_open_positions",
-                         store="FileSystemTradeLedgerStore")
-        store = FileSystemTradeLedgerStore(tmp_path)
-        store.append_trade_entry(self._make_entry_record("t-open", ticker="OPEN"))
-        store.append_trade_entry(self._make_entry_record("t-closed", ticker="CLSD"))
-        store.append_exit_record("t-closed", {
-            "reason": "target_hit", "pnl_pct": 5.0,
-        })
-
-        positions = store.get_open_positions()
-        tickers = [p["entry"]["ticker"] for p in positions]
-        assert "OPEN" in tickers
-        assert "CLSD" not in tickers
-
-    def test_has_open_position(self, tmp_path):
-        """has_open_position returns True for open, False for closed."""
-        log_test_context("test_has_open_position",
-                         store="FileSystemTradeLedgerStore")
-        store = FileSystemTradeLedgerStore(tmp_path)
-        store.append_trade_entry(self._make_entry_record("t-1", ticker="AAPL"))
-        store.append_trade_entry(self._make_entry_record("t-2", ticker="MSFT"))
-        store.append_exit_record("t-2", {"reason": "stop_loss", "pnl_pct": -3.0})
-
-        assert store.has_open_position("AAPL") is True
-        assert store.has_open_position("MSFT") is False
-        assert store.has_open_position("GOOG") is False
-
-    def test_append_exit_record(self, tmp_path):
-        """append_exit_record marks a position as closed."""
-        log_test_context("test_append_exit_record",
-                         store="FileSystemTradeLedgerStore")
-        store = FileSystemTradeLedgerStore(tmp_path)
-        store.append_trade_entry(self._make_entry_record("t-exit"))
-        store.append_exit_record("t-exit", {
-            "reason": "target_hit",
-            "pnl_pct": 4.2,
-            "mid_price": 104.2,
-        })
-        positions = store.get_open_positions()
-        assert len(positions) == 0
-
-    def test_append_exit_record_unknown_trade_id_raises(self, tmp_path):
-        """append_exit_record for an unknown trade_id raises ValueError."""
-        log_test_context("test_append_exit_record_unknown_trade_id_raises",
-                         store="FileSystemTradeLedgerStore")
-        store = FileSystemTradeLedgerStore(tmp_path)
-        with pytest.raises(ValueError, match="unknown trade_id"):
-            store.append_exit_record("nonexistent", {"reason": "stop_loss"})
-
-    def test_append_exit_record_already_exited_raises(self, tmp_path):
-        """append_exit_record for an already-exited trade raises ValueError."""
-        log_test_context("test_append_exit_record_already_exited_raises",
-                         store="FileSystemTradeLedgerStore")
-        store = FileSystemTradeLedgerStore(tmp_path)
-        store.append_trade_entry(self._make_entry_record("t-twice"))
-        store.append_exit_record("t-twice", {"reason": "stop_loss", "pnl_pct": -2.0})
-
-        with pytest.raises(ValueError, match="already has an exit"):
-            store.append_exit_record("t-twice", {"reason": "target_hit", "pnl_pct": 1.0})
-
-    def test_corrupt_jsonl_line_raises_runtime_error(self, tmp_path):
-        """A corrupt JSONL line triggers a RuntimeError on next access."""
-        log_test_context("test_corrupt_jsonl_line_raises_runtime_error",
-                         store="FileSystemTradeLedgerStore")
-        ledger_path = tmp_path / "trade_ledger.jsonl"
-        # Write a valid line followed by a corrupt line
-        valid_record = self._make_entry_record("t-good")
-        ledger_path.write_text(
-            json.dumps(valid_record, sort_keys=True) + "\n"
-            + "{broken json\n",
-            encoding="utf-8",
-        )
-        store = FileSystemTradeLedgerStore(tmp_path)
-        with pytest.raises(RuntimeError, match="corrupt"):
-            store.get_open_positions()

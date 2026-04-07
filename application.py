@@ -1,49 +1,36 @@
 from __future__ import annotations
 
-"""Application layer — home-exchange feed pipeline.
+"""Application layer — regulatory signal pipeline.
 
-Pipeline (all EDGAR/FDA/ticker-resolution removed):
+Pipeline:
 
   1. Load shared state
   2. Deduplicate against seen store
   3. Deterministic pre-filter (age, missing ticker, title length)
-  4. Ticker lookup from doc.metadata["ticker"]  ← set by feed adapter from watchlist
-  5. KeywordScreener  ← non-LLM primary gate (replaces LLM sentry)
-  6. Signal weighting context build
-  7. LLM Ranker  ← optional structured extraction (disabled via LLM_RANKER_ENABLED=false)
-  8. DeterministicEventScorer + freshness decay
-  9. Decision policy
-  10. Liquidity gate + confidence floor
-  11. IB OTC execution + trade ledger
+  4. Ticker lookup from doc.metadata["ticker"]
+  5. KeywordScreener — non-LLM primary gate
+  6. LLM Ranker — optional structured extraction (disabled via LLM_RANKER_ENABLED=false)
+  7. DeterministicEventScorer + freshness decay
+  8. Decision policy + confidence floor
 """
 
 import asyncio
 import copy
 from collections import Counter
-import hashlib
 import json
 import logging
 import os
-import math
 import shutil
 from dataclasses import dataclass, field
-from datetime import datetime, time, timezone, timedelta
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Tuple
-
-try:
-    from zoneinfo import ZoneInfo
-except Exception:
-    ZoneInfo = None  # type: ignore
+from typing import Any, Dict, List, Optional
 
 from domain import (
-    NEGATIVE_POLARITY_EVENTS,
     POSITIVE_TRADE_EVENTS,
-    CompanyIdentityMatch,
     CompanyIdentityScreener,
     DecisionInputs,
     DeterministicEventScorer,
-    DeterministicFilterOutcome,
     DeterministicScoring,
     KeywordScreener,
     KeywordScreenResult,
@@ -56,152 +43,35 @@ from ports import (
     TickerEventHistoryStore,
     DocumentTextPort,
     LogSink,
-    MarketDataPort,
-    OrderExecutionPort,
     ProgressSink,
     RegulatoryIngestionPort,
     RegulatoryLlmPort,
     ResultsStorePort,
     SeenStore,
-    TradeLedgerStore,
     DocumentRegistryStore,
 )
 
-try:
-    from signal_weighting import build_weight_context, compute_weights
-    _SIGNAL_WEIGHTING_AVAILABLE = True
-except ImportError:
-    _SIGNAL_WEIGHTING_AVAILABLE = False
-
-# ---------------------------------------------------------------------------
-# US market hours gate (with holiday awareness via exchange_calendars)
-# ---------------------------------------------------------------------------
-_ET_ZONE = ZoneInfo("America/New_York") if ZoneInfo is not None else None
-_MKT_OPEN  = time(9, 30)
-_MKT_CLOSE = time(16, 0)
-_PREMARKET_DEFAULT_START = time(4, 0)
-
-# Feeds eligible for pre-market trading (home_closed_us_open window)
-_PREMARKET_ELIGIBLE_FEEDS = frozenset({"TSE", "KRX", "HKEX", "ASX", "NSE"})
-
-# Lazy-loaded NYSE calendar for holiday checking
-_NYSE_CAL = None
-
-def _get_nyse_calendar():
-    global _NYSE_CAL
-    if _NYSE_CAL is None:
-        try:
-            import exchange_calendars
-            _NYSE_CAL = exchange_calendars.get_calendar("XNYS")
-        except Exception:
-            pass
-    return _NYSE_CAL
-
-
-def _is_trading_day() -> bool:
-    """Check if today is a US trading day (weekday + not a holiday)."""
-    if _ET_ZONE is None:
-        return False
-    now_et = datetime.now(_ET_ZONE)
-    if now_et.weekday() >= 5:
-        return False
-    cal = _get_nyse_calendar()
-    if cal is not None:
-        try:
-            import pandas as pd
-            today = pd.Timestamp(now_et.date())
-            if not cal.is_session(today):
-                return False
-        except Exception:
-            pass
-    return True
-
-
-def _us_market_open_now() -> bool:
-    if _ET_ZONE is None:
-        logging.warning("_us_market_open_now: ZoneInfo unavailable, refusing trade")
-        return False
-    if not _is_trading_day():
-        return False
-    now_et = datetime.now(_ET_ZONE)
-    return _MKT_OPEN <= now_et.time() < _MKT_CLOSE
-
-
-def _is_premarket_now(premarket_start: str = "04:00") -> bool:
-    """Return True if we are in the pre-market window (before regular open)."""
-    if _ET_ZONE is None:
-        return False
-    if not _is_trading_day():
-        return False
-    now_et = datetime.now(_ET_ZONE)
-    t = now_et.time()
-    try:
-        hh, mm = premarket_start.split(":", 1)
-        pm_start = time(int(hh), int(mm))
-    except Exception:
-        pm_start = _PREMARKET_DEFAULT_START
-    return pm_start <= t < _MKT_OPEN
-
-
-def _market_open_for_ticker(
-    ticker: str,
-    company_meta: Dict[str, Any],
-    settings: "ScanSettings",
-) -> Tuple[bool, bool]:
-    """Return (can_trade, is_premarket) for a specific ticker.
-
-    Regular hours: all tickers can trade (9:30-16:00 ET).
-    Pre-market: only Asian-feed unsponsored OTC names when premarket_enabled=True.
-    """
-    if _us_market_open_now():
-        return True, False
-
-    if not settings.premarket_enabled:
-        return False, False
-
-    if not _is_premarket_now(settings.premarket_start_et):
-        return False, False
-
-    feed = str(company_meta.get("feed", "") or "").upper()
-    if feed not in _PREMARKET_ELIGIBLE_FEEDS:
-        return False, False
-
-    adr_type = str(company_meta.get("adr_type", "") or "").lower()
-    if adr_type not in {"unsponsored", "unknown"}:
-        return False, False
-
-    return True, True
 
 
 # ---------------------------------------------------------------------------
 # ScanSettings
 # ---------------------------------------------------------------------------
 
-def _default_global_feeds() -> Dict[str, Any]:
-    try:
-        from config import GLOBAL_FEEDS
-        if isinstance(GLOBAL_FEEDS, dict):
-            return copy.deepcopy(GLOBAL_FEEDS)
-        return {}
-    except Exception:
-        return {}
-
-
 @dataclass(frozen=True)
 class ScanSettings:
-    openai_api_key: Optional[str]
+    openai_api_key: Optional[str] = None
 
     # Models
-    sentry1_model: str
-    ranker_model: str
+    sentry1_model: str = "gpt-5-nano"
+    ranker_model: str = "gpt-5-mini"
 
     # Keyword screening
     keyword_score_threshold: int = 30   # min score to pass (0-100)
 
     # Company identity screen thresholds
-    identity_confidence_threshold: int = 50  # min CompanyIdentityScreener confidence to proceed to LLM
-    sentry1_company_threshold: int = 70      # min LLM company_probability to pass
-    sentry1_price_threshold: int = 60        # min LLM price_probability to pass
+    identity_confidence_threshold: int = 50
+    sentry1_company_threshold: int = 70
+    sentry1_price_threshold: int = 60
 
     # LLM ranker toggle
     llm_ranker_enabled: bool = True
@@ -216,28 +86,8 @@ class ScanSettings:
     log_max_mb: int = 50
     log_backup_count: int = 10
 
-    # Feed config
-    global_feeds: Dict[str, Any] = field(default_factory=_default_global_feeds)
-
     # Per-ticker weighting metadata from watchlist
     company_meta_map: Dict[str, Any] = field(default_factory=dict)
-
-    # Position sizing
-    base_trade_usd: float = 5_000.0
-    min_otc_dollar_volume: float = 50_000.0
-
-    # Order execution: buy collar (max % above ask we'll pay)
-    # 0.015 = 1.5% — marketable enough to fill fast, caps worst-case overpay
-    buy_collar_pct: float = 0.015
-
-    # Risk controls
-    trading_enabled: bool = True     # Kill switch — set False to run analysis-only
-    max_concurrent_positions: int = 10  # Hard cap on open positions
-
-    # Pre-market trading (4:00-9:30 AM ET) for eligible Asian-feed OTC names
-    premarket_enabled: bool = False
-    premarket_start_et: str = "04:00"
-    premarket_max_spread_pct: float = 0.01  # 1% max spread in pre-market (tighter than regular)
 
 
 # ---------------------------------------------------------------------------
@@ -308,13 +158,6 @@ class RunContext:
     tables_dir: Path
     artifacts_dir: Path
 
-
-@dataclass(frozen=True)
-class PreLlmHardGateOutcome:
-    ok: bool
-    reason: str = ""
-    retryable: bool = False
-    details: Dict[str, Any] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -460,102 +303,7 @@ def _age_hours_utc(
 # Liquidity gate helpers (identical to original — config-driven)
 # ---------------------------------------------------------------------------
 
-def _to_float(v: Any) -> Optional[float]:
-    try:
-        f = float(v)
-    except Exception:
-        return None
-    if not math.isfinite(f):
-        return None
-    return f
 
-
-def _extract_event_type(rationale: str) -> str:
-    """Extract event_type from a rationale string like 'event_type=M_A ...'."""
-    for part in (rationale or "").split():
-        if part.startswith("event_type="):
-            return part[len("event_type="):]
-    return "OTHER"
-
-
-def _pre_llm_hard_gates_quote_static(
-    *,
-    quote: Dict[str, Any],
-    feed_cfg: Dict[str, Any],
-) -> PreLlmHardGateOutcome:
-    q = quote if isinstance(quote, dict) else {}
-    cfg = feed_cfg if isinstance(feed_cfg, dict) else {}
-    liq = cfg.get("liquidity") or {}
-    spr = cfg.get("spread") or {}
-
-    min_price   = _to_float(liq.get("min_price"))
-    min_notional = _to_float(liq.get("min_notional_volume") or liq.get("min_notional") or liq.get("min_dollar_volume"))
-    max_spread_pct = _to_float(spr.get("max_spread_pct") or spr.get("cap_pct") or cfg.get("max_spread_pct"))
-
-    last = _to_float(q.get("c") if "c" in q else (q.get("last") or q.get("price")))
-    bid  = _to_float(q.get("bid") if "bid" in q else q.get("b"))
-    ask  = _to_float(q.get("ask") if "ask" in q else q.get("a"))
-    vol  = _to_float(q.get("volume") if "volume" in q else q.get("v"))
-
-    if last is None or last <= 0:
-        return PreLlmHardGateOutcome(ok=False, reason="quote_missing_last", retryable=True)
-    if vol is None or vol <= 0:
-        return PreLlmHardGateOutcome(ok=False, reason="quote_missing_volume", retryable=True, details={"last": last})
-
-    notional = float(last) * float(vol)
-    if min_price and float(last) < float(min_price):
-        return PreLlmHardGateOutcome(ok=False, reason="liquidity_below_min_price", retryable=False, details={"last": last, "min_price": min_price})
-    if min_notional and float(notional) < float(min_notional):
-        return PreLlmHardGateOutcome(ok=False, reason="liquidity_below_min_notional_volume", retryable=True, details={"notional_volume": notional, "min_notional_volume": min_notional})
-    if max_spread_pct and max_spread_pct > 0:
-        if bid is None or ask is None or bid <= 0 or ask <= 0 or ask < bid:
-            return PreLlmHardGateOutcome(ok=False, reason="quote_missing_bid_ask", retryable=True, details={"bid": bid, "ask": ask})
-        mid = (float(bid) + float(ask)) / 2.0
-        if mid <= 0:
-            return PreLlmHardGateOutcome(ok=False, reason="quote_mid_invalid", retryable=True)
-        spread_pct = (float(ask) - float(bid)) / mid
-        if spread_pct > float(max_spread_pct):
-            return PreLlmHardGateOutcome(ok=False, reason="spread_exceeds_cap", retryable=True, details={"spread_pct": spread_pct, "max_spread_pct": max_spread_pct})
-
-    return PreLlmHardGateOutcome(ok=True, details={"last": float(last), "volume": float(vol), "notional_volume": float(notional)})
-
-
-# ---------------------------------------------------------------------------
-# Dossier service (market data only — no SEC directory)
-# ---------------------------------------------------------------------------
-
-class CompanyDossierService:
-    """Per-ticker quote cache with TTL.
-
-    Quotes are cached for `ttl_seconds` (default 120s) so that a long-running
-    scan doesn't make decisions on stale prices.  The IBMarketDataAdapter also
-    has its own TTL, but the dossier-level TTL catches the case where the same
-    ticker is looked up at both the liquidity-gate stage and the trade-execution
-    stage many minutes apart.
-    """
-
-    def __init__(self, market_data: MarketDataPort, *, ttl_seconds: float = 120.0):
-        self._market_data = market_data
-        self._cache: Dict[str, Dict[str, Any]] = {}
-        self._cache_ts: Dict[str, float] = {}  # ticker → monotonic time
-        self._ttl = max(10.0, float(ttl_seconds))
-        self._locks: Dict[str, asyncio.Lock] = {}
-
-    async def get_dossier(self, ticker: str) -> Dict[str, Any]:
-        import time as _t
-        t = (ticker or "").upper().strip()
-        if not t:
-            return {}
-        lock = self._locks.setdefault(t, asyncio.Lock())
-        async with lock:
-            now = _t.monotonic()
-            if t in self._cache and (now - self._cache_ts.get(t, 0)) < self._ttl:
-                return self._cache[t]
-            quote = await self._market_data.fetch_quote(t)
-            dossier = {"quote": quote or {}}
-            self._cache[t] = dossier
-            self._cache_ts[t] = now
-            return dossier
 
 
 # ---------------------------------------------------------------------------
@@ -610,29 +358,22 @@ class RunRegulatorySignalScanUseCase:
         settings: ScanSettings,
         ingestion: RegulatoryIngestionPort,
         text_port: DocumentTextPort,
-        market_data: MarketDataPort,
-        order_execution: OrderExecutionPort,
         llm: RegulatoryLlmPort,
         seen_store: SeenStore,
         ticker_event_history_store: TickerEventHistoryStore,
         results_store: ResultsStorePort,
-        trade_ledger_store: TradeLedgerStore,
         document_registry_store: Optional[DocumentRegistryStore] = None,
         log_sink: LogSink,
         progress_sink: ProgressSink,
-        # Optional: ticker → company name map from watchlist (for display only)
         ticker_to_company: Optional[Dict[str, str]] = None,
     ):
         self._settings = settings
         self._ingestion = ingestion
         self._text_port = text_port
-        self._market_data = market_data
-        self._order_execution = order_execution
         self._llm = llm
         self._seen_store = seen_store
         self._ticker_event_history_store = ticker_event_history_store
         self._results_store = results_store
-        self._trade_ledger_store = trade_ledger_store
         self._document_registry_store = document_registry_store
         self._log = log_sink
         self._progress = progress_sink
@@ -640,7 +381,6 @@ class RunRegulatorySignalScanUseCase:
         self._screener = KeywordScreener()
         self._identity_screener = CompanyIdentityScreener()
         self._decision_policy = SignalDecisionPolicy()
-        self._feeds_cfg: Dict[str, Any] = copy.deepcopy(getattr(settings, "global_feeds", {}) or {})
         self._retry_counts: Dict[str, int] = {}  # doc_id → retry count (max 3 before marking seen)
 
     def _validate_settings(self) -> None:
@@ -652,28 +392,6 @@ class RunRegulatorySignalScanUseCase:
         c = int(self._settings.concurrent_documents or 0)
         if c < 1 or c > 50:
             raise ValueError("CONCURRENT_DOCUMENTS must be between 1 and 50.")
-
-    def _feed_cfg_for(self, source: str) -> Tuple[str, Dict[str, Any]]:
-        """Return (feed_key, feed_cfg) for a given source.
-
-        Looks up by source key first (e.g. "LSE_RNS"), then falls back to "us"
-        (the default OTC market config). Does NOT fall back to arbitrary feeds —
-        using the wrong feed config for liquidity/spread gating is unsafe.
-        """
-        src_u = str(source or "").strip().upper()
-        feeds = self._feeds_cfg if isinstance(self._feeds_cfg, dict) else {}
-        # 1. Direct source match (e.g. per-exchange config)
-        if src_u and src_u in feeds:
-            v = feeds[src_u]
-            if isinstance(v, dict) and bool(v.get("enabled", True)):
-                return (src_u, v)
-        # 2. Fall back to "us" (applies to all OTC ADR quotes)
-        us = feeds.get("us")
-        if isinstance(us, dict) and bool(us.get("enabled", True)):
-            return ("us", us)
-        # 3. No match — return empty config (gates will use defaults or skip)
-        logging.warning("_feed_cfg_for: no config for source=%s — using empty config", src_u)
-        return (src_u or "unknown", {})
 
     def _dilution_veto_applies(
         self,
@@ -736,8 +454,6 @@ class RunRegulatorySignalScanUseCase:
         except Exception as e:
             logging.error("Ticker event history load failed; aborting: %s", e, exc_info=True)
             raise
-
-        dossier_service = CompanyDossierService(self._market_data)
 
         # Phase 2: ingest from home-exchange feeds (passed in via ingestion port)
         self._log.log("Phase 2: Ingest from home-exchange feeds", "INFO")
@@ -853,40 +569,24 @@ class RunRegulatorySignalScanUseCase:
         doc_sem    = asyncio.Semaphore(max(1, int(self._settings.concurrent_documents)))
         ranker_sem = asyncio.Semaphore(max(1, int(self._settings.ranker_concurrency)))
 
-        # Streaming execution: fire trades the instant a signal clears the
-        # pipeline instead of waiting for every document to finish processing.
-        # This eliminates the latency penalty from slow feeds or LLM calls —
-        # a signal ready in 2s executes in 2s, not after a 30s straggler.
         signals: List[RankedSignal] = []
-        executed_doc_ids: set[str] = set()
         _signals_lock = asyncio.Lock()
 
-        async def process_and_execute(i: int, doc: RegulatoryDocumentHandle) -> Optional[RankedSignal]:
+        async def process_document(i: int, doc: RegulatoryDocumentHandle) -> Optional[RankedSignal]:
             async with doc_sem:
                 sig = await self._process_document(
                     ctx, doc, idx=i, total=total,
-                    dossier_service=dossier_service,
                     ranker_sem=ranker_sem,
                     rm=rm,
                 )
             if sig is None:
                 return None
 
-            # Immediately attempt execution for trade signals — don't wait
-            # for the batch to finish. The lock serializes order submission
-            # to prevent duplicate-position races on the same ticker.
-            if str(getattr(sig, "action", "") or "").strip().lower() == "trade":
-                async with _signals_lock:
-                    try:
-                        await self._maybe_execute_trade(ctx, sig, executed_doc_ids, rm)
-                    except Exception as e:
-                        logging.exception("Streaming trade execution error: %s", e)
-
             async with _signals_lock:
                 signals.append(sig)
             return sig
 
-        tasks = [asyncio.create_task(process_and_execute(i + 1, d)) for i, d in enumerate(candidates_sorted)]
+        tasks = [asyncio.create_task(process_document(i + 1, d)) for i, d in enumerate(candidates_sorted)]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         for r in results:
@@ -924,7 +624,6 @@ class RunRegulatorySignalScanUseCase:
         *,
         idx: int,
         total: int,
-        dossier_service: CompanyDossierService,
         ranker_sem: asyncio.Semaphore,
         rm: _RunMetrics,
     ) -> Optional[RankedSignal]:
@@ -1141,88 +840,9 @@ class RunRegulatorySignalScanUseCase:
                        details={"reason": "llm_ranker_enabled=false"})
 
 
-            # ── Step 4: fetch market quote for liquidity gate ─────────────────
-            feed_key, feed_cfg = self._feed_cfg_for(doc.source)
-            dossier = await dossier_service.get_dossier(ticker)
-            quote = dossier.get("quote") or {}
-
-            gate = _pre_llm_hard_gates_quote_static(quote=quote, feed_cfg=feed_cfg)
-            if not gate.ok:
-                retryable = bool(gate.retryable)
-                _event(ctx, "liquidity_gate", doc_id=doc.doc_id, source=doc.source, ticker=ticker,
-                       company_name=company_name, outcome="retryable" if retryable else "rejected",
-                       reason_code=str(gate.reason), details=dict(gate.details or {}))
-                _append_document_registry(
-                    self._document_registry_store, ctx=ctx, doc=doc, ticker=ticker,
-                    company_name=company_name,
-                    outcome="retryable" if retryable else "rejected",
-                    reason_code=str(gate.reason),
-                    reason_detail=dict(gate.details or {}),
-                )
-                if not retryable:
-                    self._seen_store.mark_seen(doc.doc_id)
-                return None
-
-            # ── Step 5: signal weighting (sentry threshold adjusted here) ─────
-            _cmeta = (self._settings.company_meta_map or {}).get(ticker, {})
-            _base_kw_threshold = int(self._settings.keyword_score_threshold)  # already applied above
-            _effective_kw_threshold = _base_kw_threshold
             _conf_floor = 55
 
-            if _SIGNAL_WEIGHTING_AVAILABLE and _cmeta:
-                try:
-                    dv = _to_float(quote.get("dollar_volume"))
-                    wctx = build_weight_context(
-                        feed_name=str(_cmeta.get("feed", "") or ""),
-                        feed_cfg=dict(_cmeta.get("feed_cfg", {}) or {}),
-                        adr_type=str(_cmeta.get("adr_type", "unknown") or "unknown"),
-                        edge_score=float(_cmeta.get("edge", 7.0) or 7.0),
-                        dollar_volume=dv,
-                    )
-                    w = compute_weights(
-                        wctx,
-                        base_usd=float(getattr(self._settings, "base_trade_usd", 5000) or 5000),
-                        min_volume=float(getattr(self._settings, "min_otc_dollar_volume", 50000) or 50000),
-                    )
-                    if w.skip_liquidity:
-                        _append_document_registry(
-                            self._document_registry_store, ctx=ctx, doc=doc, ticker=ticker,
-                            company_name=company_name, outcome="rejected",
-                            reason_code="liquidity_skip",
-                            reason_detail={"dollar_volume": dv, "rationale": w.rationale},
-                        )
-                        self._seen_store.mark_seen(doc.doc_id)
-                        return None
-                    _conf_floor = w.confidence_floor
-
-                    # Apply sentry_adj: raise/lower the effective keyword threshold
-                    # per-company based on ADR type, trading window, and liquidity.
-                    # A positive sentry_adj makes the bar higher (stricter); negative
-                    # makes it lower (more permissive for high-edge companies).
-                    _effective_kw_threshold = max(0, _base_kw_threshold + w.sentry_adj)
-
-                    if screen.score < _effective_kw_threshold:
-                        _event(ctx, "sentry_adj_gate", doc_id=doc.doc_id, source=doc.source,
-                               ticker=ticker, company_name=company_name, outcome="rejected",
-                               reason_code="keyword_score_below_weighted_threshold",
-                               details={"keyword_score": screen.score,
-                                        "effective_threshold": _effective_kw_threshold,
-                                        "base_threshold": _base_kw_threshold,
-                                        "sentry_adj": w.sentry_adj})
-                        _append_document_registry(
-                            self._document_registry_store, ctx=ctx, doc=doc, ticker=ticker,
-                            company_name=company_name, outcome="rejected",
-                            reason_code="keyword_score_below_weighted_threshold",
-                            reason_detail={"keyword_score": screen.score,
-                                           "effective_threshold": _effective_kw_threshold,
-                                           "sentry_adj": w.sentry_adj},
-                        )
-                        self._seen_store.mark_seen(doc.doc_id)
-                        return None
-                except Exception as we:
-                    logging.debug("signal_weighting failed for %s: %s", ticker, we)
-
-            # ── Step 6: LLM ranker (optional) ────────────────────────────────
+            # ── Step 4: LLM ranker (optional) ────────────────────────────────
             freshness_mult = float(freshness_decay(age_h)) if age_h is not None else 0.20
             scorer = DeterministicEventScorer()
             _llm_ranker_succeeded = False
@@ -1241,7 +861,7 @@ class RunRegulatorySignalScanUseCase:
                                 doc_url=doc.url,
                                 published_at=doc.published_at,
                                 document_text=excerpt,
-                                dossier={"quote": quote, "regulatory_document": {
+                                dossier={"regulatory_document": {
                                     "source": doc.source, "title": doc.title, "url": doc.url,
                                     "published_at": doc.published_at.isoformat() if doc.published_at else "",
                                 }},
@@ -1261,7 +881,7 @@ class RunRegulatorySignalScanUseCase:
                             },
                             doc_source=doc.source,
                             freshness_mult=freshness_mult,
-                            dossier={"quote": quote},
+                            dossier={},
                         )
                         event_type_for_record = extraction.event_type
                         decision_id = extraction.decision_id
@@ -1417,323 +1037,3 @@ class RunRegulatorySignalScanUseCase:
             except Exception:
                 pass
 
-    # -------------------------------------------------------------------------
-    # Trade execution
-    # -------------------------------------------------------------------------
-
-    async def _maybe_execute_trade(
-        self,
-        ctx: RunContext,
-        sig: RankedSignal,
-        executed_doc_ids: set,
-        rm: _RunMetrics,
-    ) -> None:
-        if str(getattr(sig, "action", "") or "").strip().lower() != "trade":
-            return
-
-        # Kill switch
-        if not getattr(self._settings, "trading_enabled", True):
-            logging.info("Trade skipped (trading_enabled=false, kill switch active): %s",
-                         getattr(sig, "ticker", "?"))
-            return
-
-        # Max concurrent positions
-        max_pos = int(getattr(self._settings, "max_concurrent_positions", 10) or 10)
-        try:
-            open_count = len(self._trade_ledger_store.get_open_positions())
-            if open_count >= max_pos:
-                logging.info("Trade skipped (max_concurrent_positions=%d reached, open=%d): %s",
-                             max_pos, open_count, getattr(sig, "ticker", "?"))
-                return
-        except Exception:
-            pass  # Don't block on count failure — duplicate check below is the hard gate
-
-        doc_id = str(getattr(sig, "doc_id", "") or "").strip()
-        if not doc_id or doc_id in executed_doc_ids:
-            return
-        executed_doc_ids.add(doc_id)
-
-        ticker = str(getattr(sig, "ticker", "") or "").upper().strip()
-        if not ticker:
-            return
-
-        _cmeta = (self._settings.company_meta_map or {}).get(ticker, {})
-        can_trade, is_premarket = _market_open_for_ticker(ticker, _cmeta, self._settings)
-        if not can_trade:
-            logging.info("Trade skipped (market closed for %s): %s", "premarket-ineligible" if self._settings.premarket_enabled else "regular hours", ticker)
-            return
-
-        # ── Per-ticker position limit ────────────────────────────────────
-        # Prevent opening a second position in a ticker we already hold.
-        # The ledger is the source of truth; IB reconciliation happens in
-        # the ExitManager at the start of each poll cycle.
-        try:
-            if self._trade_ledger_store.has_open_position(ticker):
-                logging.info("Trade skipped (open position already exists): %s", ticker)
-                _event(ctx, "trade_skipped", doc_id=doc_id, ticker=ticker,
-                       reason_code="duplicate_position",
-                       details={"ticker": ticker})
-                return
-        except Exception as e:
-            logging.error("Duplicate position check failed for %s: %s — BLOCKING trade (fail closed)", ticker, e)
-            _event(ctx, "trade_skipped", doc_id=doc_id, ticker=ticker,
-                   reason_code="position_check_failed",
-                   details={"error": str(e)})
-            return
-
-        # ── Execution-policy gate ────────────────────────────────────────
-        # Enforce execution_tag and tradable_now from watchlist metadata.
-        # These were computed in watchlist.py but previously never checked
-        # in the trade path — the only real gate was "US market open now".
-        _cmeta = (self._settings.company_meta_map or {}).get(ticker, {})
-        _exec_tag = str(_cmeta.get("execution_tag", "event_only") or "event_only")
-        _tradable = bool(_cmeta.get("tradable_now", True))
-
-        if _exec_tag not in {"instant_execution", "open_only_execution", "event_only"}:
-            logging.info("Trade skipped (execution_tag=%s not tradable): %s", _exec_tag, ticker)
-            _event(ctx, "trade_skipped", doc_id=doc_id, ticker=ticker,
-                   reason_code="execution_tag_blocked",
-                   details={"execution_tag": _exec_tag})
-            return
-
-        if not _tradable and _exec_tag != "event_only":
-            logging.info("Trade skipped (tradable_now=false, execution_tag=%s): %s", _exec_tag, ticker)
-            _event(ctx, "trade_skipped", doc_id=doc_id, ticker=ticker,
-                   reason_code="not_tradable_now",
-                   details={"execution_tag": _exec_tag, "tradable_now": False})
-            return
-
-        # ── Direction-bias / event-polarity gate ─────────────────────────
-        # The bot is BUY-only. Block trades on negative-polarity events
-        # (dilution, earnings miss, going concern, etc.) unless the
-        # watchlist explicitly sets direction_bias="short" or "both".
-        _direction = str(_cmeta.get("direction_bias", "long") or "long").lower()
-        _event_type = _extract_event_type(str(getattr(sig, "rationale", "") or ""))
-
-        if _event_type in NEGATIVE_POLARITY_EVENTS and _direction == "long":
-            logging.info(
-                "Trade skipped (negative polarity event %s with direction_bias=%s): %s",
-                _event_type, _direction, ticker,
-            )
-            _event(ctx, "trade_skipped", doc_id=doc_id, ticker=ticker,
-                   reason_code="negative_polarity_blocked",
-                   details={"event_type": _event_type, "direction_bias": _direction})
-            return
-
-        # Fetch a fresh quote for accurate share sizing. The signal already
-        # passed liquidity and confidence gates in _process_document; we
-        # re-fetch here with refresh=True to bypass the cache, because the
-        # price may have moved since document processing.
-        try:
-            quote = await self._market_data.fetch_quote(ticker, refresh=True)
-        except Exception as e:
-            logging.warning("Trade skipped (quote fetch failed) %s: %s", ticker, e)
-            return
-
-        if not isinstance(quote, dict) or not quote:
-            return
-
-        # For long entries, size off executable ask (what we actually pay), not last trade
-        ask_raw = quote.get("ask") or quote.get("a")
-        last_raw = quote.get("c")
-        try:
-            ask_price = float(ask_raw) if ask_raw else 0.0
-            last_price = float(last_raw) if last_raw else 0.0
-            # Use ask if available and reasonable, else fall back to last
-            exec_price = ask_price if ask_price > 0 else last_price
-            if not (exec_price > 0.0):
-                raise ValueError("no valid price")
-        except Exception:
-            return
-
-        # Reject stale or fallback-sourced quotes at order time
-        price_source = str(quote.get("price_source", "")).strip()
-        if price_source == "prev_close":
-            logging.info("Trade skipped (quote is prev_close fallback, not live): %s", ticker)
-            _event(ctx, "trade_skipped", doc_id=doc_id, ticker=ticker,
-                   reason_code="stale_quote_prev_close")
-            return
-        if price_source == "none":
-            logging.info("Trade skipped (no valid price source): %s", ticker)
-            return
-
-        # Re-run spread/liquidity gates on the FRESH execution quote.
-        # The signal passed these gates earlier, but the quote may have changed.
-        feed_key, feed_cfg = self._feed_cfg_for(str(getattr(sig, "source", "") or ""))
-        exec_gate = _pre_llm_hard_gates_quote_static(quote=quote, feed_cfg=feed_cfg)
-        if not exec_gate.ok:
-            logging.info("Trade skipped (execution-time gate failed: %s): %s", exec_gate.reason, ticker)
-            _event(ctx, "trade_skipped", doc_id=doc_id, ticker=ticker,
-                   reason_code=f"exec_gate_{exec_gate.reason}",
-                   details=dict(exec_gate.details or {}))
-            return
-
-        # ── Pre-market spread gate (tighter than regular hours) ─────────
-        if is_premarket:
-            bid_pm = _to_float(quote.get("bid") or quote.get("b"))
-            ask_pm = _to_float(quote.get("ask") or quote.get("a"))
-            if bid_pm is None or ask_pm is None or bid_pm <= 0 or ask_pm <= 0:
-                logging.info("Trade skipped (pre-market: no bid/ask): %s", ticker)
-                _event(ctx, "trade_skipped", doc_id=doc_id, ticker=ticker,
-                       reason_code="premarket_no_bid_ask")
-                return
-            mid_pm = (bid_pm + ask_pm) / 2.0
-            spread_pct_pm = (ask_pm - bid_pm) / mid_pm if mid_pm > 0 else 1.0
-            max_pm_spread = float(self._settings.premarket_max_spread_pct)
-            if spread_pct_pm > max_pm_spread:
-                logging.info(
-                    "Trade skipped (pre-market spread %.2f%% > %.2f%% cap): %s",
-                    spread_pct_pm * 100, max_pm_spread * 100, ticker,
-                )
-                _event(ctx, "trade_skipped", doc_id=doc_id, ticker=ticker,
-                       reason_code="premarket_spread_too_wide",
-                       details={"spread_pct": spread_pct_pm, "max_spread_pct": max_pm_spread})
-                return
-
-        target_usd = float(self._settings.base_trade_usd)
-        _weight_rationale = "unweighted"
-
-        _cmeta = (self._settings.company_meta_map or {}).get(ticker, {})
-        if _SIGNAL_WEIGHTING_AVAILABLE and _cmeta:
-            try:
-                dv = _to_float(quote.get("dollar_volume"))
-                wctx = build_weight_context(
-                    feed_name=str(_cmeta.get("feed", "") or ""),
-                    feed_cfg=dict(_cmeta.get("feed_cfg", {}) or {}),
-                    adr_type=str(_cmeta.get("adr_type", "unknown") or "unknown"),
-                    edge_score=float(_cmeta.get("edge", 7.0) or 7.0),
-                    dollar_volume=dv,
-                    is_premarket=is_premarket,
-                )
-                w = compute_weights(
-                    wctx,
-                    base_usd=float(self._settings.base_trade_usd),
-                    min_volume=float(self._settings.min_otc_dollar_volume),
-                )
-                w.log(ticker)
-                target_usd = w.target_usd
-                _weight_rationale = w.rationale
-                if w.skip_liquidity:
-                    logging.info("Trade skipped (OTC volume too thin on fresh quote): %s", ticker)
-                    return
-            except Exception as we:
-                logging.warning("signal_weighting sizing failed for %s: %s", ticker, we)
-
-        # Pre-market fallback dampener if signal_weighting not available
-        if is_premarket and not (_SIGNAL_WEIGHTING_AVAILABLE and _cmeta):
-            target_usd *= 0.50
-
-        try:
-            shares = int(math.floor(target_usd / float(exec_price)))
-        except Exception:
-            shares = 0
-
-        if shares < 1:
-            return
-
-        # ── Durable idempotency: mark doc as seen BEFORE order submission ──
-        # Previously, seen-store flush happened only at end-of-run. If the
-        # process crashed after IB accepted the order but before the flush,
-        # the same doc would re-trigger a duplicate order on the next run.
-        # By marking+flushing here, we close that window.
-        try:
-            self._seen_store.mark_seen(doc_id)
-            flush = getattr(self._seen_store, "flush", None)
-            if callable(flush):
-                flush()
-        except Exception as e:
-            logging.warning("Pre-trade seen-store flush failed for %s: %s — aborting trade", doc_id, e)
-            return
-
-        # Compute collared limit price: max we'll pay = ask + collar%
-        # This replaces the old MarketOrder — prevents overpaying in wide OTC spreads
-        collar_pct = float(getattr(self._settings, "buy_collar_pct", 0.015) or 0.015)
-        buy_limit = exec_price * (1.0 + collar_pct)
-
-        try:
-            self._log.log(
-                f"TRADE: LIMIT BUY {shares} {ticker} @{buy_limit:.4f} "
-                f"(ask={exec_price:.4f} collar={collar_pct:.1%} last={last_price:.4f} target=${target_usd:.0f}) "
-                f"doc_id={doc_id} rationale={_weight_rationale}",
-                "INFO",
-            )
-            fill = await self._order_execution.execute_trade(
-                    ticker=ticker, shares=int(shares), last_price=float(last_price),
-                    doc_id=doc_id, limit_price=float(buy_limit),
-                )
-            trade_result = str(fill.get("status", "error") if isinstance(fill, dict) else fill)
-        except Exception as e:
-            logging.exception("Order execution raised: %s", e)
-            fill = {"status": "error", "filled": 0, "avg_price": 0, "remaining": shares,
-                    "order_id": 0, "perm_id": 0, "ib_status": ""}
-            trade_result = "error"
-
-        if trade_result == "unknown":
-            fill_qty_unk = int(fill.get("filled", 0) or 0)
-            if fill_qty_unk <= 0:
-                # Unknown status with no fills — do NOT create a phantom position.
-                # The order may still fill later; broker reconciliation will catch it.
-                logging.warning(
-                    "Order status unknown with 0 fills for %s x%s doc_id=%s — "
-                    "NOT recording ledger entry (broker reconciliation will catch later fills)",
-                    ticker, shares, doc_id,
-                )
-                return
-            logging.warning(
-                "Order status unknown but %d shares filled for %s doc_id=%s — recording partial",
-                fill_qty_unk, ticker, doc_id,
-            )
-        elif trade_result != "accepted":
-            return
-
-        # Use actual fill data when available; fall back to quote snapshot
-        fill_price = float(fill.get("avg_price", 0) or 0)
-        fill_qty = int(fill.get("filled", 0) or 0)
-        fill_remaining = int(fill.get("remaining", 0) or 0)
-        order_id = int(fill.get("order_id", 0) or 0)
-        perm_id = int(fill.get("perm_id", 0) or 0)
-
-        # For the ledger: use actual fill price if we got one, else exec_price (ask)
-        entry_price = fill_price if fill_price > 0 else exec_price
-        entry_shares = fill_qty if fill_qty > 0 else shares
-
-        # Persist trade ledger entry
-        try:
-            trade_id = hashlib.sha256(
-                (str(ctx.run_id) + doc_id + ticker + str(entry_price) + str(entry_shares)).encode()
-            ).hexdigest()
-            entry = {
-                "trade_id": trade_id,
-                "timestamp_utc": ctx.now_utc.astimezone(timezone.utc).isoformat(),
-                "run_id": ctx.run_id,
-                "ticker": ticker,
-                "company_name": str(getattr(sig, "company_name", "") or ""),
-                "doc_id": doc_id,
-                "source": str(getattr(sig, "source", "") or ""),
-                "title": str(getattr(sig, "title", "") or ""),
-                "event_type": _extract_event_type(str(getattr(sig, "rationale", "") or "")),
-                "keyword_score": float(getattr(sig, "sentry1_probability", 0) or 0),
-                "impact_score": int(getattr(sig, "impact_score", 0) or 0),
-                "confidence": int(getattr(sig, "confidence", 0) or 0),
-                # Fill-based fields (authoritative when available)
-                "last_price": float(entry_price),
-                "shares": int(entry_shares),
-                "fill_price": float(fill_price),
-                "fill_qty": int(fill_qty),
-                "fill_remaining": int(fill_remaining),
-                "order_id": order_id,
-                "perm_id": perm_id,
-                # Order context
-                "exec_price": float(exec_price),
-                "buy_limit": float(buy_limit),
-                "collar_pct": collar_pct,
-                "quote_last": float(last_price),
-                "target_usd": float(target_usd),
-                "weight_rationale": str(_weight_rationale),
-                "rationale": str(getattr(sig, "rationale", "") or ""),
-                "raw_quote": dict(quote or {}),
-                "premarket_entry": is_premarket,
-            }
-            await asyncio.to_thread(self._trade_ledger_store.append_trade_entry, {"trade_id": trade_id, "entry": entry, "exit": None})
-        except Exception as e:
-            logging.exception("Trade ledger write failed: %s", e)

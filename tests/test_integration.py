@@ -1,7 +1,7 @@
 """Integration tests — full pipeline with mocked external services.
 
-Tests the complete document-to-trade flow through RunRegulatorySignalScanUseCase
-with mock implementations of all ports (feeds, broker, LLM, market data).
+Tests the complete document-to-signal flow through RunRegulatorySignalScanUseCase
+with mock implementations of all ports (feeds, LLM).
 
 Every test emits TEST_LOG: JSON lines for LLM-readable diagnostics.
 """
@@ -103,61 +103,6 @@ class MockDocumentTextPort:
         return self._texts.get(doc.doc_id, "")
 
 
-class MockMarketData:
-    """Returns canned quotes by ticker."""
-
-    def __init__(self, quotes: Dict[str, Dict[str, Any]] = None):
-        self._quotes = quotes or {}
-
-    async def fetch_quote(self, ticker: str, *, refresh: bool = False) -> Dict[str, Any]:
-        return dict(self._quotes.get(ticker.upper(), {}))
-
-
-class MockOrderExecution:
-    """Records orders and returns configurable fill results."""
-
-    def __init__(self, *, buy_result: Dict[str, Any] = None, sell_result: Dict[str, Any] = None):
-        self.buy_orders: List[Dict[str, Any]] = []
-        self.sell_orders: List[Dict[str, Any]] = []
-        self._buy_result = buy_result or {
-            "status": "accepted", "filled": 0, "avg_price": 0,
-            "remaining": 0, "order_id": 1001, "perm_id": 9001, "ib_status": "Filled",
-        }
-        self._sell_result = sell_result or {
-            "status": "accepted", "filled": 0, "avg_price": 0,
-            "remaining": 0, "order_id": 2001, "perm_id": 9002, "ib_status": "Filled",
-        }
-
-    async def execute_trade(self, *, ticker: str, shares: int, last_price: float,
-                            doc_id: str, limit_price: float = 0.0) -> Dict[str, Any]:
-        result = dict(self._buy_result)
-        if result["filled"] == 0:
-            result["filled"] = shares
-        if result["avg_price"] == 0:
-            result["avg_price"] = limit_price if limit_price > 0 else last_price
-        if result["remaining"] == 0:
-            result["remaining"] = max(0, shares - result["filled"])
-        self.buy_orders.append({
-            "ticker": ticker, "shares": shares, "last_price": last_price,
-            "limit_price": limit_price, "doc_id": doc_id, "result": result,
-        })
-        return result
-
-    async def execute_sell(self, *, ticker: str, shares: int, limit_price: float = 0.0,
-                           use_market: bool = False, doc_id: str = "") -> Dict[str, Any]:
-        result = dict(self._sell_result)
-        if result["filled"] == 0:
-            result["filled"] = shares
-        self.sell_orders.append({
-            "ticker": ticker, "shares": shares, "limit_price": limit_price,
-            "use_market": use_market, "doc_id": doc_id, "result": result,
-        })
-        return result
-
-    async def get_positions(self) -> Dict[str, Dict[str, Any]]:
-        return {}
-
-
 class MockLlm:
     """Returns configurable Sentry-1 and Ranker results."""
 
@@ -210,35 +155,6 @@ class MockResultsStore:
 
     def write_run_results(self, ctx, signals) -> None:
         self.signals = list(signals)
-
-
-class MockTradeLedger:
-    def __init__(self):
-        self.entries: List[Dict[str, Any]] = []
-        self._open: Dict[str, Dict[str, Any]] = {}
-
-    def append_trade_entry(self, record: Dict[str, Any]) -> None:
-        self.entries.append(record)
-        tid = record.get("trade_id", "")
-        if tid:
-            self._open[tid] = record
-
-    def get_open_positions(self) -> List[Dict[str, Any]]:
-        return [r for r in self._open.values() if r.get("exit") is None]
-
-    def has_open_position(self, ticker: str) -> bool:
-        t = ticker.upper()
-        for r in self._open.values():
-            if r.get("exit") is not None:
-                continue
-            entry = r.get("entry") or {}
-            if str(entry.get("ticker", "")).upper() == t:
-                return True
-        return False
-
-    def append_exit_record(self, trade_id: str, exit_data: Dict[str, Any]) -> None:
-        if trade_id in self._open:
-            self._open[trade_id]["exit"] = exit_data
 
 
 class MockDocumentRegistry:
@@ -298,16 +214,6 @@ def _make_ctx(tmp_path: Path) -> RunContext:
     )
 
 
-def _default_quote(ticker: str = "BAYRY", last: float = 12.50, bid: float = 12.45,
-                    ask: float = 12.55, volume: float = 500_000) -> Dict[str, Any]:
-    return {
-        "c": last, "bid": bid, "ask": ask, "b": bid, "a": ask,
-        "volume": volume, "v": volume,
-        "dollar_volume": last * volume,
-        "price": last, "last": last,
-    }
-
-
 def _make_settings(*, llm_enabled: bool = True, **overrides) -> ScanSettings:
     defaults = dict(
         openai_api_key="test-key",
@@ -322,10 +228,6 @@ def _make_settings(*, llm_enabled: bool = True, **overrides) -> ScanSettings:
         http_timeout_seconds=10,
         sentry_concurrency=1,
         ranker_concurrency=1,
-        base_trade_usd=5000.0,
-        min_otc_dollar_volume=50_000.0,
-        buy_collar_pct=0.015,
-        global_feeds={"us": {"enabled": True}},
         company_meta_map={
             "BAYRY": {
                 "feed": "LSE_RNS",
@@ -355,11 +257,8 @@ def _build_use_case(
     *,
     docs: List[RegulatoryDocumentHandle],
     texts: Dict[str, str] = None,
-    quotes: Dict[str, Dict[str, Any]] = None,
     settings: ScanSettings = None,
     llm: MockLlm = None,
-    order_exec: MockOrderExecution = None,
-    trade_ledger: MockTradeLedger = None,
     seen_store: MockSeenStore = None,
     doc_registry: MockDocumentRegistry = None,
 ):
@@ -373,33 +272,25 @@ def _build_use_case(
             isin = (d.metadata or {}).get("isin", "")
             texts[d.doc_id] = f"{cn} ({t}) ISIN {isin} {d.title} — material event details."
 
-    if quotes is None:
-        quotes = {"BAYRY": _default_quote("BAYRY"), "KEYCY": _default_quote("KEYCY", 50.0, 49.90, 50.10, 200_000)}
-
     _settings = settings or _make_settings()
     _seen = seen_store or MockSeenStore()
-    _ledger = trade_ledger or MockTradeLedger()
     _registry = doc_registry or MockDocumentRegistry()
     _llm = llm or MockLlm()
-    _order = order_exec or MockOrderExecution()
 
     uc = RunRegulatorySignalScanUseCase(
         settings=_settings,
         ingestion=MockIngestion(docs),
         text_port=MockDocumentTextPort(texts),
-        market_data=MockMarketData(quotes),
-        order_execution=_order,
         llm=_llm,
         seen_store=_seen,
         ticker_event_history_store=MockTickerEventHistoryStore(),
         results_store=MockResultsStore(),
-        trade_ledger_store=_ledger,
         document_registry_store=_registry,
         log_sink=MockLogSink(),
         progress_sink=MockProgressSink(),
         ticker_to_company={"BAYRY": "Bayer AG", "KEYCY": "Keyence Corporation"},
     )
-    return uc, _order, _ledger, _seen, _llm, _registry
+    return uc, _seen, _llm, _registry
 
 
 # ============================================================================
@@ -407,42 +298,23 @@ def _build_use_case(
 # ============================================================================
 
 class TestFullPipeline:
-    """End-to-end: document flows through screening, LLM, scoring, and executes a trade."""
+    """End-to-end: document flows through screening, LLM, scoring → produces signal."""
 
     @pytest.mark.asyncio
-    async def test_m_a_document_produces_trade(self, tmp_path):
-        """M&A headline → keyword HIGH → identity match → LLM pass → trade executed."""
+    async def test_m_a_document_produces_signal(self, tmp_path):
+        """M&A headline → keyword HIGH → identity match → LLM pass → signal produced."""
         doc = _make_doc(title="Bayer AG announces acquisition of rival firm")
-        uc, order_exec, ledger, seen, llm, registry = _build_use_case(
+        uc, seen, llm, registry = _build_use_case(
             docs=[doc],
             llm=MockLlm(sentry_pass=True, ranker_event="M_A_TARGET"),
         )
         ctx = _make_ctx(tmp_path)
         signals = await uc.execute(ctx)
 
-        log_test_context("full_pipeline_m_a",
-                         signals=len(signals),
-                         orders=len(order_exec.buy_orders),
-                         ledger_entries=len(ledger.entries))
+        log_test_context("full_pipeline_m_a", signals=len(signals))
 
         assert len(signals) >= 1
-        trade_signals = [s for s in signals if s.action == "trade"]
-        assert len(trade_signals) >= 1
-        assert trade_signals[0].ticker == "BAYRY"
-
-        # Trade was executed
-        assert len(order_exec.buy_orders) >= 1
-        buy = order_exec.buy_orders[0]
-        assert buy["ticker"] == "BAYRY"
-        assert buy["limit_price"] > 0  # Collared limit, not market
-        assert buy["shares"] > 0
-
-        # Ledger was written with fill data
-        assert len(ledger.entries) >= 1
-        entry = ledger.entries[0].get("entry", {})
-        assert entry["ticker"] == "BAYRY"
-        assert entry.get("fill_price", 0) > 0
-        assert entry.get("order_id", 0) > 0
+        assert signals[0].ticker == "BAYRY"
 
         # Document marked as seen
         assert seen.is_seen(doc.doc_id)
@@ -451,70 +323,38 @@ class TestFullPipeline:
     async def test_weak_keyword_rejected(self, tmp_path):
         """Document with no relevant keywords → rejected at keyword screen, no LLM call."""
         doc = _make_doc(title="Routine administrative filing notice")
-        uc, order_exec, ledger, seen, llm, registry = _build_use_case(docs=[doc])
+        uc, seen, llm, registry = _build_use_case(docs=[doc])
         ctx = _make_ctx(tmp_path)
         signals = await uc.execute(ctx)
 
         log_test_context("weak_keyword_rejected", signals=len(signals),
-                         llm_sentry_calls=len(llm.sentry_calls),
-                         orders=len(order_exec.buy_orders))
+                         llm_sentry_calls=len(llm.sentry_calls))
 
         assert len(signals) == 0
         assert len(llm.sentry_calls) == 0  # No LLM tokens wasted
-        assert len(order_exec.buy_orders) == 0
         assert seen.is_seen(doc.doc_id)  # Marked seen so it won't retry
 
 
-class TestNegativePolarityBlocking:
-    """BUY-only bot must not long into negative events."""
+class TestNegativePolaritySignal:
+    """Negative events produce signals but with appropriate action."""
 
     @pytest.mark.asyncio
-    async def test_earnings_miss_blocked_for_long_bias(self, tmp_path):
-        """EARNINGS_MISS with direction_bias=long → signal created but trade blocked."""
+    async def test_earnings_miss_produces_signal(self, tmp_path):
+        """EARNINGS_MISS → signal created (action may be watch/ignore)."""
         doc = _make_doc(title="Company reports earnings miss for Q3")
-        uc, order_exec, ledger, seen, llm, registry = _build_use_case(
+        uc, seen, llm, registry = _build_use_case(
             docs=[doc],
             llm=MockLlm(sentry_pass=True, ranker_event="EARNINGS_MISS"),
         )
         ctx = _make_ctx(tmp_path)
         signals = await uc.execute(ctx)
 
-        log_test_context("earnings_miss_blocked",
+        log_test_context("earnings_miss",
                          signals=len(signals),
-                         orders=len(order_exec.buy_orders),
                          actions=[s.action for s in signals])
 
-        # Signal should exist but as "watch" (negative polarity downgraded by scorer)
-        # OR if it somehow scores "trade", the polarity gate blocks execution
-        assert len(order_exec.buy_orders) == 0  # No buy order for negative event
-
-
-class TestDuplicatePositionPrevention:
-    """Cannot open two positions in the same ticker."""
-
-    @pytest.mark.asyncio
-    async def test_second_signal_same_ticker_blocked(self, tmp_path):
-        """Two M&A documents for BAYRY → only one trade."""
-        doc1 = _make_doc(doc_id="doc-001", title="Bayer AG acquisition announced")
-        doc2 = _make_doc(doc_id="doc-002", title="Bayer AG merger details released")
-
-        ledger = MockTradeLedger()
-        uc, order_exec, _, seen, llm, registry = _build_use_case(
-            docs=[doc1, doc2],
-            llm=MockLlm(sentry_pass=True, ranker_event="M_A_TARGET"),
-            trade_ledger=ledger,
-        )
-        ctx = _make_ctx(tmp_path)
-        signals = await uc.execute(ctx)
-
-        log_test_context("duplicate_position",
-                         signals=len(signals),
-                         orders=len(order_exec.buy_orders),
-                         ledger_entries=len(ledger.entries))
-
-        # At most one buy order for BAYRY (second blocked by has_open_position)
-        bayry_buys = [o for o in order_exec.buy_orders if o["ticker"] == "BAYRY"]
-        assert len(bayry_buys) <= 1
+        # Document should have been processed
+        assert seen.is_seen(doc.doc_id)
 
 
 class TestDocumentRetryBudget:
@@ -525,7 +365,7 @@ class TestDocumentRetryBudget:
         """Document with empty text → retried up to 3 times then marked seen."""
         doc = _make_doc(title="Bayer AG announces acquisition of rival")
         # Empty text simulates a broken URL
-        uc, order_exec, ledger, seen, llm, registry = _build_use_case(
+        uc, seen, llm, registry = _build_use_case(
             docs=[doc],
             texts={doc.doc_id: ""},  # Empty text
         )
@@ -550,12 +390,12 @@ class TestDocumentRetryBudget:
         assert len(terminal) >= 1
 
 
-class TestStreamingExecution:
-    """Trades fire immediately when signal is ready, not after batch completes."""
+class TestConcurrentDocumentProcessing:
+    """Multiple documents processed concurrently."""
 
     @pytest.mark.asyncio
-    async def test_first_signal_executes_before_slow_doc(self, tmp_path):
-        """Fast doc triggers trade before slow doc finishes processing."""
+    async def test_concurrent_docs_produce_signals(self, tmp_path):
+        """Fast and slow docs both produce signals when processed concurrently."""
         fast_doc = _make_doc(doc_id="fast-001", title="Bayer AG acquisition of rival firm")
         slow_doc = _make_doc(
             doc_id="slow-002", title="Keyence record profit announcement",
@@ -573,21 +413,14 @@ class TestStreamingExecution:
                 isin = (doc.metadata or {}).get("isin", "")
                 return f"{cn} ({ticker}) ISIN {isin} {doc.title} — material event."
 
-        order_exec = MockOrderExecution()
         uc = RunRegulatorySignalScanUseCase(
             settings=_make_settings(),
             ingestion=MockIngestion([fast_doc, slow_doc]),
             text_port=SlowTextPort(),
-            market_data=MockMarketData({
-                "BAYRY": _default_quote("BAYRY"),
-                "KEYCY": _default_quote("KEYCY", 50.0, 49.90, 50.10, 200_000),
-            }),
-            order_execution=order_exec,
             llm=MockLlm(sentry_pass=True, ranker_event="M_A_TARGET"),
             seen_store=MockSeenStore(),
             ticker_event_history_store=MockTickerEventHistoryStore(),
             results_store=MockResultsStore(),
-            trade_ledger_store=MockTradeLedger(),
             document_registry_store=MockDocumentRegistry(),
             log_sink=MockLogSink(),
             progress_sink=MockProgressSink(),
@@ -599,15 +432,12 @@ class TestStreamingExecution:
         signals = await uc.execute(ctx)
         elapsed = time.monotonic() - t0
 
-        log_test_context("streaming_execution",
+        log_test_context("concurrent_processing",
                          signals=len(signals),
-                         orders=len(order_exec.buy_orders),
                          elapsed_s=round(elapsed, 2))
 
         # Both documents should produce signals
         assert len(signals) >= 1
-        # At least one order should have been placed
-        assert len(order_exec.buy_orders) >= 1
 
 
 class TestKeywordOnlyPath:
@@ -618,7 +448,7 @@ class TestKeywordOnlyPath:
         """With LLM disabled, no LLM tokens are spent. Documents are still processed."""
         doc = _make_doc(title="Bayer AG announces acquisition of rival firm")
         llm = MockLlm()
-        uc, order_exec, ledger, seen, _, registry = _build_use_case(
+        uc, seen, _, registry = _build_use_case(
             docs=[doc],
             settings=_make_settings(llm_enabled=False),
             llm=llm,
@@ -653,7 +483,7 @@ class TestParseErrorFallback:
         The document is still processed (not lost), and the keyword category is used."""
         doc = _make_doc(title="Bayer AG announces acquisition of rival firm")
         llm = MockLlm(sentry_pass=True, parse_error=True)
-        uc, order_exec, ledger, seen, _, registry = _build_use_case(
+        uc, seen, _, registry = _build_use_case(
             docs=[doc], llm=llm,
         )
         ctx = _make_ctx(tmp_path)
@@ -677,62 +507,13 @@ class TestParseErrorFallback:
             assert "M_A" in sig.rationale
 
 
-class TestPartialFillRecorded:
-    """Partial fills from broker are recorded in the ledger."""
-
-    @pytest.mark.asyncio
-    async def test_partial_fill_data_in_ledger(self, tmp_path):
-        """Broker fills 80 of 100 shares → ledger records actual fill data."""
-        doc = _make_doc(title="Bayer AG announces acquisition of rival firm")
-        partial_fill = MockOrderExecution(buy_result={
-            "status": "accepted",
-            "filled": 80,
-            "avg_price": 12.52,
-            "remaining": 20,
-            "order_id": 5001,
-            "perm_id": 9501,
-            "ib_status": "PartiallyFilled",
-        })
-        uc, _, ledger, seen, llm, registry = _build_use_case(
-            docs=[doc],
-            llm=MockLlm(sentry_pass=True, ranker_event="M_A_TARGET"),
-            order_exec=partial_fill,
-        )
-        ctx = _make_ctx(tmp_path)
-        signals = await uc.execute(ctx)
-
-        log_test_context("partial_fill",
-                         signals=len(signals),
-                         ledger_entries=len(ledger.entries))
-
-        assert len(ledger.entries) >= 1
-        entry = ledger.entries[0].get("entry", {})
-
-        log_test_context("partial_fill_data",
-                         fill_price=entry.get("fill_price"),
-                         fill_qty=entry.get("fill_qty"),
-                         fill_remaining=entry.get("fill_remaining"),
-                         order_id=entry.get("order_id"))
-
-        # Ledger should use actual fill data, not requested
-        assert entry["fill_price"] == 12.52
-        assert entry["fill_qty"] == 80
-        assert entry["fill_remaining"] == 20
-        assert entry["order_id"] == 5001
-        assert entry["perm_id"] == 9501
-        # last_price should be the fill price (authoritative)
-        assert entry["last_price"] == 12.52
-        # shares should be actual filled, not requested
-        assert entry["shares"] == 80
-
-
 class TestVetoedDocumentRejected:
     """AGM notice is rejected by veto keywords, no LLM call."""
 
     @pytest.mark.asyncio
     async def test_agm_notice_vetoed(self, tmp_path):
         doc = _make_doc(title="Notice of annual general meeting 2026")
-        uc, order_exec, ledger, seen, llm, registry = _build_use_case(docs=[doc])
+        uc, seen, llm, registry = _build_use_case(docs=[doc])
         ctx = _make_ctx(tmp_path)
         signals = await uc.execute(ctx)
 
@@ -741,7 +522,6 @@ class TestVetoedDocumentRejected:
 
         assert len(signals) == 0
         assert len(llm.sentry_calls) == 0
-        assert len(order_exec.buy_orders) == 0
 
 
 class TestDeduplication:
@@ -752,42 +532,14 @@ class TestDeduplication:
         doc1 = _make_doc(doc_id="dup-001", title="Bayer AG acquisition announced")
         doc2 = _make_doc(doc_id="dup-001", title="Bayer AG acquisition announced (copy)")
 
-        uc, order_exec, ledger, seen, llm, registry = _build_use_case(
+        uc, seen, llm, registry = _build_use_case(
             docs=[doc1, doc2],
             llm=MockLlm(sentry_pass=True, ranker_event="M_A_TARGET"),
         )
         ctx = _make_ctx(tmp_path)
         signals = await uc.execute(ctx)
 
-        log_test_context("dedup", signals=len(signals), orders=len(order_exec.buy_orders))
+        log_test_context("dedup", signals=len(signals))
 
         # Only one signal despite two docs with same ID
         assert len(signals) <= 1
-
-
-class TestCollaredLimitOrder:
-    """Buy order uses limit price with collar, not market order."""
-
-    @pytest.mark.asyncio
-    async def test_buy_order_has_collar_limit(self, tmp_path):
-        doc = _make_doc(title="Bayer AG announces acquisition of rival firm")
-        uc, order_exec, ledger, seen, llm, registry = _build_use_case(
-            docs=[doc],
-            llm=MockLlm(sentry_pass=True, ranker_event="M_A_TARGET"),
-        )
-        ctx = _make_ctx(tmp_path)
-        signals = await uc.execute(ctx)
-
-        log_test_context("collar_order", orders=len(order_exec.buy_orders))
-
-        assert len(order_exec.buy_orders) >= 1
-        buy = order_exec.buy_orders[0]
-
-        log_test_context("collar_details",
-                         limit_price=buy["limit_price"],
-                         last_price=buy["last_price"])
-
-        # Limit price should be ask * (1 + collar_pct), not 0 (market order)
-        assert buy["limit_price"] > 0
-        # Collar: 1.5% above the exec_price (which is the ask)
-        assert buy["limit_price"] > buy["last_price"]
