@@ -101,6 +101,14 @@ class RuntimeConfig:
     # ── Polling ──
     poll_interval_seconds: int = field(default_factory=lambda: _env_int("POLL_INTERVAL_SECONDS", 300))
 
+    # ── Signal delivery (Telegram) ──
+    telegram_bot_token: str = field(
+        default_factory=lambda: (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
+    )
+    telegram_chat_id: str = field(
+        default_factory=lambda: (os.getenv("TELEGRAM_CHAT_ID") or "").strip()
+    )
+
     # ── Logging ──
     log_level: str = field(
         default_factory=lambda: (os.getenv("LOG_LEVEL") or "INFO").strip().upper()

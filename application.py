@@ -1006,6 +1006,26 @@ class RunRegulatorySignalScanUseCase:
                 reason_code=f"accepted_{final_action}",
             )
 
+            # ── Signal delivery (non-blocking, best-effort) ───────────────
+            # Emit to external subscribers if action is trade or watch.
+            # Uses existing dedupe (seen_store) — no duplicate signals possible.
+            if final_action in ("trade", "watch"):
+                try:
+                    from signal_formatter import format_signal
+                    formatted = format_signal(sig)
+                    _event(ctx, "signal_formatted", doc_id=doc.doc_id, ticker=ticker,
+                           action=final_action, details=formatted.to_dict())
+
+                    from notifier import send_signal
+                    sent = await send_signal(formatted)
+                    _event(ctx, "signal_delivered", doc_id=doc.doc_id, ticker=ticker,
+                           outcome="sent" if sent else "skipped")
+                except Exception as notify_err:
+                    # Signal delivery failure must never crash the pipeline
+                    logging.warning("Signal delivery failed for %s: %s", ticker, notify_err)
+                    _event(ctx, "signal_delivery_error", doc_id=doc.doc_id, ticker=ticker,
+                           details={"error": str(notify_err)})
+
             # Update event history (off-thread to avoid blocking event loop #29)
             if self._ticker_event_history_store and doc.published_at:
                 ts_dt2 = doc.published_at
