@@ -33,6 +33,7 @@ LatencyClass = Literal["early", "mid", "late"]
 class FormattedSignal:
     """Strict external signal schema. Every field is required and validated."""
     ticker: str
+    company_name: str
     event: str
     polarity: Polarity
     confidence: float          # 0.0–1.0
@@ -41,10 +42,12 @@ class FormattedSignal:
     timestamp: str             # ISO 8601 UTC
     source: str
     latency_class: LatencyClass
+    title: str = ""            # original document title for context
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "ticker": self.ticker,
+            "company_name": self.company_name,
             "event": self.event,
             "polarity": self.polarity,
             "confidence": self.confidence,
@@ -53,6 +56,7 @@ class FormattedSignal:
             "timestamp": self.timestamp,
             "source": self.source,
             "latency_class": self.latency_class,
+            "title": self.title,
         }
 
 
@@ -167,6 +171,7 @@ def format_signal(sig: RankedSignal) -> FormattedSignal:
 
     return FormattedSignal(
         ticker=sig.ticker.strip().upper(),
+        company_name=sig.company_name or sig.ticker.strip().upper(),
         event=event_type,
         polarity=polarity,
         confidence=confidence,
@@ -175,6 +180,7 @@ def format_signal(sig: RankedSignal) -> FormattedSignal:
         timestamp=ts,
         source=sig.source.strip(),
         latency_class=latency,
+        title=sig.title or "",
     )
 
 

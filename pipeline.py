@@ -629,9 +629,20 @@ class FeedPipeline:
                         )
 
                 try:
+                    from signal_formatter import format_signal_text
                     formatted = format_signal(sig)
+
+                    # Generate 2-sentence LLM summary (falls back to deterministic)
+                    human_text = await format_signal_text(
+                        formatted,
+                        title=item.title,
+                        http_client=http,
+                        api_key=self._config.openai_api_key,
+                    )
+
                     sent = await send_signal(
-                        formatted, buy_price=buy_price, http=http,
+                        formatted, human_text=human_text,
+                        buy_price=buy_price, http=http,
                     )
                     if sent:
                         stats["sent"] += 1

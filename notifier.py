@@ -47,20 +47,26 @@ def _format_telegram_message(
     polarity_emoji = {"positive": "\u2191", "negative": "\u2193", "neutral": "\u2194"}
     emoji = polarity_emoji.get(signal.polarity, "\u2194")
 
+    company = getattr(signal, "company_name", "") or signal.ticker
     lines = [
-        f"{emoji} {signal.ticker} — {signal.event.replace('_', ' ').title()}",
-        f"Impact: {signal.expected_impact.upper()} | Confidence: {signal.confidence:.0%}",
-        f"Polarity: {signal.polarity} | Timing: {signal.latency_class}",
+        f"{emoji} {signal.ticker} — {company}",
+        f"{signal.event.replace('_', ' ').title()}",
+        "",
     ]
+
+    # 2-sentence summary (LLM-generated or deterministic fallback)
+    summary = human_text or signal.summary
+    if summary:
+        lines.append(summary)
+        lines.append("")
+
+    lines.append(f"Impact: {signal.expected_impact.upper()} | Confidence: {signal.confidence:.0%}")
+    lines.append(f"Polarity: {signal.polarity} | Timing: {signal.latency_class}")
 
     if buy_price is not None:
         lines.append(f"Buy: ${buy_price:.4f}")
     else:
         lines.append("Buy: market closed — pending next open")
-
-    if human_text:
-        lines.append("")
-        lines.append(human_text)
 
     lines.append("")
     lines.append(f"Source: {signal.source} | {signal.timestamp}")
