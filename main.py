@@ -44,6 +44,10 @@ def _build_pipeline(config: RuntimeConfig) -> FeedPipeline:
         ema_max_age_days=config.ema_max_age_days,
         keyword_score_threshold=config.keyword_score_threshold,
         http_timeout_seconds=config.http_timeout_seconds,
+        openai_api_key=config.openai_api_key,
+        llm_ranker_enabled=config.llm_ranker_enabled,
+        sentry1_model=config.sentry1_model,
+        ranker_model=config.ranker_model,
     ))
 
 

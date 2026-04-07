@@ -101,6 +101,20 @@ class RuntimeConfig:
     # ── Polling ──
     poll_interval_seconds: int = field(default_factory=lambda: _env_int("POLL_INTERVAL_SECONDS", 300))
 
+    # ── LLM analysis ──
+    openai_api_key: str = field(
+        default_factory=lambda: (os.getenv("OPENAI_API_KEY") or "").strip()
+    )
+    llm_ranker_enabled: bool = field(
+        default_factory=lambda: _env_bool("LLM_RANKER_ENABLED", True)
+    )
+    sentry1_model: str = field(
+        default_factory=lambda: (os.getenv("SENTRY1_MODEL") or "gpt-5-nano").strip()
+    )
+    ranker_model: str = field(
+        default_factory=lambda: (os.getenv("RANKER_MODEL") or "gpt-5-mini").strip()
+    )
+
     # ── Signal delivery (Telegram) ──
     telegram_bot_token: str = field(
         default_factory=lambda: (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
