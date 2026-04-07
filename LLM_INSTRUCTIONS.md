@@ -1,195 +1,185 @@
-LLM REVIEW INSTRUCTIONS — PROJECT ANALYSIS
+# LLM INSTRUCTIONS — REGULATORY FEED BOT
 
-Purpose
--------
-When this project bundle is provided to an LLM, the model must review the
-codebase, logs, artifacts, and configuration to propose improvements that
-increase system performance while preserving architecture stability.
+## Purpose
 
-The system is a global ADR latency trading bot. It monitors 16 home-exchange
-regulatory feeds for 219 companies and trades unsponsored OTC ADRs when
-material news breaks before US desks reprice. The primary edge is structural
-information asymmetry, not speed.
+When this project bundle is provided to an LLM, the model should review the
+codebase to propose improvements that increase reliability, signal quality,
+and operational robustness — without changing the core architecture.
 
-Primary Objectives
-------------------
-Each improvement cycle should focus on:
+This is a regulatory signal monitor. It polls SEC EDGAR, FDA, and EMA,
+screens results with a deterministic keyword scorer, stores everything in
+SQLite, exposes a REST API, and optionally posts to Twitter. There is no
+trading logic, no LLM dependency in the runtime pipeline, and no paid
+external services.
 
-1. **Signal yield** — increase home-exchange documents reaching the ranker
-2. **Feed reliability** — reduce transient failures across 16 exchange adapters
-3. **Weighting calibration** — tune signal_weighting.py multipliers from data
-4. **Ticker resolution** — improve home-ticker → US-ticker mapping
-5. **Observability** — surface rejection rates for the two new gates:
-   liquidity_skip and confidence_floor_skip
-6. **Documentation** — keep guides in sync with implementation
+---
 
-Prioritize improvements that are grounded in document_register.jsonl data
-and require minimal code changes.
+## System Constraints (Non-Negotiable)
 
-System Constraints (Non-Negotiable)
-------------------------------------
-The following rules must be preserved in every change:
+The following must be preserved in every proposed change:
 
-- **deterministic behaviour** — all trading decisions must be reproducible
-- **no randomness** — every source of variability must be explicit and logged
-- **no silent exception swallowing** — all errors must surface with context
-- **append-only logs and artifacts** — enable full audit trail
-- **minimal code churn** — prefer surgical edits over large refactors
-- **production-safe changes only** — test and validate before proposing
-- **minimal new dependencies** — avoid external services and packages
-- **feeds run 09:30–16:00 EST only** — never bypass _us_market_open() gate
-- **unsponsored OTC primary** — do not increase sponsored/dual name weighting
-  without strong evidence of edge
+- **No LLM calls in the pipeline.** All screening is deterministic.
+- **No new paid external dependencies.** All data sources are free public APIs.
+- **Append-only database.** Items are never deleted or overwritten.
+- **Idempotent pipeline.** Same input always produces same database state.
+- **Feed failures are isolated.** One adapter failing must not affect others.
+- **No silent exception swallowing.** All errors must surface with context.
+- **Minimal code churn.** Prefer surgical edits over refactors.
 
-Key Architectural Patterns to Preserve
----------------------------------------
-- company_meta_map flows watchlist → ScanSettings → compute_weights
-- signal_weighting adjusts sentry threshold BEFORE LLM call
-- signal_weighting sizes position AFTER quote fetch (liquidity known)
-- weight_rationale is written to every trade ledger entry
-- All 16 feed adapters must be in FEED_ADAPTER_MAP (never remove entries)
-- Feed calls return [] if _us_market_open() is False
+---
 
-Expected Inputs
----------------
-The project bundle may contain:
+## Analysis Process
 
-- Python source code (.py files)
-- watchlist.json (tier-based format)
-- Configuration files (config.yaml, .env)
-- Runtime logs (JSONL, text)
-- Artifacts (document register, trade ledger)
-- Documentation (QUICK_START_GUIDE.md, MISSION.md, LLM_MEMORY.md)
+### Step 1 — Understand the Architecture
 
-Review all available materials. Prioritize document_register.jsonl and
-trade_ledger.jsonl as primary evidence. Code is ground truth.
+Read and clearly understand:
 
-Analysis Process (Step-by-Step)
----------------------------------
+**`pipeline.py`** — the orchestrator
+- How are the three adapters run in parallel?
+- How does deduplication work before the database insert?
+- What is the flow from fetch → screen → persist?
 
-### Step 1 — Understand the System
+**`feeds/edgar.py`, `feeds/fda.py`, `feeds/ema.py`** — the adapters
+- What endpoints does each adapter call?
+- How does each adapter handle errors and empty results?
+- What does `item_id` hash over for each source? (Critical for dedup correctness)
 
-From code inspection, clearly explain:
+**`domain.py`** — `KeywordScreener`
+- What keywords and categories are defined?
+- How is the score calculated?
+- What triggers a veto?
 
-- **Feed architecture** — which 16 feeds are running? What are their window types?
-- **Weighting system** — what multipliers are applied and in what order?
-- **Sentry threshold flow** — how does window_type affect sentry before LLM call?
-- **Liquidity gate** — what is the MIN_OTC_DOLLAR_VOLUME threshold? How many names skip?
-- **Confidence floor** — what floors are set for which edge profiles?
-- **Trade sizing range** — what is the expected USD range per trade?
-- **Persistence strategy** — what state survives across runs?
+**`db.py`** — the persistence layer
+- What is the schema?
+- How does deduplication work at the DB level (UNIQUE constraint)?
+- How does `get_untweeted()` work for the Twitter bot?
 
-### Step 2 — Analyze Logs (Primary Evidence)
+**`api.py`** — the REST layer
+- What endpoints exist and what do they filter on?
+- Are there any missing indexes, N+1 patterns, or pagination gaps?
 
-Examine document_register.jsonl and trade_ledger.jsonl. Identify:
+**`twitter_bot.py`** — the posting bot
+- How are tweets formatted?
+- How does it prevent double-posting?
+- How does it handle Twitter rate limit errors?
 
-- **New rejection codes**: liquidity_skip rate, confidence_floor_skip rate
-- **Feed error rates**: which exchange adapters fail most often?
-- **Sentry threshold effectiveness**: what % of home-exchange docs pass sentry?
-- **Weight distribution**: what is the actual target_usd distribution across trades?
-- **Window type distribution**: are Asian (home_closed) signals reaching execution?
-- **KRX warnings**: how many times does DART_API_KEY missing appear?
-- **Priced-in detection**: are post-close Asian signals being flagged as priced_in?
+**`config.py`** — all tunable settings
+- What env vars control behaviour?
+- Are any defaults likely to cause problems in production?
 
-Use logs as ground truth. If logs conflict with documentation, trust the logs.
+---
 
-### Step 3 — Compare With Memory
+### Step 2 — Identify Failure Modes
 
-Review LLM_MEMORY.md to understand:
+For each adapter, identify:
 
-- **Verified fixes**: Nordic/CNMV wiring, _us_market_open gate, $200 sizing bug
-- **Known issues**: OTC volume data quality, TSE language barrier, DART limits
-- **Current priorities**: KRX key, OTC volume verification, European window_type fields
-- **Weighting calibration targets**: are liquidity/confidence gates too tight or too loose?
+1. **What happens if the upstream API is down or returns unexpected JSON?**
+   Is the error logged with enough context? Does the pipeline continue?
 
-Mark memory entries as OUTDATED if evidence contradicts them.
+2. **What happens if the feed returns a very large payload?**
+   Does the adapter paginate or cap results to avoid memory pressure?
 
-### Step 4 — Identify High-Impact Improvements
+3. **Are `item_id` hashes stable?** If the input to `stable_hash()` changes
+   across runs for the same logical item, dedup breaks and duplicates
+   accumulate. Check each adapter carefully.
 
-Focus on:
+4. **Are date parsing failures silent?** Items with unparseable dates may
+   slip through the age cutoff or be stored with `published_at = None`.
 
-1. Feed-specific issues visible in error logs
-2. Signal loss through the two new gates (liquidity, confidence_floor)
-3. KRX / DART setup if not yet done
-4. Sentry effectiveness on non-English (Japanese/Korean/Portuguese) filings
-5. window_type field gaps in watchlist.json European feeds
+For the Twitter bot, identify:
 
-For each improvement, estimate:
-- **Effort** (lines of code to change)
-- **Impact** (which gate? how many signals affected?)
-- **Risk** (could this fire more false positives?)
-- **Evidence** (which log codes justify this?)
+5. **What happens if `mark_tweeted()` fails after a successful post?**
+   The item will be reposted. Is there a guard?
 
-### Step 5 — Propose Concrete Code Changes
+6. **Is the score floor for tweeting consistent with `KEYWORD_SCORE_THRESHOLD`?**
+   If not, the bot may never post or may post noise.
 
-For each improvement, provide:
+---
 
-- **File name** and **function name**
-- **Specific change** with exact code
-- **Rationale** — why this solves the problem
-- **Testing strategy** — how to verify
+### Step 3 — Assess Signal Quality
 
-Example format:
-```
-File: signal_weighting.py
-Constant: MIN_DOLLAR_VOLUME
-Change: Lower from 50_000 to 25_000 if document_register shows >30% of
-        Asian names hitting liquidity_skip with valid signals
-Evidence: trade log shows THIN_STOCK was skipped 8 times in one session
-          but home-exchange filings were genuine material events
-Risk: Medium — increases execution on very thin OTC names
-Test: Monitor fills on IB paper account; check spread cost vs signal quality
-```
+Review `KeywordScreener` in `domain.py`:
 
-### Step 6 — Update Memory
+- Are the keyword lists comprehensive for the three sources (SEC filings,
+  FDA drug approvals, EMA medicine decisions)?
+- Are there common regulatory event types that score 0 and get marked
+  `irrelevant` incorrectly?
+- Are there veto patterns that discard genuine signals?
+- Is `KEYWORD_SCORE_THRESHOLD = 30` well-calibrated, or should different
+  thresholds apply per source (EDGAR vs FDA vs EMA)?
 
-Propose updates to LLM_MEMORY.md:
+---
 
-- Record new outcome code rates (liquidity_skip %, confidence_floor_skip %)
-- Update priority list based on observed rejection patterns
-- Add feed reliability observations (which adapters fail most?)
-- Mark resolved priorities (e.g., KRX key set up → mark COMPLETE)
-- Update "Last Verified Stable Behaviour" with new metrics
+### Step 4 — Assess the API
 
-Output Requirements
--------------------
+Review `api.py`:
 
-Return only the files that need to change. Specifically:
+- Does `GET /signals` return results ordered usefully (score DESC + time DESC)?
+- Is there a missing filter on `/items` that would be obviously useful
+  (e.g. date range, `tweeted` status)?
+- Does `GET /stats` give enough observability to detect a broken feed
+  (e.g. zero items from one source in the last 24 hours)?
+- Is there any endpoint that would help diagnose why a specific item was
+  classified as irrelevant?
 
-1. **Code files to modify** — patch-style with file, function, exact changes, rationale
-2. **Updated LLM_MEMORY.md** — with verified conclusions from this cycle
-3. **No placeholder files** — do not return unchanged files
-4. **No full rewrites** — surgical edits only
-5. **Concrete specificity** — avoid vague suggestions
+---
 
-Quality Standards for Suggestions
-------------------------------------
+### Step 5 — Propose Improvements
 
-A good improvement must:
+For each proposed change, provide:
 
-1. Be grounded in document_register.jsonl or trade_ledger evidence
-2. Be specific — exactly which file, function, constant
-3. Be measurable — what rejection rate change would prove it worked?
-4. Not bypass the _us_market_open() gate or liquidity gate
-5. Not increase execution on sponsored or dual-listed names without evidence
-6. Not introduce non-determinism into weight calculations
+1. **File and line reference** — where exactly the change goes
+2. **The problem it solves** — grounded in a specific failure mode or gap
+3. **The proposed code** — complete and minimal
+4. **Why it doesn't violate constraints** — confirm no LLM calls, no new
+   paid deps, no data loss, no silent swallowing
 
-Avoid:
-- Changes to multiplier tables without log evidence
-- Adding new exchanges without verifying OTC liquidity first
-- Reducing MIN_OTC_DOLLAR_VOLUME below $25,000 (market impact risk)
-- Bypassing the confidence_floor gate entirely
+Prioritise:
 
-Session Continuation
---------------------
-Each improvement cycle should:
+- Fixes that prevent data loss or duplicate posts (highest priority)
+- Fixes that prevent silent failures in a feed adapter
+- Keyword and scoring improvements that increase `relevant` yield
+- API additions that improve observability
+- Config improvements (better defaults, documented env vars)
 
-1. Read QUICK_START_GUIDE.md, MISSION.md, LLM_MEMORY.md in order
-2. Check document_register.jsonl for liquidity_skip and confidence_floor_skip rates
-3. Check logs for DART_API_KEY missing, feed error rates, priced_in flags
-4. Propose calibration changes grounded in observed rejection patterns
-5. Update LLM_MEMORY.md with verified conclusions
+Do not propose:
 
-The system improves through data: run it in paper mode, accumulate
-document_register data, then tune thresholds based on what you observe.
-Do not tune blindly — wait for evidence before adjusting gates.
+- Adding an LLM classification step
+- Replacing SQLite with a hosted database
+- New external paid services
+- Large refactors that change the module structure
+
+---
+
+## Key Relationships to Keep Consistent
+
+If you change any of these, verify the downstream effect:
+
+| If you change...              | Also check...                                      |
+|-------------------------------|----------------------------------------------------|
+| `item_id` hashing in a feed   | Existing rows will not deduplicate against new ones |
+| `KeywordScreener` veto list   | Items previously stored may not be re-screened     |
+| `KEYWORD_SCORE_THRESHOLD`     | Twitter bot score floor (may need matching change) |
+| `get_untweeted()` query       | Twitter bot loop rate and ordering                 |
+| `feed_items` schema           | `api.py` column references, `db.py` insert/update  |
+| `FeedResult` fields           | All three adapters that construct it               |
+
+---
+
+## What Good Output Looks Like
+
+A strong review will:
+
+- Identify at least one dedup edge case across the three adapters
+- Check whether all three adapters have consistent error handling
+- Verify that `KeywordScreener` covers FDA and EMA event types as well as
+  it covers EDGAR item numbers
+- Propose at least one API improvement that aids operational monitoring
+- Include concrete code, not just descriptions of changes
+
+A weak review will:
+
+- Propose adding an LLM classification step
+- Suggest switching to a different database or message queue
+- Rewrite pipeline.py for "cleaner architecture"
+- Propose changes without referencing specific files and line numbers

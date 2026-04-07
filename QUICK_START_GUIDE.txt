@@ -1,0 +1,181 @@
+QUICK START — REGULATORY FEED BOT
+==================================
+
+What it does
+------------
+Polls SEC EDGAR, FDA, and EMA on a schedule. Scores results with a keyword
+screener. Stores everything in a local SQLite database. Serves data via a
+REST API. Optionally posts high-scoring signals to Twitter.
+
+No LLM. No trading. No paid APIs.
+
+
+Prerequisites
+-------------
+- Python 3.10+
+- pip install -r requirements.txt
+- A .env file (see "Configuration" below)
+- Twitter developer credentials (only if using the Twitter bot)
+
+
+Minimum .env
+------------
+SEC_USER_AGENT=YourName/1.0 (your@email.com)
+
+That is the only required setting. The SEC requires an identified User-Agent
+for EDGAR access. Use your real name and email.
+
+
+Running
+-------
+Single poll cycle (good for testing):
+  python main.py --once
+
+Continuous polling (default: every 5 minutes):
+  python main.py --continuous
+
+REST API on port 8000:
+  uvicorn api:app --host 0.0.0.0 --port 8000
+
+Twitter bot (post pending signals and exit):
+  python twitter_bot.py --once
+
+Twitter bot (continuous):
+  python twitter_bot.py --continuous
+
+
+What gets stored
+----------------
+Every item fetched from every source is written to feedapp.db, regardless
+of whether it passes screening. Items are never deleted. Each item gets:
+
+  status = "relevant"    scored above KEYWORD_SCORE_THRESHOLD (default 30)
+  status = "irrelevant"  below threshold, not a signal
+  status = "vetoed"      matched a veto keyword, excluded from API signals
+
+The database file is feedapp.db in the working directory by default.
+Set DB_PATH to change this.
+
+
+REST API endpoints
+------------------
+GET /health                   Liveness check
+GET /signals                  High-score relevant items (the main feed)
+GET /items                    All items with optional filters:
+                                ?source=edgar|fda|ema
+                                ?status=relevant|irrelevant|vetoed
+                                ?min_score=40
+                                ?category=REGULATORY_DECISION
+                                ?limit=50&offset=0
+GET /items/{item_id}          Single item detail
+GET /stats                    Counts by source/status, top categories
+
+
+Twitter bot
+-----------
+Reads unposted relevant items from the database and posts them via the
+Twitter API v2. Marks each item as tweeted after posting.
+
+Required env vars for the bot:
+  TWITTER_API_KEY
+  TWITTER_API_SECRET
+  TWITTER_ACCESS_TOKEN
+  TWITTER_ACCESS_SECRET
+
+Twitter free tier allows ~1,500 tweets/month (~50/day). The bot only posts
+items above the keyword score threshold to stay within this.
+
+
+Full configuration reference
+-----------------------------
+Variable                    Default                            Notes
+--------                    -------                            -----
+SEC_USER_AGENT              FeedApp/1.0 (feedapp@example.com)  Required; use real name/email
+DB_PATH                     feedapp.db                         SQLite file path
+EDGAR_DAYS_BACK             1                                  Lookback window for EDGAR
+EDGAR_FORMS                 8-K,6-K                            Form types to fetch
+FDA_MAX_AGE_DAYS            7                                  FDA item age cutoff
+EMA_MAX_AGE_DAYS            7                                  EMA item age cutoff
+KEYWORD_SCORE_THRESHOLD     30                                 Relevance cutoff (0-100)
+POLL_INTERVAL_SECONDS       300                                Continuous mode interval
+HTTP_TIMEOUT_SECONDS        30                                 Per-request timeout
+LOG_LEVEL                   INFO                               DEBUG|INFO|WARNING|ERROR
+TWITTER_API_KEY             (none)                             Bot only
+TWITTER_API_SECRET          (none)                             Bot only
+TWITTER_ACCESS_TOKEN        (none)                             Bot only
+TWITTER_ACCESS_SECRET       (none)                             Bot only
+
+
+Data sources
+------------
+EDGAR   SEC full-text search (EFTS). 8-K and 6-K filings.
+        No key required. Rate limit: 10 req/s with User-Agent.
+
+FDA     Two sub-sources:
+        - FDA press releases RSS (drug approvals, safety alerts)
+        - openFDA drug approvals JSON (structured approval records)
+        No key required.
+
+EMA     Two sub-sources:
+        - EMA news JSON (press releases, regulatory updates)
+        - EMA medicines JSON (all authorised medicines, filtered by update date)
+        No key required. Updated twice daily by EMA.
+
+
+File map
+--------
+main.py           CLI entry point
+pipeline.py       Fetch -> deduplicate -> screen -> persist
+feeds/
+  base.py         BaseFeedAdapter, FeedResult dataclass
+  edgar.py        SEC EDGAR adapter
+  fda.py          FDA press RSS + openFDA approvals
+  ema.py          EMA news + medicines JSON
+domain.py         KeywordScreener (deterministic, no LLM)
+db.py             Async SQLite layer
+api.py            FastAPI REST layer
+twitter_bot.py    Tweepy v2 posting bot
+config.py         RuntimeConfig from env/.env
+requirements.txt  Python dependencies
+
+
+Common tasks
+------------
+Check what's in the database:
+  sqlite3 feedapp.db "SELECT feed_source, status, COUNT(*) FROM feed_items GROUP BY 1,2"
+
+See the top signals:
+  curl "http://localhost:8000/signals?min_score=40"
+
+Check feed stats:
+  curl "http://localhost:8000/stats"
+
+Test a single cycle with debug logging:
+  LOG_LEVEL=DEBUG python main.py --once
+
+See items from one source:
+  curl "http://localhost:8000/items?source=fda&status=relevant&limit=10"
+
+
+Troubleshooting
+---------------
+"EDGAR fetch failed"
+  Check SEC_USER_AGENT is set to something identifying (name + email).
+  SEC will block generic or empty User-Agent strings.
+
+"openFDA: no recent approvals found"
+  Normal — openFDA returns 404 when no records match the date filter.
+  The adapter handles this silently.
+
+"EMA medicines JSON fetch failed"
+  The EMA JSON endpoint is occasionally slow (large payload, ~10MB).
+  Increase HTTP_TIMEOUT_SECONDS to 60.
+
+Items score 0 unexpectedly
+  The keyword screener in domain.py may not cover the event type.
+  Check KeywordScreener keyword lists and add terms as needed.
+
+Twitter bot not posting
+  Confirm all four TWITTER_* env vars are set.
+  Confirm items exist with status='relevant' and tweeted=0.
+  Check keyword score of those items vs bot's score floor.
