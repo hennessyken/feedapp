@@ -64,6 +64,19 @@ def _append_jsonl(path_str: str | None, obj: Dict[str, Any]) -> None:
         pass
 
 # ---------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------
+
+def _strip_fences(s: str) -> str:
+    """Remove markdown code fences from LLM output."""
+    t = (s or "").strip()
+    if t.startswith("```"):
+        t = re.sub(r"^```[a-zA-Z0-9]*\s*", "", t).strip()
+        t = re.sub(r"\s*```\s*$", "", t).strip()
+    return t
+
+
+# ---------------------------------------------------------------------
 # Prompts
 # ---------------------------------------------------------------------
 
@@ -879,13 +892,6 @@ class OpenAiRegulatoryLlmGateway:
         label_analysis: Dict[str, Any] = dict(label_analysis_defaults)
 
         evidence_spans: List[Dict[str, str]] = []
-
-        def _strip_fences(s: str) -> str:
-            t = (s or "").strip()
-            if t.startswith("```"):
-                t = re.sub(r"^```[a-zA-Z0-9]*\s*", "", t).strip()
-                t = re.sub(r"\s*```\s*$", "", t).strip()
-            return t
 
         def _norm(s: str) -> str:
             return re.sub(r"\s+", " ", (s or "").strip().lower())
