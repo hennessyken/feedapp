@@ -537,12 +537,12 @@ class FeedPipeline:
                     ticker, final_action, final_confidence, impact_out, event_type,
                 )
 
-                # Skip low-confidence / ignore signals
-                if final_action == "ignore" or final_confidence < 55:
-                    stats["ignored"] += 1
-                    continue
+                # ── Classify + persist to DB (always, for backtesting) ─────
+                from signal_formatter import _classify_polarity, _classify_impact, _classify_latency
+                polarity = _classify_polarity(event_type)
+                impact_tier = _classify_impact(impact_out)
+                latency_class = _classify_latency(freshness_mult)
 
-                # ── Build signal + deliver via Telegram ──────────────────
                 rationale = (
                     f"keyword_score={screen.score} category={screen.event_category} "
                     f"matched={screen.matched_keywords} "
@@ -550,27 +550,7 @@ class FeedPipeline:
                     f"freshness={freshness_mult:.2f} impact={impact_out} conf={conf_out}"
                 )
 
-                sig = RankedSignal(
-                    doc_id=item.item_id,
-                    source=item.feed_source,
-                    title=item.title,
-                    published_at=item.published_at or "",
-                    url=item.url,
-                    ticker=ticker,
-                    company_name=company_name,
-                    resolution_confidence=100,
-                    sentry1_probability=float(screen.score),
-                    impact_score=impact_out,
-                    confidence=final_confidence,
-                    action=final_action,
-                    rationale=rationale,
-                )
-
-                # Persist signal analysis to DB for backtesting
                 try:
-                    from signal_formatter import _classify_polarity, _classify_latency
-                    polarity = _classify_polarity(event_type)
-                    latency_class = _classify_latency(freshness_mult)
                     await self._db.update_signal_analysis(
                         item.item_id,
                         ticker=ticker,
@@ -588,6 +568,40 @@ class FeedPipeline:
                     )
                 except Exception as db_err:
                     logger.warning("Failed to persist signal analysis for %s: %s", ticker, db_err)
+
+                # ── Publish gate: medium/high impact, non-neutral, >70% conf ──
+                if final_action == "ignore":
+                    stats["ignored"] += 1
+                    continue
+                if final_confidence <= 70:
+                    logger.info("FILTERED %s: confidence %d%% <= 70%%", ticker, final_confidence)
+                    stats["ignored"] += 1
+                    continue
+                if impact_tier == "low":
+                    logger.info("FILTERED %s: impact %s (score=%d)", ticker, impact_tier, impact_out)
+                    stats["ignored"] += 1
+                    continue
+                if polarity == "neutral":
+                    logger.info("FILTERED %s: neutral polarity for %s", ticker, event_type)
+                    stats["ignored"] += 1
+                    continue
+
+                # ── Build signal + deliver via Telegram ──────────────────
+                sig = RankedSignal(
+                    doc_id=item.item_id,
+                    source=item.feed_source,
+                    title=item.title,
+                    published_at=item.published_at or "",
+                    url=item.url,
+                    ticker=ticker,
+                    company_name=company_name,
+                    resolution_confidence=100,
+                    sentry1_probability=float(screen.score),
+                    impact_score=impact_out,
+                    confidence=final_confidence,
+                    action=final_action,
+                    rationale=rationale,
+                )
 
                 # IB buy price — get before Telegram so we can include it
                 buy_price: Optional[float] = None
