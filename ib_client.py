@@ -44,13 +44,24 @@ class IBClient:
     # ------------------------------------------------------------------
 
     def _ensure_connected(self) -> Any:
-        """Connect or reconnect to IB Gateway (synchronous)."""
+        """Connect or reconnect to IB Gateway (synchronous).
+
+        ib_insync requires an event loop in its thread. When called via
+        asyncio.to_thread() the worker thread has no loop, so we create one.
+        """
         try:
             from ib_insync import IB  # type: ignore
         except ImportError as exc:
             raise RuntimeError(
                 "ib_insync is not installed. Run: pip install ib_insync"
             ) from exc
+
+        # Ensure an event loop exists in this thread (ib_insync needs one)
+        try:
+            asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
 
         if self._ib is None:
             self._ib = IB()
