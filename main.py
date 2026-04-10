@@ -36,6 +36,7 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     mode.add_argument("--backtest", action="store_true", help="Run historical backtest.")
     p.add_argument("--from", dest="from_date", default=None, help="Backtest start date (YYYY-MM-DD).")
     p.add_argument("--to", dest="to_date", default=None, help="Backtest end date (YYYY-MM-DD).")
+    p.add_argument("--llm", action="store_true", help="Use LLM (Sentry-1 + Ranker) in backtest.")
     p.add_argument("--log-level", default=None, help="Log level (DEBUG, INFO, WARNING, ERROR).")
     return p.parse_args(argv)
 
@@ -114,6 +115,7 @@ async def _run_backtest(
     config: RuntimeConfig,
     from_date: Optional[str],
     to_date: Optional[str],
+    use_llm: bool = False,
 ) -> None:
     """Run historical backtest over a date range."""
     from backtester import Backtester, print_backtest_report
@@ -140,6 +142,10 @@ async def _run_backtest(
             keyword_threshold=config.keyword_score_threshold,
             edgar_forms=config.edgar_forms,
             ib_client=ib_client,
+            use_llm=use_llm,
+            openai_api_key=config.openai_api_key,
+            sentry1_model=config.sentry1_model,
+            ranker_model=config.ranker_model,
         )
         report = await bt.run(from_date, to_date)
 
@@ -201,7 +207,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     try:
         if args.backtest:
-            asyncio.run(_run_backtest(config, args.from_date, args.to_date))
+            asyncio.run(_run_backtest(config, args.from_date, args.to_date, args.llm))
         elif args.eod:
             asyncio.run(_run_eod(config))
         elif args.continuous:

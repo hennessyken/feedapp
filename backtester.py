@@ -163,6 +163,10 @@ class Backtester:
         keyword_threshold: int = 30,
         edgar_forms: str = "8-K,6-K,13D,13D/A,13G,13G/A",
         ib_client: Any = None,
+        use_llm: bool = False,
+        openai_api_key: str = "",
+        sentry1_model: str = "gpt-5-nano",
+        ranker_model: str = "gpt-5-mini",
     ) -> None:
         self._db_path = db_path
         self._sec_user_agent = sec_user_agent
@@ -171,6 +175,10 @@ class Backtester:
         self._screener = KeywordScreener()
         self._scorer = DeterministicEventScorer()
         self._ib_client = ib_client
+        self._use_llm = use_llm
+        self._openai_api_key = openai_api_key
+        self._sentry1_model = sentry1_model
+        self._ranker_model = ranker_model
 
     async def run(
         self,
@@ -181,14 +189,18 @@ class Backtester:
 
         Returns summary statistics and detailed results.
         """
-        logger.info("Backtest: %s to %s", start_date, end_date)
+        mode = "LLM" if self._use_llm else "keyword-only"
+        logger.info("Backtest (%s): %s to %s", mode, start_date, end_date)
 
         # Phase 1: Fetch historical items
         items = await self._fetch_historical(start_date, end_date)
         logger.info("Fetched %d historical items", len(items))
 
-        # Phase 2: Screen and score
-        signals = self._screen_and_score(items)
+        # Phase 2: Screen and score (optionally with LLM)
+        if self._use_llm:
+            signals = await self._screen_and_score_llm(items)
+        else:
+            signals = self._screen_and_score(items)
         logger.info("Screened to %d qualifying signals", len(signals))
 
         # Phase 3: Get historical prices and calculate returns
@@ -403,6 +415,207 @@ class Backtester:
                 "matched_keywords": screen.matched_keywords,
             })
 
+        return signals
+
+    async def _screen_and_score_llm(
+        self, items: List[FeedResult],
+    ) -> List[Dict[str, Any]]:
+        """Run keyword screening + LLM ticker resolve + Sentry-1 + Ranker."""
+        from application import Sentry1Request, RankerRequest
+        from llm import OpenAiRegulatoryLlmGateway, OpenAiModels
+        from domain import DeterministicScoring, DecisionInputs, SignalDecisionPolicy
+
+        signals = []
+        llm_stats = {"ticker_resolved": 0, "sentry_passed": 0, "sentry_rejected": 0,
+                     "ranker_ok": 0, "ranker_fail": 0, "skipped_no_ticker": 0}
+
+        timeout = httpx.Timeout(timeout=30.0)
+        async with httpx.AsyncClient(timeout=timeout) as http:
+            llm = OpenAiRegulatoryLlmGateway(
+                http=http,
+                api_key=self._openai_api_key,
+                models=OpenAiModels(
+                    sentry1=self._sentry1_model,
+                    ranker=self._ranker_model,
+                ),
+                timeout_seconds=30,
+            )
+            policy = SignalDecisionPolicy()
+
+            for i, item in enumerate(items):
+                screen = self._screener.screen(item.title, item.content_snippet or "")
+
+                if screen.vetoed or screen.score < self._keyword_threshold:
+                    continue
+
+                # Extract ticker from metadata
+                meta = item.metadata or {}
+                ticker = str(
+                    meta.get("ticker") or meta.get("symbol") or ""
+                ).upper().strip()
+                company_name = str(
+                    meta.get("company_name") or meta.get("entity_name") or ""
+                ).strip()
+
+                # LLM ticker resolution if needed
+                if not ticker:
+                    try:
+                        from pipeline import _resolve_ticker_llm
+                        resolved = await _resolve_ticker_llm(
+                            http, self._openai_api_key,
+                            item.title, item.content_snippet or "",
+                            item.feed_source,
+                        )
+                        if resolved and resolved.get("ticker"):
+                            ticker = resolved["ticker"]
+                            if not company_name:
+                                company_name = resolved.get("company", "")
+                            llm_stats["ticker_resolved"] += 1
+                    except Exception:
+                        pass
+
+                if not ticker:
+                    llm_stats["skipped_no_ticker"] += 1
+                    continue
+
+                if not company_name:
+                    company_name = ticker
+
+                # Compute freshness / published date
+                age_h: Optional[float] = None
+                published_date = ""
+                if item.published_at:
+                    try:
+                        pub = datetime.fromisoformat(
+                            str(item.published_at).replace("Z", "+00:00")
+                        )
+                        if pub.tzinfo is None:
+                            pub = pub.replace(tzinfo=timezone.utc)
+                        published_date = pub.strftime("%Y-%m-%d")
+                        age_h = 1.0
+                    except Exception:
+                        pass
+                freshness_mult = freshness_decay(age_h)
+
+                excerpt = f"{item.title}\n\n{item.content_snippet or ''}"[:12_000]
+
+                # Sentry-1 gate
+                try:
+                    sentry_result = await llm.sentry1(
+                        Sentry1Request(
+                            ticker=ticker,
+                            company_name=company_name,
+                            home_ticker="",
+                            isin="",
+                            doc_title=item.title,
+                            doc_source=item.feed_source,
+                            document_text=excerpt,
+                        )
+                    )
+
+                    if sentry_result.company_probability < 60 or sentry_result.price_probability < 50:
+                        llm_stats["sentry_rejected"] += 1
+                        continue
+
+                    llm_stats["sentry_passed"] += 1
+                except Exception as e:
+                    logger.debug("Sentry-1 failed for %s: %s", ticker, e)
+                    continue
+
+                # Ranker
+                event_type = screen.event_category
+                try:
+                    extraction = await llm.ranker(
+                        RankerRequest(
+                            ticker=ticker,
+                            company_name=company_name,
+                            doc_title=item.title,
+                            doc_source=item.feed_source,
+                            doc_url=item.url,
+                            published_at=(
+                                datetime.fromisoformat(
+                                    item.published_at.replace("Z", "+00:00")
+                                ) if item.published_at else None
+                            ),
+                            document_text=excerpt,
+                            dossier={"regulatory_document": {
+                                "source": item.feed_source,
+                                "title": item.title,
+                                "url": item.url,
+                            }},
+                            sentry1={
+                                "keyword_score": screen.score,
+                                "event_category": screen.event_category,
+                                "matched_keywords": screen.matched_keywords,
+                            },
+                            form_type="",
+                            base_form_type="",
+                        )
+                    )
+                    event_type = extraction.event_type
+                    llm_stats["ranker_ok"] += 1
+
+                    scoring = self._scorer.score(
+                        extraction={
+                            "event_type": extraction.event_type,
+                            "numeric_terms": extraction.numeric_terms,
+                            "risk_flags": extraction.risk_flags,
+                            "evidence_spans": extraction.evidence_spans,
+                        },
+                        doc_source=item.feed_source,
+                        freshness_mult=freshness_mult,
+                        dossier={},
+                    )
+                except Exception as e:
+                    logger.debug("Ranker failed for %s: %s", ticker, e)
+                    llm_stats["ranker_fail"] += 1
+                    scoring = self._scorer.score(
+                        extraction={
+                            "event_type": screen.event_category,
+                            "keyword_score": screen.score,
+                            "evidence_spans": None,
+                        },
+                        doc_source=item.feed_source,
+                        freshness_mult=freshness_mult,
+                        dossier={},
+                    )
+
+                polarity = _classify_polarity(event_type)
+                impact = _classify_impact(scoring.impact_score)
+
+                # Log progress
+                if (i + 1) % 25 == 0:
+                    logger.info(
+                        "  LLM screening: %d/%d items processed", i + 1, len(items),
+                    )
+
+                signals.append({
+                    "item_id": item.item_id,
+                    "feed_source": item.feed_source,
+                    "title": item.title,
+                    "url": item.url,
+                    "published_date": published_date,
+                    "ticker": ticker,
+                    "company_name": company_name,
+                    "event_type": event_type,
+                    "polarity": polarity,
+                    "impact": impact,
+                    "keyword_score": screen.score,
+                    "impact_score": scoring.impact_score,
+                    "confidence": scoring.confidence,
+                    "action": str(scoring.action),
+                    "matched_keywords": screen.matched_keywords,
+                    "sentry1_passed": True,
+                    "llm_scored": True,
+                })
+
+        logger.info(
+            "LLM screening complete: %d signals | ticker_resolved=%d sentry_passed=%d "
+            "sentry_rejected=%d ranker_ok=%d ranker_fail=%d skipped_no_ticker=%d",
+            len(signals), llm_stats["ticker_resolved"], llm_stats["sentry_passed"],
+            llm_stats["sentry_rejected"], llm_stats["ranker_ok"],
+            llm_stats["ranker_fail"], llm_stats["skipped_no_ticker"],
+        )
         return signals
 
     async def _price_and_evaluate(
