@@ -298,57 +298,52 @@ class DataCollector:
             logger.error("IB client required for price data — set IB_ENABLED=true")
             return {"tickers_total": 0, "error": "no_ib_client"}
 
-        # Build per-ticker date ranges from signals, clamped to analysis window
+        # Build per-signal fetch windows: 2 days before + 20 days after each signal
+        # Deduplicate by (ticker, date) so we don't re-fetch overlapping windows
         signals = await self._db.get_all_backtest_signals()
         analysis_start = start_date
         analysis_end = end_date
-        ticker_dates: Dict[str, Tuple[str, str]] = {}
+
+        # Collect all (ticker, trading_day) pairs we need
+        needed: Dict[str, set] = {}  # ticker -> set of dates to fetch
         for sig in signals:
             ticker = sig["ticker"]
             sig_date = sig["signal_date"]
-            # Clamp to analysis window — ignore signals with old/future dates
             if sig_date < analysis_start or sig_date > analysis_end:
                 continue
-            if ticker not in ticker_dates:
-                ticker_dates[ticker] = (sig_date, sig_date)
-            else:
-                old_start, old_end = ticker_dates[ticker]
-                ticker_dates[ticker] = (min(old_start, sig_date), max(old_end, sig_date))
+            if ticker not in needed:
+                needed[ticker] = set()
+            sig_dt = datetime.strptime(sig_date, "%Y-%m-%d")
+            # 2 days before + 20 days after (calendar days, weekdays only fetched)
+            for offset in range(-3, 29):
+                day = sig_dt + timedelta(days=offset)
+                if day.weekday() < 5:  # skip weekends
+                    needed[ticker].add(day.strftime("%Y-%m-%d"))
 
-        stats = {"tickers_total": len(ticker_dates), "tickers_cached": 0,
+        stats = {"tickers_total": len(needed), "tickers_cached": 0,
                  "tickers_fetched": 0, "tickers_failed": 0, "price_rows_stored": 0,
                  "bar_size": "1 min", "requests_made": 0}
 
-        for i, (ticker, (first_sig, last_sig)) in enumerate(ticker_dates.items()):
-            # 2 days before first signal, 20 days after last signal
-            range_start = (
-                datetime.strptime(first_sig, "%Y-%m-%d") - timedelta(days=3)
-            ).strftime("%Y-%m-%d")
-            range_end = (
-                datetime.strptime(last_sig, "%Y-%m-%d") + timedelta(days=28)
-            ).strftime("%Y-%m-%d")
+        for i, (ticker, dates_needed) in enumerate(needed.items()):
+            # Check which dates we already have in the DB
+            dates_to_fetch = []
+            for d in sorted(dates_needed):
+                if not await self._db.has_backtest_prices(ticker, d, d):
+                    dates_to_fetch.append(d)
 
-            if await self._db.has_backtest_prices(ticker, range_start, range_end):
+            if not dates_to_fetch:
                 stats["tickers_cached"] += 1
                 continue
 
             logger.info(
-                "  Fetching 1-min bars for %s (%s to %s) [%d/%d]",
-                ticker, range_start, range_end, i + 1, len(ticker_dates),
+                "  Fetching 1-min bars for %s (%d days needed, %d cached) [%d/%d]",
+                ticker, len(dates_to_fetch), len(dates_needed) - len(dates_to_fetch),
+                i + 1, len(needed),
             )
 
-            # Fetch one trading day at a time (IB 1-min limit: "1 D" per request)
             total_rows = 0
-            current = datetime.strptime(range_start, "%Y-%m-%d")
-            end_dt = datetime.strptime(range_end, "%Y-%m-%d")
-
-            while current <= end_dt:
-                # Skip weekends
-                if current.weekday() >= 5:
-                    current += timedelta(days=1)
-                    continue
-
-                end_str = current.strftime("%Y%m%d 23:59:59 US/Eastern")
+            for d in dates_to_fetch:
+                end_str = f"{d.replace('-', '')} 23:59:59 US/Eastern"
 
                 try:
                     bars = await self._ib_client.get_historical(
@@ -373,10 +368,7 @@ class DataCollector:
                         inserted = await self._db.upsert_backtest_prices(ticker, rows)
                         total_rows += inserted
                 except Exception as e:
-                    logger.debug("IB 1-min fetch failed for %s on %s: %s",
-                                 ticker, current.strftime("%Y-%m-%d"), e)
-
-                current += timedelta(days=1)
+                    logger.debug("IB 1-min fetch failed for %s on %s: %s", ticker, d, e)
 
                 # IB pacing: max 60 requests per 10 min = 1 per 10s, use 11s for safety
                 await asyncio.sleep(11.0)
