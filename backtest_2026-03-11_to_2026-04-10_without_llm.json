@@ -1,92 +1,82 @@
 {
   "period": "2026-03-11 to 2026-04-10",
-  "total_signals": 84,
+  "total_signals": 88,
   "by_hold_period": {
     "same_day_close": {
-      "count": 84,
-      "avg_return": 0.0278,
-      "median_return": 0.2304,
-      "win_rate": 56.0,
+      "count": 88,
+      "avg_return": -0.0222,
+      "median_return": 0.0608,
+      "win_rate": 53.4,
       "best": 3.6312,
-      "worst": -8.7838,
-      "total_return": 2.3329
+      "worst": -2.9887,
+      "total_return": -1.9566
     },
     "next_day_close": {
-      "count": 84,
-      "avg_return": 0.0241,
-      "median_return": -0.11,
-      "win_rate": 45.2,
+      "count": 81,
+      "avg_return": 0.1778,
+      "median_return": 0.1754,
+      "win_rate": 53.1,
       "best": 4.6114,
       "worst": -5.0723,
-      "total_return": 2.0249
+      "total_return": 14.3994
     },
     "2_day": {
-      "count": 75,
-      "avg_return": 0.1361,
-      "median_return": -0.4415,
-      "win_rate": 42.7,
-      "best": 15.1667,
-      "worst": -17.089,
-      "total_return": 10.2101
+      "count": 73,
+      "avg_return": 0.0989,
+      "median_return": -0.3764,
+      "win_rate": 42.5,
+      "best": 5.235,
+      "worst": -6.6345,
+      "total_return": 7.2207
     },
     "5_day": {
-      "count": 61,
-      "avg_return": 0.3472,
-      "median_return": 0.4192,
-      "win_rate": 54.1,
+      "count": 63,
+      "avg_return": 0.6601,
+      "median_return": 0.5263,
+      "win_rate": 57.1,
       "best": 8.1482,
-      "worst": -16.0473,
-      "total_return": 21.1786
+      "worst": -7.3674,
+      "total_return": 41.5862
     },
     "10_day": {
       "count": 44,
-      "avg_return": 2.147,
-      "median_return": 2.3132,
-      "win_rate": 70.5,
+      "avg_return": 2.0271,
+      "median_return": 1.3799,
+      "win_rate": 65.9,
       "best": 9.8499,
-      "worst": -6.3626,
-      "total_return": 94.4698
+      "worst": -7.5439,
+      "total_return": 89.1941
     }
   },
   "by_event_type": {
-    "PARSE_ERROR": {
-      "count": 5,
-      "avg_return": 0.2739,
-      "win_rate": 40.0
+    "REGULATORY_DECISION": {
+      "count": 65,
+      "avg_return": 0.2439,
+      "win_rate": 50.8
     },
     "CLINICAL_TRIAL": {
-      "count": 4,
-      "avg_return": 0.2619,
-      "win_rate": 50.0
-    },
-    "REGULATORY_DECISION": {
-      "count": 75,
-      "avg_return": -0.0052,
-      "win_rate": 45.3
+      "count": 16,
+      "avg_return": -0.0908,
+      "win_rate": 62.5
     }
   },
   "by_source": {
     "clinical_trials": {
-      "count": 5,
-      "avg_return": 0.5339,
-      "win_rate": 60.0
+      "count": 16,
+      "avg_return": -0.0908,
+      "win_rate": 62.5
     },
     "ema": {
-      "count": 79,
-      "avg_return": -0.0082,
-      "win_rate": 44.3
+      "count": 65,
+      "avg_return": 0.2439,
+      "win_rate": 50.8
     }
   },
   "by_polarity": {
     "positive": {
-      "count": 79,
-      "avg_return": 0.0083,
-      "win_rate": 45.6
-    },
-    "neutral": {
-      "count": 5,
-      "avg_return": 0.2739,
-      "win_rate": 40.0
+      "count": 81,
+      "avg_return": 0.1778,
+      "win_rate": 53.1
     }
   },
   "top_winners": [
@@ -111,11 +101,20 @@
     {
       "ticker": "SNY",
       "company": "Sanofi Winthrop Industrie",
-      "event": "PARSE_ERROR",
+      "event": "REGULATORY_DECISION",
       "date": "2026-03-24",
       "source": "ema",
       "next_day_return": 3.3221,
       "5_day_return": 8.1482
+    },
+    {
+      "ticker": "UCBJY",
+      "company": "UCB Pharma S.A.",
+      "event": "REGULATORY_DECISION",
+      "date": "2026-04-09",
+      "source": "ema",
+      "next_day_return": 3.1557,
+      "5_day_return": null
     },
     {
       "ticker": "AZN",
@@ -157,47 +156,74 @@
       "ticker": "UCBJY",
       "company": "UCB Pharma S.A.",
       "event": "REGULATORY_DECISION",
-      "date": "2026-04-09",
-      "source": "ema",
-      "next_day_return": 2.5848,
-      "5_day_return": null
-    },
-    {
-      "ticker": "MRK",
-      "company": "Merck Europe B.V.",
-      "event": "REGULATORY_DECISION",
-      "date": "2026-04-08",
-      "source": "ema",
-      "next_day_return": 2.5753,
-      "5_day_return": null
-    },
-    {
-      "ticker": "UCBJY",
-      "company": "UCB Pharma S.A.",
-      "event": "REGULATORY_DECISION",
       "date": "2026-04-07",
       "source": "ema",
       "next_day_return": 2.4491,
       "5_day_return": null
+    },
+    {
+      "ticker": "OTSKY",
+      "company": "Otsuka Pharmaceutical Netherlands B.V.",
+      "event": "REGULATORY_DECISION",
+      "date": "2026-03-23",
+      "source": "ema",
+      "next_day_return": 2.3504,
+      "5_day_return": 6.5629
     }
   ],
   "top_losers": [
     {
+      "ticker": "AZN",
+      "company": "AstraZeneca AB",
+      "event": "REGULATORY_DECISION",
+      "date": "2026-03-12",
+      "source": "ema",
+      "next_day_return": -2.068,
+      "5_day_return": -2.5682
+    },
+    {
       "ticker": "BMY",
       "company": "Bristol-Myers Squibb Pharma EEIG",
-      "event": "PARSE_ERROR",
+      "event": "REGULATORY_DECISION",
       "date": "2026-03-18",
       "source": "ema",
       "next_day_return": -2.0893,
       "5_day_return": -0.6908
     },
     {
-      "ticker": "OGN",
-      "company": "Organon N.V.",
+      "ticker": "GSK",
+      "company": "GlaxoSmithKline Trading Services Limited",
       "event": "REGULATORY_DECISION",
-      "date": "2026-04-07",
+      "date": "2026-03-12",
       "source": "ema",
-      "next_day_return": -2.3333,
+      "next_day_return": -2.1624,
+      "5_day_return": -4.0315
+    },
+    {
+      "ticker": "SNY",
+      "company": "Provention Bio, a Sanofi Company",
+      "event": "CLINICAL_TRIAL",
+      "date": "2026-04-03",
+      "source": "clinical_trials",
+      "next_day_return": -2.3358,
+      "5_day_return": null
+    },
+    {
+      "ticker": "PFE",
+      "company": "Pfizer",
+      "event": "CLINICAL_TRIAL",
+      "date": "2026-04-02",
+      "source": "clinical_trials",
+      "next_day_return": -2.3509,
+      "5_day_return": -5.4211
+    },
+    {
+      "ticker": "BMY",
+      "company": "Bristol-Myers Squibb",
+      "event": "CLINICAL_TRIAL",
+      "date": "2026-04-06",
+      "source": "clinical_trials",
+      "next_day_return": -2.4526,
       "5_day_return": null
     },
     {
@@ -210,24 +236,6 @@
       "5_day_return": -3.4116
     },
     {
-      "ticker": "OGN",
-      "company": "Organon N.V.",
-      "event": "REGULATORY_DECISION",
-      "date": "2026-03-19",
-      "source": "ema",
-      "next_day_return": -2.7419,
-      "5_day_return": -2.4193
-    },
-    {
-      "ticker": "OGN",
-      "company": "Organon N.V.",
-      "event": "REGULATORY_DECISION",
-      "date": "2026-03-19",
-      "source": "ema",
-      "next_day_return": -2.7419,
-      "5_day_return": -2.4193
-    },
-    {
       "ticker": "ALPMY",
       "company": "Astellas Pharma Europe B.V.",
       "event": "REGULATORY_DECISION",
@@ -235,15 +243,6 @@
       "source": "ema",
       "next_day_return": -2.7886,
       "5_day_return": 3.6965
-    },
-    {
-      "ticker": "IONS",
-      "company": "Akcea Therapeutics Ireland Limited",
-      "event": "REGULATORY_DECISION",
-      "date": "2026-03-23",
-      "source": "ema",
-      "next_day_return": -3.5571,
-      "5_day_return": 0.3737
     },
     {
       "ticker": "UCBJY",
@@ -255,15 +254,6 @@
       "5_day_return": -3.6319
     },
     {
-      "ticker": "ALM",
-      "company": "Almirall, S.A.",
-      "event": "REGULATORY_DECISION",
-      "date": "2026-03-20",
-      "source": "ema",
-      "next_day_return": -4.6734,
-      "5_day_return": -16.0473
-    },
-    {
       "ticker": "RHHBY",
       "company": "Roche Registration GmbH",
       "event": "REGULATORY_DECISION",
@@ -273,5 +263,5 @@
       "5_day_return": -7.3674
     }
   ],
-  "signal_count": 84
+  "signal_count": 88
 }

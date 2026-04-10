@@ -153,7 +153,8 @@ async def _run_backtest(
         print_backtest_report(report)
 
         # Save full JSON report
-        report_file = f"backtest_{from_date}_to_{to_date}.json"
+        suffix = "with_llm" if use_llm else "without_llm"
+        report_file = f"backtest_{from_date}_to_{to_date}_{suffix}.json"
         report_json = {k: v for k, v in report.items() if k != "signals"}
         report_json["signal_count"] = len(report.get("signals", []))
         with open(report_file, "w") as f:
