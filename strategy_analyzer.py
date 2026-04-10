@@ -348,7 +348,7 @@ class DataCollector:
                     current += timedelta(days=1)
                     continue
 
-                end_str = current.strftime("%Y%m%d-23:59:59 US/Eastern")
+                end_str = current.strftime("%Y%m%d 23:59:59 US/Eastern")
 
                 try:
                     bars = await self._ib_client.get_historical(
