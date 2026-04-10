@@ -61,6 +61,65 @@ def _us_market_open(now_et: datetime) -> bool:
     return 570 <= t < 960  # 9:30 (570 min) to 16:00 (960 min)
 
 
+async def _resolve_ticker_llm(
+    http: httpx.AsyncClient,
+    api_key: str,
+    title: str,
+    snippet: str,
+    feed_source: str,
+) -> Optional[Dict[str, Any]]:
+    """One cheap LLM call to extract company name and US ticker.
+
+    Returns {"ticker": "AAPL", "company": "Apple Inc", "usage": {...}}
+    or None if no ticker can be resolved.
+    """
+    from llm import call_openai_responses_api
+
+    excerpt = f"Source: {feed_source}\nTitle: {title}\n\n{snippet}"[:2000]
+
+    prompt = (
+        "Extract the primary publicly-traded company from this regulatory document.\n"
+        "Return ONLY valid JSON: {\"company\": \"...\", \"ticker\": \"...\"}\n"
+        "Rules:\n"
+        "- ticker must be a US stock ticker (NYSE/NASDAQ/OTC). If the company is "
+        "non-US, use the US ADR ticker if one exists.\n"
+        "- If you cannot determine a US-traded ticker with high confidence, "
+        'return {"company": "", "ticker": ""}\n'
+        "- Do NOT guess. Only return a ticker you are confident about.\n\n"
+        f"Document:\n{excerpt}"
+    )
+
+    result = await call_openai_responses_api(
+        http,
+        model="gpt-5-nano",
+        system="You extract company names and US stock tickers from regulatory documents. JSON only.",
+        user=prompt,
+        max_tokens=60,
+        api_key=api_key,
+        timeout=10,
+        return_usage=True,
+    )
+
+    raw_text, usage = result  # type: ignore[misc]
+
+    import json as _json
+    from llm import _strip_fences
+    cleaned = _strip_fences(str(raw_text or ""))
+
+    try:
+        parsed = _json.loads(cleaned)
+    except Exception:
+        return None
+
+    ticker = str(parsed.get("ticker") or "").strip().upper()
+    company = str(parsed.get("company") or "").strip()
+
+    if not ticker or len(ticker) > 6:
+        return None
+
+    return {"ticker": ticker, "company": company, "usage": usage}
+
+
 class PipelineConfig:
     """Configuration for the feed pipeline."""
 
@@ -355,13 +414,49 @@ class FeedPipeline:
 
                 # Extract ticker / company from metadata or title
                 meta = item.metadata or {}
-                ticker = (
-                    str(meta.get("ticker") or meta.get("symbol") or "").upper().strip()
-                    or item.feed_source.upper()
-                )
+                ticker = str(
+                    meta.get("ticker") or meta.get("symbol") or ""
+                ).upper().strip()
                 company_name = str(
-                    meta.get("company_name") or meta.get("entity_name") or ticker
-                )
+                    meta.get("company_name") or meta.get("entity_name") or ""
+                ).strip()
+
+                # LLM ticker resolution — if metadata has no ticker, ask gpt-5-nano
+                if not ticker and llm is not None:
+                    try:
+                        resolved = await _resolve_ticker_llm(
+                            http, self._config.openai_api_key,
+                            item.title, item.content_snippet or "",
+                            item.feed_source,
+                        )
+                        if resolved:
+                            ticker = resolved["ticker"]
+                            if not company_name:
+                                company_name = resolved["company"]
+                            logger.info(
+                                "LLM ticker resolved: %s → %s (%s)",
+                                item.title[:50], ticker, company_name,
+                            )
+                            # Record spend
+                            if self._spend_tracker and resolved.get("usage"):
+                                await self._spend_tracker.record(
+                                    "gpt-5-nano", resolved["usage"],
+                                    call_type="ticker_resolve",
+                                )
+                    except Exception as e:
+                        logger.debug("LLM ticker resolution failed: %s", e)
+
+                # If still no ticker, skip — can't trade or price it
+                if not ticker:
+                    logger.info(
+                        "SKIPPED (no ticker): %s [%s]",
+                        item.title[:60], item.feed_source,
+                    )
+                    stats["skipped"] += 1
+                    continue
+
+                if not company_name:
+                    company_name = ticker
 
                 llm_ranker_succeeded = False
                 sentry1_passed = False

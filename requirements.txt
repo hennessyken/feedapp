@@ -6,3 +6,5 @@ ib_insync>=0.9.86
 python-dotenv==1.1.1
 tweepy==4.14.0
 uvicorn==0.30.0
+yfinance>=0.2.36
+pandas>=2.0.0

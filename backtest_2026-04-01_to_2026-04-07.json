@@ -1,0 +1,267 @@
+{
+  "period": "2026-04-01 to 2026-04-07",
+  "total_signals": 23,
+  "by_hold_period": {
+    "same_day_close": {
+      "count": 23,
+      "avg_return": 0.5388,
+      "median_return": 0.6433,
+      "win_rate": 73.9,
+      "best": 2.2128,
+      "worst": -2.4526,
+      "total_return": 12.3931
+    },
+    "next_day_close": {
+      "count": 23,
+      "avg_return": 0.9907,
+      "median_return": 1.04,
+      "win_rate": 82.6,
+      "best": 3.2455,
+      "worst": -2.4526,
+      "total_return": 22.7868
+    },
+    "2_day": {
+      "count": 14,
+      "avg_return": 1.2151,
+      "median_return": 0.592,
+      "win_rate": 78.6,
+      "best": 4.6356,
+      "worst": -0.8772,
+      "total_return": 17.011
+    },
+    "5_day": {
+      "count": 6,
+      "avg_return": 1.4827,
+      "median_return": 2.5907,
+      "win_rate": 83.3,
+      "best": 4.6358,
+      "worst": -2.7574,
+      "total_return": 8.8963
+    },
+    "10_day": {
+      "count": 6,
+      "avg_return": 0.2518,
+      "median_return": 0.4754,
+      "win_rate": 50.0,
+      "best": 9.1043,
+      "worst": -7.5439,
+      "total_return": 1.5105
+    }
+  },
+  "by_event_type": {
+    "REGULATORY_DECISION": {
+      "count": 11,
+      "avg_return": 1.3043,
+      "win_rate": 81.8
+    },
+    "CLINICAL_TRIAL": {
+      "count": 12,
+      "avg_return": 0.7033,
+      "win_rate": 83.3
+    }
+  },
+  "by_source": {
+    "clinical_trials": {
+      "count": 12,
+      "avg_return": 0.7033,
+      "win_rate": 83.3
+    },
+    "ema": {
+      "count": 11,
+      "avg_return": 1.3043,
+      "win_rate": 81.8
+    }
+  },
+  "by_polarity": {
+    "positive": {
+      "count": 23,
+      "avg_return": 0.9907,
+      "win_rate": 82.6
+    }
+  },
+  "top_winners": [
+    {
+      "ticker": "UCBJY",
+      "company": "UCB Pharma S.A.",
+      "event": "REGULATORY_DECISION",
+      "date": "2026-04-09",
+      "source": "ema",
+      "next_day_return": 3.2455,
+      "5_day_return": null
+    },
+    {
+      "ticker": "AZN",
+      "company": "AstraZeneca AB",
+      "event": "REGULATORY_DECISION",
+      "date": "2026-04-07",
+      "source": "ema",
+      "next_day_return": 2.798,
+      "5_day_return": null
+    },
+    {
+      "ticker": "UCBJY",
+      "company": "UCB Pharma S.A.",
+      "event": "REGULATORY_DECISION",
+      "date": "2026-04-07",
+      "source": "ema",
+      "next_day_return": 2.4491,
+      "5_day_return": null
+    },
+    {
+      "ticker": "GSK",
+      "company": "GlaxoSmithKline Trading Services Limited",
+      "event": "REGULATORY_DECISION",
+      "date": "2026-04-08",
+      "source": "ema",
+      "next_day_return": 2.3321,
+      "5_day_return": null
+    },
+    {
+      "ticker": "RHHBY",
+      "company": "Hoffmann-La Roche",
+      "event": "CLINICAL_TRIAL",
+      "date": "2026-04-09",
+      "source": "clinical_trials",
+      "next_day_return": 2.2704,
+      "5_day_return": null
+    },
+    {
+      "ticker": "RHHBY",
+      "company": "Hoffmann-La Roche",
+      "event": "CLINICAL_TRIAL",
+      "date": "2026-04-09",
+      "source": "clinical_trials",
+      "next_day_return": 2.2704,
+      "5_day_return": null
+    },
+    {
+      "ticker": "NVS",
+      "company": "Novartis Pharmaceuticals",
+      "event": "CLINICAL_TRIAL",
+      "date": "2026-04-09",
+      "source": "clinical_trials",
+      "next_day_return": 1.7806,
+      "5_day_return": null
+    },
+    {
+      "ticker": "NVS",
+      "company": "Novartis Europharm Limited",
+      "event": "REGULATORY_DECISION",
+      "date": "2026-04-09",
+      "source": "ema",
+      "next_day_return": 1.7806,
+      "5_day_return": null
+    },
+    {
+      "ticker": "NVO",
+      "company": "Novo Nordisk A/S",
+      "event": "CLINICAL_TRIAL",
+      "date": "2026-04-09",
+      "source": "clinical_trials",
+      "next_day_return": 1.5871,
+      "5_day_return": null
+    },
+    {
+      "ticker": "NVO",
+      "company": "Novo Nordisk A/S",
+      "event": "REGULATORY_DECISION",
+      "date": "2026-04-09",
+      "source": "ema",
+      "next_day_return": 1.5871,
+      "5_day_return": null
+    }
+  ],
+  "top_losers": [
+    {
+      "ticker": "NVS",
+      "company": "Novartis Pharmaceuticals",
+      "event": "CLINICAL_TRIAL",
+      "date": "2025-11-12",
+      "source": "clinical_trials",
+      "next_day_return": 0.7562,
+      "5_day_return": -2.7574
+    },
+    {
+      "ticker": "BMY",
+      "company": "Bristol-Myers Squibb",
+      "event": "CLINICAL_TRIAL",
+      "date": "2023-07-27",
+      "source": "clinical_trials",
+      "next_day_return": 0.6721,
+      "5_day_return": 0.377
+    },
+    {
+      "ticker": "PFE",
+      "company": "Pfizer",
+      "event": "CLINICAL_TRIAL",
+      "date": "2025-08-14",
+      "source": "clinical_trials",
+      "next_day_return": 0.1993,
+      "5_day_return": 2.5907
+    },
+    {
+      "ticker": "BAYRY",
+      "company": "Bayer",
+      "event": "CLINICAL_TRIAL",
+      "date": "2021-05-17",
+      "source": "clinical_trials",
+      "next_day_return": 0.1754,
+      "5_day_return": 0.5263
+    },
+    {
+      "ticker": "BMY",
+      "company": "Bristol-Myers Squibb Pharma EEIG",
+      "event": "REGULATORY_DECISION",
+      "date": "2026-04-07",
+      "source": "ema",
+      "next_day_return": 0.1353,
+      "5_day_return": null
+    },
+    {
+      "ticker": "SNY",
+      "company": "Sanofi Winthrop Industrie",
+      "event": "REGULATORY_DECISION",
+      "date": "2026-04-07",
+      "source": "ema",
+      "next_day_return": 0.1062,
+      "5_day_return": null
+    },
+    {
+      "ticker": "SNY",
+      "company": "Sanofi Winthrop Industrie",
+      "event": "REGULATORY_DECISION",
+      "date": "2026-04-08",
+      "source": "ema",
+      "next_day_return": -0.1485,
+      "5_day_return": null
+    },
+    {
+      "ticker": "MRK",
+      "company": "Merck Sharp & Dohme LLC",
+      "event": "CLINICAL_TRIAL",
+      "date": "2026-04-06",
+      "source": "clinical_trials",
+      "next_day_return": -0.9385,
+      "5_day_return": null
+    },
+    {
+      "ticker": "JNJ",
+      "company": "Janssen-Cilag International N.V.",
+      "event": "REGULATORY_DECISION",
+      "date": "2026-04-09",
+      "source": "ema",
+      "next_day_return": -0.978,
+      "5_day_return": null
+    },
+    {
+      "ticker": "BMY",
+      "company": "Bristol-Myers Squibb",
+      "event": "CLINICAL_TRIAL",
+      "date": "2026-04-06",
+      "source": "clinical_trials",
+      "next_day_return": -2.4526,
+      "5_day_return": null
+    }
+  ],
+  "signal_count": 23
+}

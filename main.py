@@ -33,6 +33,9 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     mode.add_argument("--once", action="store_true", help="Run a single poll cycle and exit (default).")
     mode.add_argument("--continuous", action="store_true", help="Poll continuously.")
     mode.add_argument("--eod", action="store_true", help="Run end-of-day sell price check and exit.")
+    mode.add_argument("--backtest", action="store_true", help="Run historical backtest.")
+    p.add_argument("--from", dest="from_date", default=None, help="Backtest start date (YYYY-MM-DD).")
+    p.add_argument("--to", dest="to_date", default=None, help="Backtest end date (YYYY-MM-DD).")
     p.add_argument("--log-level", default=None, help="Log level (DEBUG, INFO, WARNING, ERROR).")
     return p.parse_args(argv)
 
@@ -107,6 +110,54 @@ async def _run_eod(config: RuntimeConfig) -> None:
         await db.close()
 
 
+async def _run_backtest(
+    config: RuntimeConfig,
+    from_date: Optional[str],
+    to_date: Optional[str],
+) -> None:
+    """Run historical backtest over a date range."""
+    from backtester import Backtester, print_backtest_report
+    from datetime import timedelta
+
+    if not from_date:
+        from_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+    if not to_date:
+        to_date = datetime.now().strftime("%Y-%m-%d")
+
+    # Use IB for historical prices if available
+    ib_client = _make_ib_client(config)
+    if ib_client:
+        try:
+            await ib_client.connect()
+            logging.info("Using IB Gateway for historical prices")
+        except Exception as e:
+            logging.warning("IB connect failed: %s — falling back to Yahoo Finance", e)
+            ib_client = None
+
+    try:
+        bt = Backtester(
+            sec_user_agent=config.sec_user_agent,
+            keyword_threshold=config.keyword_score_threshold,
+            edgar_forms=config.edgar_forms,
+            ib_client=ib_client,
+        )
+        report = await bt.run(from_date, to_date)
+
+        # Print human-readable report
+        print_backtest_report(report)
+
+        # Save full JSON report
+        report_file = f"backtest_{from_date}_to_{to_date}.json"
+        report_json = {k: v for k, v in report.items() if k != "signals"}
+        report_json["signal_count"] = len(report.get("signals", []))
+        with open(report_file, "w") as f:
+            json.dump(report_json, f, indent=2, default=str)
+        logging.info("Full report saved to %s", report_file)
+    finally:
+        if ib_client:
+            await ib_client.disconnect()
+
+
 async def _run_continuous(config: RuntimeConfig) -> None:
     logging.info("Continuous mode (poll every %ds)", config.poll_interval_seconds)
     last_eod_date: Optional[str] = None
@@ -149,7 +200,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     _configure_logging(args.log_level or config.log_level)
 
     try:
-        if args.eod:
+        if args.backtest:
+            asyncio.run(_run_backtest(config, args.from_date, args.to_date))
+        elif args.eod:
             asyncio.run(_run_eod(config))
         elif args.continuous:
             asyncio.run(_run_continuous(config))

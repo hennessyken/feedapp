@@ -160,3 +160,83 @@ class IBClient:
         for ticker in tickers:
             results[ticker] = await self.get_price(ticker)
         return results
+
+    # ------------------------------------------------------------------
+    # Historical data
+    # ------------------------------------------------------------------
+
+    def _fetch_historical_sync(
+        self,
+        ticker: str,
+        end_date: str,
+        duration: str = "30 D",
+        bar_size: str = "1 day",
+    ) -> Optional[List[Dict[str, Any]]]:
+        """Synchronous historical data fetch. Returns list of bar dicts."""
+        from ib_insync import Stock  # type: ignore
+
+        ib = self._ensure_connected()
+        contract = Stock(ticker, "SMART", "USD")
+
+        try:
+            qualified = ib.qualifyContracts(contract)
+            if not qualified:
+                logger.warning("IB hist: contract not found for %s", ticker)
+                return None
+        except Exception as e:
+            logger.warning("IB hist: qualifyContracts failed for %s: %s", ticker, e)
+            return None
+
+        try:
+            bars = ib.reqHistoricalData(
+                contract,
+                endDateTime=end_date,
+                durationStr=duration,
+                barSizeSetting=bar_size,
+                whatToShow="TRADES",
+                useRTH=True,
+                formatDate=1,
+            )
+            if not bars:
+                return None
+
+            return [
+                {
+                    "date": str(bar.date)[:10],
+                    "Open": float(bar.open),
+                    "High": float(bar.high),
+                    "Low": float(bar.low),
+                    "Close": float(bar.close),
+                    "Volume": int(bar.volume),
+                }
+                for bar in bars
+            ]
+        except Exception as e:
+            logger.warning("IB hist: reqHistoricalData failed for %s: %s", ticker, e)
+            return None
+
+    async def get_historical(
+        self,
+        ticker: str,
+        end_date: str,
+        duration: str = "30 D",
+        bar_size: str = "1 day",
+    ) -> Optional[List[Dict[str, Any]]]:
+        """Get historical OHLCV bars. Returns list of dicts or None."""
+        t = (ticker or "").strip().upper()
+        if not t:
+            return None
+
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(
+                    self._fetch_historical_sync, t, end_date, duration, bar_size,
+                ),
+                timeout=30.0,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("IB hist: timed out for %s", t)
+            return None
+        except Exception as e:
+            logger.warning("IB hist: failed for %s: %s", t, e)
+            return None
