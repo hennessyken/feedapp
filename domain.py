@@ -405,17 +405,21 @@ NEGATIVE_POLARITY_EVENTS: Set[str] = {
 
 
 def freshness_decay(age_hours: Optional[float]) -> float:
-    """Deterministic freshness multiplier in [0.0, 1.0]."""
+    """Deterministic freshness multiplier in [0.0, 1.0].
+
+    Returns 0.80 when age is unknown — avoids punishing valid signals
+    with unparseable dates (0.20 was silently downranking them).
+    """
     try:
         if age_hours is None:
-            return 0.20
+            return 0.80
         h = float(age_hours)
         if h <= 0:
             return 1.0
         mult = math.exp(-h / 26.0)
         return float(max(0.20, min(1.0, mult)))
     except Exception:
-        return 0.20
+        return 0.80
 
 
 # ---------------------------------------------------------------------------

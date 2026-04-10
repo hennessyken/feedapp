@@ -29,6 +29,59 @@ logger = logging.getLogger(__name__)
 _EMA_MEDICINES_JSON = "https://www.ema.europa.eu/en/documents/report/medicines-output-medicines_json-report_en.json"
 _EMA_NEWS_JSON = "https://www.ema.europa.eu/en/documents/report/news-json-report_en.json"
 
+# MAH → US ticker for major pharma companies active in EU.
+_MAH_TICKERS: Dict[str, str] = {
+    "pfizer": "PFE",
+    "johnson & johnson": "JNJ",
+    "janssen": "JNJ",
+    "merck sharp & dohme": "MRK",
+    "merck sharp": "MRK",
+    "abbvie": "ABBV",
+    "eli lilly": "LLY",
+    "lilly": "LLY",
+    "bristol-myers squibb": "BMY",
+    "amgen": "AMGN",
+    "gilead": "GILD",
+    "regeneron": "REGN",
+    "moderna": "MRNA",
+    "novartis": "NVS",
+    "roche": "RHHBY",
+    "genentech": "RHHBY",
+    "astrazeneca": "AZN",
+    "sanofi": "SNY",
+    "gsk": "GSK",
+    "glaxosmithkline": "GSK",
+    "novo nordisk": "NVO",
+    "bayer": "BAYRY",
+    "takeda": "TAK",
+    "biogen": "BIIB",
+    "vertex": "VRTX",
+    "boehringer ingelheim": "PRIVATE",
+    "ucb": "UCBJY",
+    "ipsen": "IPSEY",
+    "servier": "PRIVATE",
+    "menarini": "PRIVATE",
+    "teva": "TEVA",
+    "sandoz": "SDZ",
+    "fresenius": "FSNUY",
+    "lundbeck": "HLUYY",
+    "astellas": "ALPMY",
+    "daiichi sankyo": "DSNKY",
+    "otsuka": "OTSKY",
+    "eisai": "ESALY",
+}
+
+
+def _lookup_mah_ticker(mah: str) -> str:
+    """Best-effort MAH → US ticker lookup."""
+    if not mah:
+        return ""
+    m = mah.lower().strip()
+    for key, ticker in _MAH_TICKERS.items():
+        if key in m:
+            return ticker if ticker != "PRIVATE" else ""
+    return ""
+
 
 class EmaFeedAdapter(BaseFeedAdapter):
     """Polls EMA JSON data for recent medicine decisions and news."""
@@ -212,6 +265,8 @@ class EmaFeedAdapter(BaseFeedAdapter):
                 "medicine_name": name,
                 "active_substance": inn,
                 "mah": mah,
+                "ticker": _lookup_mah_ticker(mah),
+                "company_name": mah,
                 "status": status,
                 "therapeutic_area": therapeutic_area,
                 "decision_date": decision_date,

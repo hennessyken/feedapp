@@ -569,20 +569,8 @@ class FeedPipeline:
                 except Exception as db_err:
                     logger.warning("Failed to persist signal analysis for %s: %s", ticker, db_err)
 
-                # ── Publish gate: medium/high impact, non-neutral, >70% conf ──
-                if final_action == "ignore":
-                    stats["ignored"] += 1
-                    continue
-                if final_confidence <= 70:
-                    logger.info("FILTERED %s: confidence %d%% <= 70%%", ticker, final_confidence)
-                    stats["ignored"] += 1
-                    continue
-                if impact_tier == "low":
-                    logger.info("FILTERED %s: impact %s (score=%d)", ticker, impact_tier, impact_out)
-                    stats["ignored"] += 1
-                    continue
-                if polarity == "neutral":
-                    logger.info("FILTERED %s: neutral polarity for %s", ticker, event_type)
+                # Skip ignored signals
+                if final_action == "ignore" or final_confidence < 55:
                     stats["ignored"] += 1
                     continue
 

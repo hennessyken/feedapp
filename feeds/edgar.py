@@ -13,6 +13,7 @@ All SEC/EDGAR data is US government work — public domain, no licence needed.
 """
 
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -129,9 +130,23 @@ class EdgarFeedAdapter(BaseFeedAdapter):
         return data.get("hits", {}).get("hits", [])
 
     def _parse_hit(self, acc_no: str, src: Dict[str, Any]) -> Optional[FeedResult]:
-        # display_names contains "Company (TICKER) (CIK ...)" — extract clean name
+        # display_names contains "Company (TICKER) (CIK ...)" — extract name + ticker
         display_names = src.get("display_names", [])
-        entity = display_names[0].split("(")[0].strip() if display_names else ""
+        dn = display_names[0] if display_names else ""
+        entity = dn.split("(")[0].strip()
+
+        # Extract ticker from parentheses: "Apple Inc (AAPL) (CIK ...)"
+        # Handles: (AAPL), (BRK.A), (F), skips (CIK ...), (The), (Services)
+        ticker = ""
+        paren_matches = re.findall(r"\(([^)]+)\)", dn)
+        for match in paren_matches:
+            m = match.strip().upper()
+            if m.startswith("CIK") or m.isdigit():
+                continue
+            # Ticker: 1-5 letters, optional dot + 1 letter suffix (BRK.A, BRK.B)
+            if re.fullmatch(r"[A-Z]{1,5}(?:\.[A-Z])?", m):
+                ticker = m
+                break
         form_type = src.get("form", "") or src.get("file_type", "")
         file_date = src.get("file_date", "")
         # items is a list of strings like ["1.01", "2.03", "9.01"]
@@ -187,6 +202,7 @@ class EdgarFeedAdapter(BaseFeedAdapter):
                 "accession_number": adsh,
                 "cik": cik,
                 "entity_name": entity,
+                "ticker": ticker,
                 "form_type": form_type,
                 "items": items_list,
                 "file_date": file_date,

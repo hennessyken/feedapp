@@ -27,6 +27,73 @@ logger = logging.getLogger(__name__)
 _FDA_PRESS_RSS = "https://www.fda.gov/about-fda/contact-fda/stay-informed/rss-feeds/press-releases/rss.xml"
 _OPENFDA_APPROVALS = "https://api.fda.gov/drug/drugsfda.json"
 
+# Major pharma manufacturer → US ticker mapping.
+# Covers ~90% of FDA approvals by volume.
+_PHARMA_TICKERS: Dict[str, str] = {
+    "pfizer": "PFE",
+    "johnson & johnson": "JNJ",
+    "janssen": "JNJ",
+    "merck": "MRK",
+    "merck sharp": "MRK",
+    "abbvie": "ABBV",
+    "eli lilly": "LLY",
+    "lilly": "LLY",
+    "bristol-myers squibb": "BMY",
+    "bristol myers squibb": "BMY",
+    "amgen": "AMGN",
+    "gilead": "GILD",
+    "regeneron": "REGN",
+    "moderna": "MRNA",
+    "novartis": "NVS",
+    "roche": "RHHBY",
+    "genentech": "RHHBY",
+    "astrazeneca": "AZN",
+    "sanofi": "SNY",
+    "gsk": "GSK",
+    "glaxosmithkline": "GSK",
+    "novo nordisk": "NVO",
+    "bayer": "BAYRY",
+    "takeda": "TAK",
+    "biogen": "BIIB",
+    "vertex": "VRTX",
+    "alexion": "AZN",
+    "illumina": "ILMN",
+    "intuitive surgical": "ISRG",
+    "edwards lifesciences": "EW",
+    "danaher": "DHR",
+    "thermo fisher": "TMO",
+    "abbott": "ABT",
+    "baxter": "BAX",
+    "medtronic": "MDT",
+    "stryker": "SYK",
+    "boston scientific": "BSX",
+    "becton dickinson": "BDX",
+    "zimmer biomet": "ZBH",
+    "seagen": "PFE",
+    "incyte": "INCY",
+    "jazz pharmaceuticals": "JAZZ",
+    "biomarin": "BMRN",
+    "alnylam": "ALNY",
+    "neurocrine": "NBIX",
+    "exact sciences": "EXAS",
+    "ultragenyx": "RARE",
+}
+
+
+def _lookup_ticker(manufacturer: str) -> str:
+    """Best-effort manufacturer → ticker lookup."""
+    if not manufacturer:
+        return ""
+    m = manufacturer.lower().strip()
+    # Exact match first
+    if m in _PHARMA_TICKERS:
+        return _PHARMA_TICKERS[m]
+    # Prefix match (e.g. "Pfizer Inc" matches "pfizer")
+    for key, ticker in _PHARMA_TICKERS.items():
+        if m.startswith(key) or key.startswith(m):
+            return ticker
+    return ""
+
 
 class FdaFeedAdapter(BaseFeedAdapter):
     """Polls FDA press releases (RSS) and drug approval data (openFDA)."""
@@ -193,6 +260,8 @@ class FdaFeedAdapter(BaseFeedAdapter):
 
             url = f"https://www.accessdata.fda.gov/scripts/cder/daf/index.cfm?event=overview.process&ApplNo={app_no}" if app_no else ""
 
+            ticker = _lookup_ticker(manufacturer)
+
             results.append(FeedResult(
                 feed_source="fda",
                 item_id=stable_hash(f"fda-approval:{app_no}:{sub_type}:{sub_date}"),
@@ -209,6 +278,8 @@ class FdaFeedAdapter(BaseFeedAdapter):
                     "brand_names": brand_names,
                     "generic_names": generic_names,
                     "manufacturer": manufacturer,
+                    "ticker": ticker,
+                    "company_name": manufacturer,
                 },
             ))
 
