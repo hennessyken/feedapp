@@ -33,6 +33,7 @@ from feeds.base import BaseFeedAdapter, FeedResult
 from feeds.edgar import EdgarFeedAdapter
 from feeds.fda import FdaFeedAdapter
 from feeds.ema import EmaFeedAdapter
+from feeds.clinical_trials import ClinicalTrialsFeedAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -267,6 +268,10 @@ class FeedPipeline:
             "ema": EmaFeedAdapter(
                 http,
                 max_age_days=self._config.ema_max_age_days,
+            ),
+            "clinical_trials": ClinicalTrialsFeedAdapter(
+                http,
+                max_age_days=self._config.fda_max_age_days,
             ),
         }
 

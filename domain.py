@@ -203,10 +203,17 @@ class KeywordScreener:
         "CLINICAL_TRIAL": [
             "phase 3 results", "phase iii results", "pivotal trial results",
             "trial met primary endpoint", "positive topline results",
+            "clinical trial results", "results posted",
+            "primary endpoint met", "met its primary",
+            "statistically significant", "positive efficacy",
+            "phase 3 completed", "phase iii completed",
         ],
         "CLINICAL_TRIAL_NEGATIVE": [
             "trial failed primary endpoint", "trial discontinued",
             "negative topline results", "trial halted",
+            "did not meet primary endpoint", "failed to meet",
+            "trial terminated", "lack of efficacy",
+            "safety concern", "clinical hold",
         ],
         "CAPITAL_RETURN": [
             "share buyback programme", "share repurchase programme",

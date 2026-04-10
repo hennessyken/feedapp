@@ -81,7 +81,7 @@ class RuntimeConfig:
     )
     edgar_days_back: int = field(default_factory=lambda: _env_int("EDGAR_DAYS_BACK", 1))
     edgar_forms: str = field(
-        default_factory=lambda: (os.getenv("EDGAR_FORMS") or "8-K,6-K").strip()
+        default_factory=lambda: (os.getenv("EDGAR_FORMS") or "8-K,6-K,13D,13D/A,13G,13G/A").strip()
     )
 
     # ── FDA ──
