@@ -12,7 +12,7 @@ import argparse
 import asyncio
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 from config import RuntimeConfig
@@ -34,6 +34,7 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     mode.add_argument("--continuous", action="store_true", help="Poll continuously.")
     mode.add_argument("--eod", action="store_true", help="Run end-of-day sell price check and exit.")
     mode.add_argument("--backtest", action="store_true", help="Run historical backtest.")
+    mode.add_argument("--analyze", action="store_true", help="Run strategy analyzer (collect + optimize).")
     p.add_argument("--from", dest="from_date", default=None, help="Backtest start date (YYYY-MM-DD).")
     p.add_argument("--to", dest="to_date", default=None, help="Backtest end date (YYYY-MM-DD).")
     p.add_argument("--llm", action="store_true", help="Use LLM (Sentry-1 + Ranker) in backtest.")
@@ -119,7 +120,6 @@ async def _run_backtest(
 ) -> None:
     """Run historical backtest over a date range."""
     from backtester import Backtester, print_backtest_report
-    from datetime import timedelta
 
     if not from_date:
         from_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
@@ -165,6 +165,67 @@ async def _run_backtest(
             await ib_client.disconnect()
 
 
+async def _run_analyze(
+    config: RuntimeConfig,
+    from_date: Optional[str],
+    to_date: Optional[str],
+) -> None:
+    """Collect historical data and find optimal strategies."""
+    from strategy_analyzer import (
+        DataCollector, StrategyOptimizer,
+        print_strategy_report, save_strategy_report,
+    )
+    from db import FeedDatabase
+
+    if not from_date:
+        from_date = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
+    if not to_date:
+        to_date = datetime.now().strftime("%Y-%m-%d")
+
+    # IB client for 5-min historical bars
+    ib_client = _make_ib_client(config)
+    if ib_client:
+        try:
+            await ib_client.connect()
+            logging.info("Using IB Gateway for 5-min historical bars")
+        except Exception as e:
+            logging.error("IB connect failed: %s — IB required for price data", e)
+            return
+    else:
+        logging.error("IB_ENABLED must be true for strategy analyzer (needs 5-min bars)")
+        return
+
+    db = FeedDatabase(config.db_path)
+    await db.connect()
+    try:
+        # Phase 1: Collect documents + prices (cached on re-run)
+        collector = DataCollector(
+            db,
+            ib_client=ib_client,
+            sec_user_agent=config.sec_user_agent,
+            keyword_threshold=config.keyword_score_threshold,
+            edgar_forms=config.edgar_forms,
+        )
+        collection_stats = await collector.collect(from_date, to_date)
+        logging.info("Collection stats:\n%s", json.dumps(collection_stats, indent=2))
+
+        # Phase 2: Optimize strategies
+        optimizer = StrategyOptimizer(db)
+        results = await optimizer.optimize()
+
+        # Phase 3: Report
+        signals_count = collection_stats.get("total_signals_in_db", 0)
+        print_strategy_report(results, signals_count=signals_count)
+
+        # Save JSON
+        report_file = f"strategy_{from_date}_to_{to_date}.json"
+        save_strategy_report(results, collection_stats, report_file)
+    finally:
+        if ib_client:
+            await ib_client.disconnect()
+        await db.close()
+
+
 async def _run_continuous(config: RuntimeConfig) -> None:
     logging.info("Continuous mode (poll every %ds)", config.poll_interval_seconds)
     last_eod_date: Optional[str] = None
@@ -207,7 +268,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     _configure_logging(args.log_level or config.log_level)
 
     try:
-        if args.backtest:
+        if args.analyze:
+            asyncio.run(_run_analyze(config, args.from_date, args.to_date))
+        elif args.backtest:
             asyncio.run(_run_backtest(config, args.from_date, args.to_date, args.llm))
         elif args.eod:
             asyncio.run(_run_eod(config))

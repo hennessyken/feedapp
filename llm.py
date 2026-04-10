@@ -248,6 +248,57 @@ Event_type classification (use explicit language only; otherwise OTHER):
 - STRATEGY: explicit strategic review, business review, or investor day with new disclosed information.
 """
 
+# ── Pharma-regulatory prompts (EMA / FDA / ClinicalTrials.gov) ──────
+# Much simpler than the exchange prompts — fewer event types, focused
+# on approval/rejection/trial outcome. Reduces PARSE_ERROR noise.
+
+SENTRY1_PHARMA_PROMPT = """You are a gate that decides whether a pharma regulatory event is likely to move a stock price.
+
+The document comes from a regulatory agency (EMA, FDA) or a clinical trial registry.
+A keyword screener already flagged it as potentially relevant.
+
+Answer YES if the document describes a concrete, company-specific event:
+- Drug approval, rejection, or withdrawal
+- New indication or label expansion approved
+- Clinical trial results (positive or negative)
+- Safety alert, black box warning, or REMS requirement
+- Breakthrough/fast-track/priority review designation granted or denied
+- Biosimilar approval or patent challenge outcome
+
+Answer NO if:
+- Routine procedural update (meeting agenda, comment period, generic guidance)
+- The event is about a different company or a general class of drugs
+- Administrative: address change, minor labelling correction, routine renewal
+
+Output JSON only:
+{"company_match":true|false,"company_probability":0-100,"price_moving":true|false,"price_probability":0-100,"rationale":"one sentence"}"""
+
+RANKER_PHARMA_PROMPT = """You are extracting key facts from a pharma regulatory event.
+
+The Sentry-1 gate already confirmed this is likely material. Extract ONLY what the document says.
+
+Output JSON only (no markdown, no commentary):
+{
+  "event_type": "REGULATORY_DECISION | REGULATORY_NEGATIVE | CLINICAL_TRIAL | CLINICAL_TRIAL_NEGATIVE | OTHER",
+  "drug_name": "string or null",
+  "indication": "string or null",
+  "decision": "approved | rejected | withdrawn | positive_results | negative_results | designation_granted | other | null",
+  "risk_flags": {
+    "regulatory_negative": true | false
+  },
+  "evidence_spans": [
+    {"field": "event_type", "quote": "verbatim excerpt"}
+  ]
+}
+
+Rules:
+- event_type MUST be one of the 5 listed options
+- Use ONLY the document text as evidence — no outside knowledge
+- Every non-null field must have a supporting evidence_span with a verbatim quote
+- If uncertain, use event_type="OTHER" and null for optional fields"""
+
+_PHARMA_SOURCES = {"ema", "fda", "clinical_trials"}
+
 _SENTRY1_FORM_ADDENDA: Dict[str, str] = {
     # Exchange-type addenda — selected by doc_source (feed name)
     "asian": """Exchange context — Asian exchange (TSE, KRX, HKEX, ASX, NSE):
@@ -310,6 +361,8 @@ def _exchange_family(doc_source: str) -> str:
 
 
 def _build_sentry1_prompt(*, doc_source: str, base_form_type: str) -> str:
+    if (doc_source or "").strip().lower() in _PHARMA_SOURCES:
+        return SENTRY1_PHARMA_PROMPT
     family = _exchange_family(doc_source)
     addendum = _SENTRY1_FORM_ADDENDA.get(family, "")
     if addendum:
@@ -317,7 +370,13 @@ def _build_sentry1_prompt(*, doc_source: str, base_form_type: str) -> str:
     return SENTRY1_REGULATORY_BASE_PROMPT
 
 
+def _is_pharma_source(doc_source: str) -> bool:
+    return (doc_source or "").strip().lower() in _PHARMA_SOURCES
+
+
 def _build_ranker_prompt(*, doc_source: str, base_form_type: str) -> str:
+    if _is_pharma_source(doc_source):
+        return RANKER_PHARMA_PROMPT
     family = _exchange_family(doc_source)
     base = RANKER_REGULATORY_BASE_PROMPT.replace("__EVENT_TYPES__", " | ".join(RANKER_EVENT_TYPES))
     addendum = _RANKER_FORM_ADDENDA.get(family, "")
@@ -957,7 +1016,12 @@ class OpenAiRegulatoryLlmGateway:
             if not isinstance(obj, dict):
                 raise TypeError("Ranker JSON is not an object")
 
-            required_keys = ("event_type", "evidence_spans", "numeric_terms", "risk_flags")
+            # Pharma prompt returns a slimmer schema (no numeric_terms required)
+            is_pharma = _is_pharma_source(req.doc_source)
+            if is_pharma:
+                required_keys = ("event_type", "evidence_spans")
+            else:
+                required_keys = ("event_type", "evidence_spans", "numeric_terms", "risk_flags")
             missing = [k for k in required_keys if k not in obj]
             if missing:
                 raise ValueError(f"Ranker schema missing keys: {missing}")

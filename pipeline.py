@@ -674,6 +674,12 @@ class FeedPipeline:
                     stats["ignored"] += 1
                     continue
 
+                # Skip PARSE_ERROR — LLM misclassifications that hurt short-term returns
+                if event_type == "PARSE_ERROR":
+                    logger.info("Skipping PARSE_ERROR signal for %s", ticker)
+                    stats["ignored"] += 1
+                    continue
+
                 # ── Build signal + deliver via Telegram ──────────────────
                 sig = RankedSignal(
                     doc_id=item.item_id,

@@ -46,6 +46,42 @@ CREATE INDEX IF NOT EXISTS idx_feed_items_source    ON feed_items(feed_source);
 CREATE INDEX IF NOT EXISTS idx_feed_items_status    ON feed_items(status);
 CREATE INDEX IF NOT EXISTS idx_feed_items_published ON feed_items(published_at);
 CREATE INDEX IF NOT EXISTS idx_feed_items_tweeted   ON feed_items(tweeted, status);
+
+-- Strategy analyzer tables
+CREATE TABLE IF NOT EXISTS backtest_signals (
+    signal_id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_id          TEXT NOT NULL UNIQUE,
+    ticker           TEXT NOT NULL,
+    company_name     TEXT,
+    event_type       TEXT NOT NULL,
+    polarity         TEXT,
+    impact_class     TEXT,
+    source           TEXT NOT NULL,
+    signal_date      TEXT NOT NULL,
+    keyword_score    INTEGER,
+    confidence       INTEGER,
+    impact_score     INTEGER,
+    action           TEXT,
+    title            TEXT,
+    url              TEXT,
+    matched_keywords TEXT,
+    created_at       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_bt_signals_ticker ON backtest_signals(ticker);
+CREATE INDEX IF NOT EXISTS idx_bt_signals_date   ON backtest_signals(signal_date);
+CREATE INDEX IF NOT EXISTS idx_bt_signals_source ON backtest_signals(source);
+
+CREATE TABLE IF NOT EXISTS backtest_prices (
+    ticker   TEXT NOT NULL,
+    datetime TEXT NOT NULL,
+    open     REAL,
+    high     REAL,
+    low      REAL,
+    close    REAL,
+    volume   INTEGER,
+    PRIMARY KEY (ticker, datetime)
+);
+CREATE INDEX IF NOT EXISTS idx_bt_prices_ticker ON backtest_prices(ticker);
 """
 
 # Columns added via _migrate_columns (idempotent ALTER TABLE)
@@ -83,12 +119,26 @@ class FeedDatabase:
     async def connect(self) -> None:
         self._db = await aiosqlite.connect(self._db_path)
         self._db.row_factory = aiosqlite.Row
+        await self._migrate_backtest_prices()
         await self._db.executescript(SCHEMA)
         await self._db.execute("PRAGMA journal_mode=WAL")
         await self._db.execute("PRAGMA foreign_keys=ON")
         await self._db.commit()
         await self._migrate_columns()
         logger.info("Database connected: %s", self._db_path)
+
+    async def _migrate_backtest_prices(self) -> None:
+        """Drop old daily backtest_prices table if it has 'date' column (pre-intraday)."""
+        assert self._db
+        try:
+            cur = await self._db.execute("PRAGMA table_info(backtest_prices)")
+            cols = {row[1] for row in await cur.fetchall()}
+            if cols and "datetime" not in cols and "date" in cols:
+                await self._db.execute("DROP TABLE backtest_prices")
+                await self._db.commit()
+                logger.info("Dropped old daily backtest_prices table (migrating to 5-min bars)")
+        except Exception:
+            pass  # Table doesn't exist yet
 
     async def _migrate_columns(self) -> None:
         """Add IB price tracking columns if they don't exist (idempotent)."""
@@ -372,6 +422,144 @@ class FeedDatabase:
         )
         rows = await cur.fetchall()
         return [dict(r) for r in rows]
+
+    # ------------------------------------------------------------------
+    # Strategy analyzer / backtest persistence
+    # ------------------------------------------------------------------
+
+    async def upsert_backtest_signal(self, **kwargs: Any) -> bool:
+        """Insert a backtest signal. Returns True if inserted, False if dupe."""
+        assert self._db
+        now = datetime.now(timezone.utc).isoformat()
+        try:
+            await self._db.execute(
+                """INSERT OR IGNORE INTO backtest_signals
+                   (item_id, ticker, company_name, event_type, polarity,
+                    impact_class, source, signal_date, keyword_score,
+                    confidence, impact_score, action, title, url,
+                    matched_keywords, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    kwargs["item_id"], kwargs["ticker"], kwargs.get("company_name"),
+                    kwargs["event_type"], kwargs.get("polarity"),
+                    kwargs.get("impact_class"), kwargs["source"],
+                    kwargs["signal_date"], kwargs.get("keyword_score"),
+                    kwargs.get("confidence"), kwargs.get("impact_score"),
+                    kwargs.get("action"), kwargs.get("title"), kwargs.get("url"),
+                    json.dumps(kwargs.get("matched_keywords")) if kwargs.get("matched_keywords") else None,
+                    now,
+                ),
+            )
+            await self._db.commit()
+            return self._db.total_changes > 0
+        except aiosqlite.IntegrityError:
+            return False
+
+    async def backtest_signal_exists(self, item_id: str) -> bool:
+        assert self._db
+        cur = await self._db.execute(
+            "SELECT 1 FROM backtest_signals WHERE item_id = ?", (item_id,)
+        )
+        return await cur.fetchone() is not None
+
+    async def upsert_backtest_prices(
+        self, ticker: str, rows: List[Dict[str, Any]],
+    ) -> int:
+        """Bulk-insert price rows (5-min bars). Returns count inserted."""
+        assert self._db
+        inserted = 0
+        for row in rows:
+            try:
+                await self._db.execute(
+                    """INSERT OR IGNORE INTO backtest_prices
+                       (ticker, datetime, open, high, low, close, volume)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        ticker, row["datetime"],
+                        row.get("open"), row.get("high"),
+                        row.get("low"), row.get("close"),
+                        row.get("volume"),
+                    ),
+                )
+                inserted += self._db.total_changes
+            except Exception:
+                pass
+        await self._db.commit()
+        return inserted
+
+    async def has_backtest_prices(
+        self, ticker: str, start: str, end: str,
+    ) -> bool:
+        """Check if we have reasonable price coverage for a ticker/range."""
+        assert self._db
+        cur = await self._db.execute(
+            "SELECT COUNT(*) FROM backtest_prices WHERE ticker = ? AND datetime >= ? AND datetime <= ?",
+            (ticker, start, end),
+        )
+        row = await cur.fetchone()
+        return (row[0] if row else 0) >= 5
+
+    async def get_backtest_prices(
+        self, ticker: str, start: str, end: str,
+    ) -> List[Dict[str, Any]]:
+        assert self._db
+        cur = await self._db.execute(
+            """SELECT datetime, open, high, low, close, volume
+               FROM backtest_prices
+               WHERE ticker = ? AND datetime >= ? AND datetime <= ?
+               ORDER BY datetime""",
+            (ticker, start, end),
+        )
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+    async def get_all_backtest_signals(
+        self, **filters: Any,
+    ) -> List[Dict[str, Any]]:
+        """Load signals with optional filters."""
+        assert self._db
+        clauses: List[str] = []
+        params: List[Any] = []
+        if filters.get("source"):
+            clauses.append("source = ?")
+            params.append(filters["source"])
+        if filters.get("event_type"):
+            clauses.append("event_type = ?")
+            params.append(filters["event_type"])
+        if filters.get("polarity"):
+            clauses.append("polarity = ?")
+            params.append(filters["polarity"])
+        if filters.get("impact_class"):
+            clauses.append("impact_class = ?")
+            params.append(filters["impact_class"])
+        if filters.get("min_keyword_score"):
+            clauses.append("keyword_score >= ?")
+            params.append(filters["min_keyword_score"])
+        if filters.get("start_date"):
+            clauses.append("signal_date >= ?")
+            params.append(filters["start_date"])
+        if filters.get("end_date"):
+            clauses.append("signal_date <= ?")
+            params.append(filters["end_date"])
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        cur = await self._db.execute(
+            f"SELECT * FROM backtest_signals{where} ORDER BY signal_date", params
+        )
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+    async def get_backtest_signal_tickers(self) -> List[str]:
+        assert self._db
+        cur = await self._db.execute(
+            "SELECT DISTINCT ticker FROM backtest_signals ORDER BY ticker"
+        )
+        return [row[0] for row in await cur.fetchall()]
+
+    async def count_backtest_signals(self) -> int:
+        assert self._db
+        cur = await self._db.execute("SELECT COUNT(*) FROM backtest_signals")
+        row = await cur.fetchone()
+        return row[0] if row else 0
 
     async def mark_tweeted(self, item_id: str, tweet_id: str) -> None:
         """Mark an item as posted to Twitter."""

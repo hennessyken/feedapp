@@ -200,17 +200,26 @@ class IBClient:
             if not bars:
                 return None
 
-            return [
-                {
-                    "date": str(bar.date)[:10],
+            result = []
+            for bar in bars:
+                # Intraday bars return datetime objects; daily bars return date objects
+                dt = bar.date
+                if hasattr(dt, "strftime"):
+                    if hasattr(dt, "hour"):
+                        dt_str = dt.strftime("%Y-%m-%d %H:%M:%S")
+                    else:
+                        dt_str = dt.strftime("%Y-%m-%d")
+                else:
+                    dt_str = str(dt)
+                result.append({
+                    "date": dt_str,
                     "Open": float(bar.open),
                     "High": float(bar.high),
                     "Low": float(bar.low),
                     "Close": float(bar.close),
                     "Volume": int(bar.volume),
-                }
-                for bar in bars
-            ]
+                })
+            return result
         except Exception as e:
             logger.warning("IB hist: reqHistoricalData failed for %s: %s", ticker, e)
             return None
