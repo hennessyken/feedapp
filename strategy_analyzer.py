@@ -298,12 +298,17 @@ class DataCollector:
             logger.error("IB client required for price data — set IB_ENABLED=true")
             return {"tickers_total": 0, "error": "no_ib_client"}
 
-        # Build per-ticker date ranges from signals
+        # Build per-ticker date ranges from signals, clamped to analysis window
         signals = await self._db.get_all_backtest_signals()
+        analysis_start = start_date
+        analysis_end = end_date
         ticker_dates: Dict[str, Tuple[str, str]] = {}
         for sig in signals:
             ticker = sig["ticker"]
             sig_date = sig["signal_date"]
+            # Clamp to analysis window — ignore signals with old/future dates
+            if sig_date < analysis_start or sig_date > analysis_end:
+                continue
             if ticker not in ticker_dates:
                 ticker_dates[ticker] = (sig_date, sig_date)
             else:
@@ -343,7 +348,7 @@ class DataCollector:
                     current += timedelta(days=1)
                     continue
 
-                end_str = current.strftime("%Y%m%d 23:59:59")
+                end_str = current.strftime("%Y%m%d-23:59:59 US/Eastern")
 
                 try:
                     bars = await self._ib_client.get_historical(
