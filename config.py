@@ -116,7 +116,7 @@ class RuntimeConfig:
     )
 
     # ── Interactive Brokers ──
-    ib_enabled: bool = field(default_factory=lambda: _env_bool("IB_ENABLED", true))
+    ib_enabled: bool = field(default_factory=lambda: _env_bool("IB_ENABLED", True))
     ib_host: str = field(
         default_factory=lambda: (os.getenv("IB_HOST") or "127.0.0.1").strip()
     )
