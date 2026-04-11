@@ -490,11 +490,16 @@ class FeedDatabase:
     async def has_backtest_prices(
         self, ticker: str, start: str, end: str,
     ) -> bool:
-        """Check if we have reasonable price coverage for a ticker/range."""
+        """Check if we have reasonable price coverage for a ticker/range.
+
+        Dates can be YYYY-MM-DD or YYYY-MM-DD HH:MM:SS. We pad the end
+        with ' 23:59:59' so a bare date matches intraday bars on that day.
+        """
         assert self._db
+        end_padded = end + " 23:59:59" if len(end) == 10 else end
         cur = await self._db.execute(
             "SELECT COUNT(*) FROM backtest_prices WHERE ticker = ? AND datetime >= ? AND datetime <= ?",
-            (ticker, start, end),
+            (ticker, start, end_padded),
         )
         row = await cur.fetchone()
         return (row[0] if row else 0) >= 5
