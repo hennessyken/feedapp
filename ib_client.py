@@ -3,10 +3,10 @@ from __future__ import annotations
 """IB Gateway price client — async wrapper around ib_insync.
 
 Provides price queries and historical data for signal tracking and backtesting.
-Uses nest_asyncio to allow ib_insync's event loop inside an already-running loop.
+Uses a dedicated thread event loop for ib_insync compatibility (replaces nest_asyncio).
 
 Requires:
-  - pip install ib_insync nest_asyncio
+  - pip install ib_insync
   - IB Gateway or TWS running (paper: port 4002, live: port 4001)
 """
 
@@ -16,13 +16,26 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-# ib_insync needs to run its own event loop alongside ours
-import nest_asyncio
-nest_asyncio.apply()
+
+def _ensure_thread_event_loop() -> None:
+    """Ensure the current thread has an event loop (for ib_insync compatibility).
+
+    ib_insync expects an event loop on the thread it runs on. In threaded
+    contexts (or when the default loop has been closed), this creates one.
+    Replaces the fragile nest_asyncio.apply() workaround.
+    """
+    try:
+        asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+
+_ensure_thread_event_loop()
 
 
 class IBClient:
-    """IB price client using ib_insync with nest_asyncio for async compatibility."""
+    """IB price client using ib_insync with thread event loop for async compatibility."""
 
     def __init__(
         self,

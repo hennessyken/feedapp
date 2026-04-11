@@ -890,6 +890,7 @@ class SegmentModel:
     hold_days: int
     stop_loss_pct: Optional[float]
     model: Any                      # fitted XGBClassifier
+    regressor: Any                  # fitted XGBRegressor (predicts return %)
     encoder: Any                    # fitted OneHotEncoder
     feature_names: List[str]
     metrics: Dict[str, Any]         # cv accuracy, auc, etc.
@@ -1022,8 +1023,9 @@ class SignalClassifier:
             "segment_models": segment_reports,
         }
 
-    def predict_proba(self, signal: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Score a signal. Returns dict with probability, hold_days, stop_loss.
+    def predict(self, signal: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Score a signal. Returns dict with probability, predicted_return,
+        hold_days, stop_loss_pct, and which model was used.
 
         Uses segment-specific model if available, else global.
         """
@@ -1036,9 +1038,10 @@ class SignalClassifier:
             seg_name = f"{seg_key}={seg_value}"
             if seg_name in self._segment_models:
                 sm = self._segment_models[seg_name]
-                prob = self._score_with_model(signal, sm)
+                prob, pred_ret = self._score_with_model(signal, sm)
                 return {
                     "probability": prob,
+                    "predicted_return": pred_ret,
                     "model": seg_name,
                     "hold_days": sm.hold_days,
                     "stop_loss_pct": sm.stop_loss_pct,
@@ -1046,15 +1049,19 @@ class SignalClassifier:
 
         # Fall back to global
         if self._global_model:
-            prob = self._score_with_model(signal, self._global_model)
+            prob, pred_ret = self._score_with_model(signal, self._global_model)
             return {
                 "probability": prob,
+                "predicted_return": pred_ret,
                 "model": "global",
                 "hold_days": self._global_model.hold_days,
                 "stop_loss_pct": self._global_model.stop_loss_pct,
             }
 
         return None
+
+    # Keep old name as alias for back-compat
+    predict_proba = predict
 
     # ── Internal helpers ──────────────────────────────────────────────
 
@@ -1140,12 +1147,22 @@ class SignalClassifier:
         has_llm: bool,
         is_global: bool,
     ) -> Dict[str, Any]:
-        """Train one XGBoost model and return its report dict."""
+        """Train classifier + regressor using walk-forward time-based splits.
+
+        Walk-forward validation:
+          - Sort signals by date
+          - Minimum 40% of data for first training window
+          - Slide forward in ~20% chunks, always testing on future data
+          - Each test window's predictions are out-of-sample
+          - Final model trains on ALL data for live scoring
+
+        This prevents look-ahead bias — the model never sees future data
+        during evaluation.
+        """
         import numpy as np
-        from sklearn.model_selection import StratifiedKFold, cross_val_predict
         from sklearn.metrics import (
             accuracy_score, precision_score, recall_score, f1_score,
-            roc_auc_score,
+            roc_auc_score, mean_absolute_error, mean_squared_error, r2_score,
         )
         from sklearn.preprocessing import OneHotEncoder
         import xgboost as xgb
@@ -1156,11 +1173,14 @@ class SignalClassifier:
             num_feats += self.LLM_NUMERIC_FEATURES
             cat_feats += self.LLM_CATEGORICAL_FEATURES
 
+        # Sort by date — critical for time-based split
+        records = sorted(records, key=lambda r: r.get("signal_date", ""))
+
         df = pd.DataFrame(records)
         labels = (df["_return"] > self._profit_threshold).astype(int).values
         returns_arr = df["_return"].values
+        dates_arr = df["signal_date"].values
 
-        # Need both classes for classification
         if len(set(labels)) < 2:
             return {
                 "segment": model_name,
@@ -1183,128 +1203,287 @@ class SignalClassifier:
                 cat_names.append(f"{feat}={c}")
         feature_names = num_feats + cat_names
 
-        n_splits = min(5, min(int(labels.sum()), int(len(labels) - labels.sum())))
-        if n_splits < 2:
+        n = len(records)
+        min_train = max(int(n * 0.4), self._min_segment_samples)
+        if min_train >= n - 2:
             return {
                 "segment": model_name,
                 "hold_days": hold_days,
                 "stop_loss_pct": stop_loss_pct,
                 "skipped": True,
-                "reason": f"too_few_per_class (pos={int(labels.sum())}, neg={int(len(labels)-labels.sum())})",
-                "n_signals": len(records),
+                "reason": f"too_few_for_walk_forward ({n} signals)",
+                "n_signals": n,
             }
 
-        model = xgb.XGBClassifier(
-            n_estimators=150,
-            max_depth=3 if len(records) < 100 else 4,
-            learning_rate=0.05,
-            subsample=0.8,
-            colsample_bytree=0.8,
-            min_child_weight=max(2, len(records) // 50),
-            eval_metric="logloss",
-            random_state=42,
-        )
+        # ── Walk-forward splits ──
+        step = max(int(n * 0.2), 5)
+        splits = []
+        split_point = min_train
+        while split_point < n - 2:
+            test_end = min(split_point + step, n)
+            splits.append((split_point, test_end))
+            split_point = test_end
+        if splits and splits[-1][1] < n:
+            splits[-1] = (splits[-1][0], n)
 
-        cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+        if not splits:
+            return {
+                "segment": model_name,
+                "hold_days": hold_days,
+                "stop_loss_pct": stop_loss_pct,
+                "skipped": True,
+                "reason": "no_valid_walk_forward_splits",
+                "n_signals": n,
+            }
+
+        # ── Walk-forward evaluation ──
+        oos_clf_probs = np.full(n, np.nan)
+        oos_reg_preds = np.full(n, np.nan)
+        window_reports = []
+
+        sample_weights_all = np.abs(returns_arr) + 0.1
+        sample_weights_all = sample_weights_all / sample_weights_all.mean()
+
+        for win_idx, (test_start, test_end) in enumerate(splits):
+            train_idx = np.arange(0, test_start)
+            test_idx = np.arange(test_start, test_end)
+
+            X_train, X_test = X[train_idx], X[test_idx]
+            y_train_cls = labels[train_idx]
+            y_train_reg = returns_arr[train_idx]
+            y_test_cls = labels[test_idx]
+            y_test_ret = returns_arr[test_idx]
+            sw_train = sample_weights_all[train_idx]
+
+            if len(set(y_train_cls)) < 2:
+                continue
+
+            max_depth = 3 if len(train_idx) < 100 else 4
+            mcw = max(2, len(train_idx) // 50)
+
+            clf = xgb.XGBClassifier(
+                n_estimators=150, max_depth=max_depth,
+                learning_rate=0.05, subsample=0.8, colsample_bytree=0.8,
+                min_child_weight=mcw, eval_metric="logloss", random_state=42,
+            )
+            clf.fit(X_train, y_train_cls, sample_weight=sw_train)
+            test_probs = clf.predict_proba(X_test)[:, 1]
+            oos_clf_probs[test_idx] = test_probs
+
+            reg = xgb.XGBRegressor(
+                n_estimators=150, max_depth=max_depth,
+                learning_rate=0.05, subsample=0.8, colsample_bytree=0.8,
+                min_child_weight=mcw, eval_metric="rmse", random_state=42,
+            )
+            reg.fit(X_train, y_train_reg, sample_weight=sw_train)
+            test_ret_preds = reg.predict(X_test)
+            oos_reg_preds[test_idx] = test_ret_preds
+
+            win_preds = (test_probs >= 0.5).astype(int)
+            w_acc = accuracy_score(y_test_cls, win_preds)
+            try:
+                w_auc = roc_auc_score(y_test_cls, test_probs)
+            except ValueError:
+                w_auc = 0.0
+            w_mae = float(mean_absolute_error(y_test_ret, test_ret_preds))
+
+            window_reports.append({
+                "window": win_idx + 1,
+                "train_size": len(train_idx),
+                "test_size": len(test_idx),
+                "train_dates": f"{dates_arr[train_idx[0]]} to {dates_arr[train_idx[-1]]}",
+                "test_dates": f"{dates_arr[test_idx[0]]} to {dates_arr[test_idx[-1]]}",
+                "accuracy": round(w_acc, 4),
+                "auc_roc": round(w_auc, 4),
+                "reg_mae": round(w_mae, 4),
+            })
+
+        # ── Aggregate out-of-sample metrics ──
+        scored_mask = ~np.isnan(oos_clf_probs)
+        if scored_mask.sum() < 5:
+            return {
+                "segment": model_name,
+                "hold_days": hold_days,
+                "stop_loss_pct": stop_loss_pct,
+                "skipped": True,
+                "reason": f"too_few_oos_predictions ({int(scored_mask.sum())})",
+                "n_signals": n,
+            }
+
+        oos_probs = oos_clf_probs[scored_mask]
+        oos_ret_preds = oos_reg_preds[scored_mask]
+        oos_labels = labels[scored_mask]
+        oos_returns = returns_arr[scored_mask]
+        oos_preds = (oos_probs >= 0.5).astype(int)
+
+        acc = accuracy_score(oos_labels, oos_preds)
+        prec = precision_score(oos_labels, oos_preds, zero_division=0)
+        rec = recall_score(oos_labels, oos_preds, zero_division=0)
+        f1 = f1_score(oos_labels, oos_preds, zero_division=0)
         try:
-            cv_probs = cross_val_predict(model, X, labels, cv=cv, method="predict_proba")
-        except Exception as e:
-            logger.warning("CV failed for %s: %s", model_name, e)
-            return {
-                "segment": model_name,
-                "hold_days": hold_days,
-                "stop_loss_pct": stop_loss_pct,
-                "skipped": True,
-                "reason": f"cv_failed: {e}",
-                "n_signals": len(records),
-            }
+            auc = roc_auc_score(oos_labels, oos_probs)
+        except ValueError:
+            auc = 0.0
 
-        cv_preds = (cv_probs[:, 1] >= 0.5).astype(int)
+        reg_mae = float(mean_absolute_error(oos_returns, oos_ret_preds))
+        reg_rmse = float(mean_squared_error(oos_returns, oos_ret_preds) ** 0.5)
+        reg_r2 = float(r2_score(oos_returns, oos_ret_preds))
 
-        # Fit final model on all data
-        model.fit(X, labels)
+        # ── Train final models on ALL data for live scoring ──
+        sample_weights = np.abs(returns_arr) + 0.1
+        sample_weights = sample_weights / sample_weights.mean()
 
-        # Store trained model
+        clf_model = xgb.XGBClassifier(
+            n_estimators=150, max_depth=3 if n < 100 else 4,
+            learning_rate=0.05, subsample=0.8, colsample_bytree=0.8,
+            min_child_weight=max(2, n // 50),
+            eval_metric="logloss", random_state=42,
+        )
+        clf_model.fit(X, labels, sample_weight=sample_weights)
+
+        reg_model = xgb.XGBRegressor(
+            n_estimators=150, max_depth=3 if n < 100 else 4,
+            learning_rate=0.05, subsample=0.8, colsample_bytree=0.8,
+            min_child_weight=max(2, n // 50),
+            eval_metric="rmse", random_state=42,
+        )
+        reg_model.fit(X, returns_arr, sample_weight=sample_weights)
+
+        # ── Store trained models ──
         sm = SegmentModel(
             segment_name=model_name,
             hold_days=hold_days,
             stop_loss_pct=stop_loss_pct,
-            model=model,
+            model=clf_model,
+            regressor=reg_model,
             encoder=encoder,
             feature_names=feature_names,
             metrics={},
-            n_signals=len(records),
+            n_signals=n,
         )
         if is_global:
-            # Keep the best global (first trained, replaced if better later)
             if self._global_model is None:
                 self._global_model = sm
         else:
             self._segment_models[model_name] = sm
 
-        # Metrics
-        acc = accuracy_score(labels, cv_preds)
-        prec = precision_score(labels, cv_preds, zero_division=0)
-        rec = recall_score(labels, cv_preds, zero_division=0)
-        f1 = f1_score(labels, cv_preds, zero_division=0)
-        try:
-            auc = roc_auc_score(labels, cv_probs[:, 1])
-        except ValueError:
-            auc = 0.0
-
-        importances = model.feature_importances_
-        feat_imp = sorted(
-            zip(feature_names, importances),
+        # ── Feature importance from final models ──
+        clf_feat_imp = sorted(
+            zip(feature_names, clf_model.feature_importances_),
             key=lambda x: x[1], reverse=True,
         )
 
-        # Threshold analysis
+        reg_feat_imp = sorted(
+            zip(feature_names, reg_model.feature_importances_),
+            key=lambda x: x[1], reverse=True,
+        )
+
+        # ── Threshold analysis (using out-of-sample predictions only) ──
         thresholds = [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8]
         threshold_stats = []
         for thresh in thresholds:
-            mask = cv_probs[:, 1] >= thresh
+            mask = oos_probs >= thresh
             n_trades = int(mask.sum())
             if n_trades > 0:
-                sel_ret = returns_arr[mask]
+                sel_ret = oos_returns[mask]
+                sel_pred_ret = oos_ret_preds[mask]
                 threshold_stats.append({
                     "threshold": thresh,
                     "trades": n_trades,
                     "avg_return": round(float(sel_ret.mean()), 4),
                     "win_rate": round(float((sel_ret > 0).mean() * 100), 1),
                     "total_return": round(float(sel_ret.sum()), 2),
+                    "avg_predicted_return": round(float(sel_pred_ret.mean()), 4),
                 })
+
+        # ── Return-threshold analysis ──
+        return_thresholds = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 5.0]
+        return_threshold_stats = []
+        for rt in return_thresholds:
+            mask = oos_ret_preds >= rt
+            n_trades = int(mask.sum())
+            if n_trades > 0:
+                sel_ret = oos_returns[mask]
+                return_threshold_stats.append({
+                    "min_predicted_return": rt,
+                    "trades": n_trades,
+                    "actual_avg_return": round(float(sel_ret.mean()), 4),
+                    "actual_win_rate": round(float((sel_ret > 0).mean() * 100), 1),
+                    "actual_total_return": round(float(sel_ret.sum()), 2),
+                })
+
+        # ── Combined gate ──
+        combined_gates = []
+        for prob_thresh in [0.5, 0.6, 0.7]:
+            for ret_thresh in [0.5, 1.0, 1.5, 2.0]:
+                mask = (oos_probs >= prob_thresh) & (oos_ret_preds >= ret_thresh)
+                n_trades = int(mask.sum())
+                if n_trades >= 3:
+                    sel_ret = oos_returns[mask]
+                    combined_gates.append({
+                        "prob_threshold": prob_thresh,
+                        "return_threshold": ret_thresh,
+                        "trades": n_trades,
+                        "actual_avg_return": round(float(sel_ret.mean()), 4),
+                        "actual_win_rate": round(float((sel_ret > 0).mean() * 100), 1),
+                        "actual_total_return": round(float(sel_ret.sum()), 2),
+                    })
 
         sl_str = f"{stop_loss_pct*100:.0f}%" if stop_loss_pct else "none"
         logger.info(
-            "  ML %s: hold=%dd stop=%s signals=%d AUC=%.3f F1=%.3f",
-            model_name, hold_days, sl_str, len(records), auc, f1,
+            "  ML %s: hold=%dd stop=%s signals=%d windows=%d "
+            "OOS-AUC=%.3f OOS-F1=%.3f OOS-R2=%.3f OOS-MAE=%.2f%%",
+            model_name, hold_days, sl_str, n, len(window_reports),
+            auc, f1, reg_r2, reg_mae,
         )
 
         return {
             "segment": model_name,
             "hold_days": hold_days,
             "stop_loss_pct": stop_loss_pct,
-            "n_signals": len(records),
+            "n_signals": n,
             "positive_labels": int(labels.sum()),
             "negative_labels": int(len(labels) - labels.sum()),
             "feature_count": X.shape[1],
-            "cv_folds": n_splits,
+            "walk_forward_windows": len(window_reports),
+            "oos_signals_tested": int(scored_mask.sum()),
+            # Classifier metrics (out-of-sample)
             "cv_accuracy": round(acc, 4),
             "cv_precision": round(prec, 4),
             "cv_recall": round(rec, 4),
             "cv_f1": round(f1, 4),
             "cv_auc_roc": round(auc, 4),
-            "feature_importance": [
+            "clf_feature_importance": [
                 {"feature": f, "importance": round(float(imp), 4)}
-                for f, imp in feat_imp[:15]
+                for f, imp in clf_feat_imp[:15]
             ],
+            # Regressor metrics (out-of-sample)
+            "reg_mae": round(reg_mae, 4),
+            "reg_rmse": round(reg_rmse, 4),
+            "reg_r2": round(reg_r2, 4),
+            "reg_feature_importance": [
+                {"feature": f, "importance": round(float(imp), 4)}
+                for f, imp in reg_feat_imp[:15]
+            ],
+            # Walk-forward detail
+            "walk_forward_detail": window_reports,
+            # Analysis (all using out-of-sample predictions)
             "threshold_analysis": threshold_stats,
+            "return_threshold_analysis": return_threshold_stats,
+            "combined_gate_analysis": combined_gates,
             "baseline_win_rate": round(float(labels.mean()) * 100, 1),
             "baseline_avg_return": round(float(returns_arr.mean()), 4),
+            # Back-compat alias
+            "feature_importance": [
+                {"feature": f, "importance": round(float(imp), 4)}
+                for f, imp in clf_feat_imp[:15]
+            ],
         }
 
-    def _score_with_model(self, signal: Dict[str, Any], sm: SegmentModel) -> float:
-        """Score one signal against a trained SegmentModel."""
+    def _score_with_model(
+        self, signal: Dict[str, Any], sm: SegmentModel,
+    ) -> Tuple[float, float]:
+        """Score one signal. Returns (probability, predicted_return_pct)."""
         import numpy as np
 
         has_llm = any(
@@ -1324,11 +1503,13 @@ class SignalClassifier:
         X_cat = sm.encoder.transform(cat_vals)
         X = np.hstack([X_num, X_cat])
 
-        return float(sm.model.predict_proba(X)[0, 1])
+        prob = float(sm.model.predict_proba(X)[0, 1])
+        pred_ret = float(sm.regressor.predict(X)[0]) if sm.regressor else 0.0
+        return prob, pred_ret
 
 
 def print_ml_report(report: Dict[str, Any]) -> None:
-    """Pretty-print the ML classifier results."""
+    """Pretty-print the ML classifier + regressor results."""
     if "error" in report:
         print(f"\nML Classifier: {report['error']}")
         if report.get("signals_with_prices"):
@@ -1337,7 +1518,7 @@ def print_ml_report(report: Dict[str, Any]) -> None:
         return
 
     print("\n" + "=" * 90)
-    print("  ML SIGNAL CLASSIFIER (XGBoost)")
+    print("  ML SIGNAL MODELS (XGBoost Classifier + Regressor)")
     print(f"  Total signals: {report['total_signals']} | "
           f"With prices: {report['signals_with_prices']} | "
           f"LLM features: {'yes' if report['has_llm_features'] else 'no'}")
@@ -1351,41 +1532,104 @@ def print_ml_report(report: Dict[str, Any]) -> None:
               f"({bg['n_signals']} signals)")
         print(f"  Baseline: {bg['baseline_win_rate']:.1f}% win, "
               f"{bg['baseline_avg_return']:+.2f}% avg return")
-        print(f"  CV: AUC={bg['cv_auc_roc']:.3f} F1={bg['cv_f1']:.3f} "
+        oos_n = bg.get('oos_signals_tested', 0)
+        wf_n = bg.get('walk_forward_windows', 0)
+        print(f"  Walk-forward: {wf_n} windows, {oos_n} out-of-sample predictions")
+        print(f"\n  Classifier (should I trade?) [out-of-sample]:")
+        print(f"    AUC={bg['cv_auc_roc']:.3f} F1={bg['cv_f1']:.3f} "
               f"Acc={bg['cv_accuracy']:.1%} Prec={bg['cv_precision']:.1%} "
               f"Rec={bg['cv_recall']:.1%}")
+        print(f"\n  Regressor (how much will it make?) [out-of-sample]:")
+        print(f"    MAE={bg.get('reg_mae', 0):.2f}% "
+              f"RMSE={bg.get('reg_rmse', 0):.2f}% "
+              f"R\u00b2={bg.get('reg_r2', 0):.3f}")
 
-        if bg.get("feature_importance"):
-            print(f"\n  Top Features (global):")
-            for i, fi in enumerate(bg["feature_importance"][:10]):
-                bar = "█" * int(fi["importance"] * 100)
-                print(f"    {i+1:>2}. {fi['feature']:<30s} "
-                      f"{fi['importance']:.4f} {bar}")
+        # Walk-forward window detail
+        wf_detail = bg.get("walk_forward_detail", [])
+        if wf_detail:
+            print(f"\n  Walk-Forward Windows (train on past, test on future):")
+            print(f"    {'Win':>3s} {'Train':>6s} {'Test':>5s} "
+                  f"{'Test Dates':<30s} {'Acc':>6s} {'AUC':>6s} {'MAE%':>6s}")
+            print(f"    {'-'*60}")
+            for w in wf_detail:
+                print(f"    {w['window']:>3d} {w['train_size']:>6d} "
+                      f"{w['test_size']:>5d} {w['test_dates']:<30s} "
+                      f"{w['accuracy']:>5.1%} {w['auc_roc']:>6.3f} "
+                      f"{w['reg_mae']:>5.2f}%")
 
+        # Feature importance — show both side by side
+        clf_imp = bg.get("clf_feature_importance", bg.get("feature_importance", []))
+        reg_imp = bg.get("reg_feature_importance", [])
+        if clf_imp or reg_imp:
+            print(f"\n  Top Features:")
+            print(f"    {'Classifier':<35s}  {'Regressor':<35s}")
+            print(f"    {'-'*35}  {'-'*35}")
+            max_rows = max(len(clf_imp[:10]), len(reg_imp[:10]))
+            for i in range(max_rows):
+                clf_str = ""
+                if i < len(clf_imp):
+                    f = clf_imp[i]
+                    bar = "█" * int(f["importance"] * 80)
+                    clf_str = f"{f['feature']:<25s} {f['importance']:.3f} {bar}"
+                reg_str = ""
+                if i < len(reg_imp):
+                    f = reg_imp[i]
+                    bar = "█" * int(f["importance"] * 80)
+                    reg_str = f"{f['feature']:<25s} {f['importance']:.3f} {bar}"
+                print(f"    {clf_str:<35s}  {reg_str:<35s}")
+
+        # Classifier threshold analysis
         if bg.get("threshold_analysis"):
-            print(f"\n  Threshold Analysis (global):")
+            print(f"\n  Classifier Threshold (trade when P(profit) >= threshold):")
             print(f"    {'Thresh':>7s} {'Trades':>7s} {'Win%':>7s} "
-                  f"{'Avg%':>8s} {'Total%':>9s}")
-            print(f"    {'-'*40}")
+                  f"{'Avg%':>8s} {'Total%':>9s} {'PredRet%':>9s}")
+            print(f"    {'-'*50}")
             for t in bg["threshold_analysis"]:
+                pred = t.get("avg_predicted_return", 0)
                 print(f"    {t['threshold']:>6.0%} {t['trades']:>7d} "
                       f"{t['win_rate']:>6.1f}% {t['avg_return']:>+7.2f}% "
-                      f"{t['total_return']:>+8.1f}%")
+                      f"{t['total_return']:>+8.1f}% {pred:>+8.2f}%")
+
+        # Return threshold analysis
+        if bg.get("return_threshold_analysis"):
+            print(f"\n  Regressor Threshold (trade when predicted return >= X%):")
+            print(f"    {'MinPred%':>8s} {'Trades':>7s} {'ActWin%':>8s} "
+                  f"{'ActAvg%':>8s} {'ActTot%':>9s}")
+            print(f"    {'-'*43}")
+            for t in bg["return_threshold_analysis"]:
+                print(f"    {t['min_predicted_return']:>+7.1f}% "
+                      f"{t['trades']:>7d} {t['actual_win_rate']:>7.1f}% "
+                      f"{t['actual_avg_return']:>+7.2f}% "
+                      f"{t['actual_total_return']:>+8.1f}%")
+
+        # Combined gate analysis
+        if bg.get("combined_gate_analysis"):
+            print(f"\n  Combined Gate (P(profit) >= X AND predicted return >= Y%):")
+            print(f"    {'P>=':>5s} {'Ret>=':>6s} {'Trades':>7s} {'ActWin%':>8s} "
+                  f"{'ActAvg%':>8s} {'ActTot%':>9s}")
+            print(f"    {'-'*46}")
+            for g in sorted(bg["combined_gate_analysis"],
+                          key=lambda x: x["actual_avg_return"], reverse=True):
+                print(f"    {g['prob_threshold']:>4.0%} {g['return_threshold']:>+5.1f}% "
+                      f"{g['trades']:>7d} {g['actual_win_rate']:>7.1f}% "
+                      f"{g['actual_avg_return']:>+7.2f}% "
+                      f"{g['actual_total_return']:>+8.1f}%")
 
     # ── Global model comparison ──
     global_models = report.get("global_models", [])
     if len(global_models) > 1:
         print(f"\n  ALL GLOBAL MODELS (top {len(global_models)} hold/stop combos):")
-        print(f"    {'Config':<30s} {'Signals':>7s} {'AUC':>6s} {'F1':>6s} "
-              f"{'Win%':>6s} {'Avg%':>7s}")
-        print(f"    {'-'*64}")
+        print(f"    {'Config':<25s} {'Sigs':>5s} {'AUC':>6s} {'F1':>6s} "
+              f"{'R²':>6s} {'MAE%':>6s} {'Win%':>6s} {'Avg%':>7s}")
+        print(f"    {'-'*70}")
         for gm in global_models:
             if gm.get("skipped"):
                 continue
             sl = f"{gm['stop_loss_pct']*100:.0f}%" if gm.get('stop_loss_pct') else "none"
             label = f"hold={gm['hold_days']}d stop={sl}"
-            print(f"    {label:<30s} {gm['n_signals']:>7d} "
+            print(f"    {label:<25s} {gm['n_signals']:>5d} "
                   f"{gm['cv_auc_roc']:>6.3f} {gm['cv_f1']:>6.3f} "
+                  f"{gm.get('reg_r2', 0):>6.3f} {gm.get('reg_mae', 0):>5.2f}% "
                   f"{gm['baseline_win_rate']:>5.1f}% "
                   f"{gm['baseline_avg_return']:>+6.2f}%")
 
@@ -1397,24 +1641,30 @@ def print_ml_report(report: Dict[str, Any]) -> None:
 
         if trained:
             print(f"\n  SEGMENT MODELS (each with its own optimal hold/stop):")
-            print(f"    {'Segment':<30s} {'Hold':>4s} {'Stop':>5s} {'Sigs':>5s} "
-                  f"{'AUC':>6s} {'F1':>6s} {'Win%':>6s} {'Avg%':>7s}")
-            print(f"    {'-'*71}")
+            print(f"    {'Segment':<25s} {'Hold':>4s} {'Stop':>5s} {'Sigs':>5s} "
+                  f"{'AUC':>6s} {'F1':>6s} {'R²':>6s} {'MAE%':>6s} "
+                  f"{'Win%':>6s} {'Avg%':>7s}")
+            print(f"    {'-'*82}")
             for sm in sorted(trained, key=lambda x: x.get("cv_auc_roc", 0), reverse=True):
                 sl = f"{sm['stop_loss_pct']*100:.0f}%" if sm.get('stop_loss_pct') else "—"
-                print(f"    {sm['segment']:<30s} {sm['hold_days']:>4d} {sl:>5s} "
+                print(f"    {sm['segment']:<25s} {sm['hold_days']:>4d} {sl:>5s} "
                       f"{sm['n_signals']:>5d} {sm['cv_auc_roc']:>6.3f} "
-                      f"{sm['cv_f1']:>6.3f} {sm['baseline_win_rate']:>5.1f}% "
+                      f"{sm['cv_f1']:>6.3f} {sm.get('reg_r2', 0):>6.3f} "
+                      f"{sm.get('reg_mae', 0):>5.2f}% "
+                      f"{sm['baseline_win_rate']:>5.1f}% "
                       f"{sm['baseline_avg_return']:>+6.2f}%")
 
-            # Show best segment's features + thresholds
+            # Show best segment's combined gate
             best_seg = max(trained, key=lambda x: x.get("cv_auc_roc", 0))
-            if best_seg.get("feature_importance"):
-                print(f"\n  Top Features ({best_seg['segment']}):")
-                for i, fi in enumerate(best_seg["feature_importance"][:8]):
-                    bar = "█" * int(fi["importance"] * 100)
-                    print(f"    {i+1:>2}. {fi['feature']:<30s} "
-                          f"{fi['importance']:.4f} {bar}")
+            if best_seg.get("combined_gate_analysis"):
+                print(f"\n  Best Combined Gate ({best_seg['segment']}):")
+                best_gate = max(best_seg["combined_gate_analysis"],
+                              key=lambda x: x["actual_avg_return"])
+                print(f"    Trade when P(profit)>={best_gate['prob_threshold']:.0%} "
+                      f"AND predicted return>={best_gate['return_threshold']:+.1f}%")
+                print(f"    → {best_gate['trades']} trades, "
+                      f"{best_gate['actual_win_rate']:.1f}% win rate, "
+                      f"{best_gate['actual_avg_return']:+.2f}% avg return")
 
         if skipped:
             print(f"\n  Skipped segments (insufficient data):")

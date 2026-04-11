@@ -58,10 +58,11 @@ def _make_ib_client(config: RuntimeConfig):
         return None
 
 
-def _build_pipeline(config: RuntimeConfig) -> FeedPipeline:
+def _build_pipeline(config: RuntimeConfig, ib_client=None) -> FeedPipeline:
     from subscribers import TelegramSubscriber, TraderSubscriber
 
-    ib_client = _make_ib_client(config)
+    if ib_client is None:
+        ib_client = _make_ib_client(config)
 
     # Build subscriber list — trader first for speed
     subscribers = []
@@ -274,9 +275,19 @@ async def _run_continuous(config: RuntimeConfig) -> None:
     logging.info("Continuous mode (poll every %ds)", config.poll_interval_seconds)
     last_eod_date: Optional[str] = None
 
+    # Create IB client once and reuse across all poll cycles
+    ib_client = _make_ib_client(config)
+    if ib_client:
+        try:
+            await ib_client.connect()
+            logging.info("Persistent IB connection established for continuous mode")
+        except Exception as e:
+            logging.warning("IB connect failed: %s — will retry per cycle", e)
+            ib_client = None
+
     while True:
         try:
-            pipeline = _build_pipeline(config)
+            pipeline = _build_pipeline(config, ib_client=ib_client)
             stats = await pipeline.run()
             total_delivered = sum(
                 s.get("sent", 0) + s.get("traded", 0)

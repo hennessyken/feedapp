@@ -212,8 +212,18 @@ class FeedDatabase:
         except Exception:
             pass  # Table doesn't exist yet
 
+    async def wal_checkpoint(self) -> None:
+        """Truncate the WAL file to prevent bloat. Call periodically."""
+        if self._db:
+            try:
+                await self._db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                logger.debug("WAL checkpoint (TRUNCATE) completed")
+            except Exception as e:
+                logger.warning("WAL checkpoint failed: %s", e)
+
     async def close(self) -> None:
         if self._db:
+            await self.wal_checkpoint()
             await self._db.close()
             self._db = None
 

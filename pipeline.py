@@ -164,6 +164,7 @@ class FeedPipeline:
         self._db = FeedDatabase(config.db_path)
         self._screener = KeywordScreener()
         self._ib_client = ib_client  # Optional IBClient for price tracking
+        self._owns_ib = False  # True if we connected IB ourselves (and should disconnect)
         self._spend_tracker = SpendTracker(db_path=config.db_path)
         self._subscribers = subscribers or []
 
@@ -172,20 +173,23 @@ class FeedPipeline:
         await self._db.connect()
         await self._spend_tracker.connect()
 
-        # Connect IB if available (best-effort — failure disables price tracking)
+        # Connect IB if available and not already connected (persistent mode)
         if self._ib_client is not None:
-            try:
-                await self._ib_client.connect()
-            except Exception as e:
-                logger.warning("IB connection failed: %s — prices will not be captured", e)
-                self._ib_client = None
+            if not self._ib_client.is_connected():
+                try:
+                    await self._ib_client.connect()
+                    self._owns_ib = True
+                except Exception as e:
+                    logger.warning("IB connection failed: %s — prices will not be captured", e)
+                    self._ib_client = None
 
         try:
             return await self._execute()
         finally:
             await self._spend_tracker.close()
             await self._db.close()
-            if self._ib_client is not None:
+            # Only disconnect IB if we connected it ourselves (not persistent)
+            if self._owns_ib and self._ib_client is not None:
                 await self._ib_client.disconnect()
 
     async def _fill_pending_buy_prices(self) -> Dict[str, int]:

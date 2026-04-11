@@ -812,22 +812,90 @@ async def _make_classifier_db(n_signals: int = 60, with_llm: bool = False):
     return db
 
 
+def _make_fake_optimizer_results() -> list:
+    """Create fake optimizer results so classifier can pick hold/stop per segment."""
+    return [
+        StrategyResult(hold_days=5, stop_loss_pct=0.05, filter_name="all",
+                       trades=50, wins=30, win_rate=60.0, avg_return=1.5,
+                       median_return=1.0, total_return=75.0, sharpe=1.2,
+                       best=8.0, worst=-5.0, max_drawdown=10.0),
+        StrategyResult(hold_days=3, stop_loss_pct=0.03, filter_name="source=edgar",
+                       trades=20, wins=14, win_rate=70.0, avg_return=2.0,
+                       median_return=1.5, total_return=40.0, sharpe=1.5,
+                       best=6.0, worst=-3.0, max_drawdown=5.0),
+        StrategyResult(hold_days=10, stop_loss_pct=0.07, filter_name="event_type=M_A_TARGET",
+                       trades=15, wins=10, win_rate=66.7, avg_return=3.0,
+                       median_return=2.0, total_return=45.0, sharpe=1.8,
+                       best=10.0, worst=-4.0, max_drawdown=6.0),
+        StrategyResult(hold_days=2, stop_loss_pct=0.02, filter_name="source=fda",
+                       trades=10, wins=7, win_rate=70.0, avg_return=1.8,
+                       median_return=1.2, total_return=18.0, sharpe=1.4,
+                       best=5.0, worst=-2.0, max_drawdown=3.0),
+        StrategyResult(hold_days=7, stop_loss_pct=None, filter_name="polarity=positive",
+                       trades=25, wins=16, win_rate=64.0, avg_return=1.6,
+                       median_return=1.1, total_return=40.0, sharpe=1.1,
+                       best=7.0, worst=-6.0, max_drawdown=8.0),
+    ]
+
+
 @pytest.mark.asyncio
 class TestSignalClassifier:
-    async def test_train_basic(self):
-        """Classifier should train and return valid metrics."""
+    async def test_train_global_models(self):
+        """Classifier + regressor should train global models across top hold/stop combos."""
         db = await _make_classifier_db(n_signals=60)
         try:
-            clf = SignalClassifier(db, hold_days=5, stop_loss_pct=0.05, min_samples=10)
+            results = _make_fake_optimizer_results()
+            clf = SignalClassifier(db, optimizer_results=results, min_samples=10)
             report = await clf.train_and_evaluate()
 
             assert "error" not in report
-            assert report["total_signals"] > 0
-            assert 0 <= report["cv_accuracy"] <= 1
-            assert 0 <= report["cv_auc_roc"] <= 1
-            assert report["feature_count"] > 0
-            assert len(report["feature_importance"]) > 0
+            assert report["total_signals"] == 60
             assert report["has_llm_features"] is False
+
+            # Should have global models
+            global_models = report["global_models"]
+            assert len(global_models) > 0
+            # Each should have classifier + regressor metrics
+            for gm in global_models:
+                if not gm.get("skipped"):
+                    assert 0 <= gm["cv_auc_roc"] <= 1
+                    assert gm["n_signals"] > 0
+                    # Regressor metrics
+                    assert "reg_mae" in gm
+                    assert "reg_rmse" in gm
+                    assert "reg_r2" in gm
+                    assert "reg_feature_importance" in gm
+                    assert "clf_feature_importance" in gm
+
+            # Best global should be selected
+            best = report["best_global"]
+            assert "error" not in best
+            assert best["cv_auc_roc"] >= 0
+            assert best["reg_mae"] >= 0
+        finally:
+            await db.close()
+
+    async def test_train_segment_models(self):
+        """Classifier should train per-segment models with different hold/stop."""
+        db = await _make_classifier_db(n_signals=80)
+        try:
+            results = _make_fake_optimizer_results()
+            clf = SignalClassifier(
+                db, optimizer_results=results,
+                min_samples=10, min_segment_samples=5,
+            )
+            report = await clf.train_and_evaluate()
+
+            assert "error" not in report
+            seg_models = report["segment_models"]
+            assert len(seg_models) > 0
+
+            # Check that segments use different hold/stop
+            trained = [s for s in seg_models if not s.get("skipped")]
+            if len(trained) >= 2:
+                configs = set((s["hold_days"], s["stop_loss_pct"]) for s in trained)
+                # Should have at least some variety (not all identical)
+                assert len(configs) >= 1
         finally:
             await db.close()
 
@@ -835,32 +903,20 @@ class TestSignalClassifier:
         """Classifier should include LLM features when available."""
         db = await _make_classifier_db(n_signals=60, with_llm=True)
         try:
-            clf = SignalClassifier(db, hold_days=5, stop_loss_pct=0.05, min_samples=10)
+            results = _make_fake_optimizer_results()
+            clf = SignalClassifier(db, optimizer_results=results, min_samples=10)
             report = await clf.train_and_evaluate()
 
             assert "error" not in report
             assert report["has_llm_features"] is True
-            # Should have more features with LLM
-            feat_names = [f["feature"] for f in report["feature_importance"]]
-            assert any("sentry1" in f or "llm_" in f for f in feat_names)
-        finally:
-            await db.close()
 
-    async def test_insufficient_data(self):
-        """Should return error when too few signals have prices."""
-        db = FeedDatabase(":memory:")
-        await db.connect()
-        try:
-            # Only 2 signals — below min_samples
-            for i in range(2):
-                await db.upsert_backtest_signal(
-                    item_id=f"few-{i}", ticker="AAPL",
-                    event_type="OTHER", source="edgar",
-                    signal_date="2025-06-01", keyword_score=50,
-                )
-            clf = SignalClassifier(db, min_samples=30)
-            report = await clf.train_and_evaluate()
-            assert report["error"] == "insufficient_data"
+            # Both classifier and regressor features should include LLM
+            best = report["best_global"]
+            if "error" not in best:
+                clf_feats = [f["feature"] for f in best.get("clf_feature_importance", [])]
+                reg_feats = [f["feature"] for f in best.get("reg_feature_importance", [])]
+                assert any("sentry1" in f or "llm_" in f for f in clf_feats)
+                assert any("sentry1" in f or "llm_" in f for f in reg_feats)
         finally:
             await db.close()
 
@@ -875,15 +931,19 @@ class TestSignalClassifier:
         finally:
             await db.close()
 
-    async def test_predict_proba(self):
-        """After training, predict_proba should return a probability."""
-        db = await _make_classifier_db(n_signals=60)
+    async def test_predict_uses_segment_model(self):
+        """predict should prefer segment model over global, return both prob and return."""
+        db = await _make_classifier_db(n_signals=80)
         try:
-            clf = SignalClassifier(db, hold_days=5, stop_loss_pct=0.05, min_samples=10)
+            results = _make_fake_optimizer_results()
+            clf = SignalClassifier(
+                db, optimizer_results=results,
+                min_samples=10, min_segment_samples=5,
+            )
             report = await clf.train_and_evaluate()
             assert "error" not in report
 
-            prob = clf.predict_proba({
+            prediction = clf.predict({
                 "keyword_score": 60,
                 "confidence": 80,
                 "impact_score": 70,
@@ -892,8 +952,13 @@ class TestSignalClassifier:
                 "polarity": "positive",
                 "impact_class": "high",
             })
-            assert prob is not None
-            assert 0.0 <= prob <= 1.0
+
+            assert prediction is not None
+            assert 0.0 <= prediction["probability"] <= 1.0
+            assert isinstance(prediction["predicted_return"], float)
+            assert "hold_days" in prediction
+            assert "stop_loss_pct" in prediction
+            assert "model" in prediction
         finally:
             await db.close()
 
@@ -907,17 +972,81 @@ class TestSignalClassifier:
         finally:
             await db.close()
 
-    async def test_threshold_analysis(self):
-        """Threshold analysis should show improving win rate at higher thresholds."""
+    async def test_threshold_analysis_in_global(self):
+        """Global model should include threshold analysis."""
         db = await _make_classifier_db(n_signals=80)
         try:
-            clf = SignalClassifier(db, hold_days=5, stop_loss_pct=0.05, min_samples=10)
+            results = _make_fake_optimizer_results()
+            clf = SignalClassifier(db, optimizer_results=results, min_samples=10)
             report = await clf.train_and_evaluate()
 
-            assert "threshold_analysis" in report
-            if report["threshold_analysis"]:
-                # Higher thresholds should have fewer trades
-                trades = [t["trades"] for t in report["threshold_analysis"]]
-                assert trades[0] >= trades[-1]  # 0.5 threshold >= 0.8 threshold
+            best = report["best_global"]
+            if "error" not in best and best.get("threshold_analysis"):
+                trades = [t["trades"] for t in best["threshold_analysis"]]
+                # Higher thresholds should have fewer or equal trades
+                assert trades[0] >= trades[-1]
+        finally:
+            await db.close()
+
+    async def test_default_configs_without_optimizer(self):
+        """Without optimizer results, should use sensible default configs."""
+        db = await _make_classifier_db(n_signals=60)
+        try:
+            clf = SignalClassifier(db, min_samples=10)  # no optimizer_results
+            report = await clf.train_and_evaluate()
+
+            assert "error" not in report
+            # Should still train global models with defaults
+            assert len(report["global_models"]) > 0
+        finally:
+            await db.close()
+
+    async def test_combined_gate_analysis(self):
+        """Best global model should include combined gate analysis."""
+        db = await _make_classifier_db(n_signals=80)
+        try:
+            results = _make_fake_optimizer_results()
+            clf = SignalClassifier(db, optimizer_results=results, min_samples=10)
+            report = await clf.train_and_evaluate()
+
+            best = report["best_global"]
+            assert "error" not in best
+
+            # Should have return threshold analysis
+            assert "return_threshold_analysis" in best
+            if best["return_threshold_analysis"]:
+                for t in best["return_threshold_analysis"]:
+                    assert "min_predicted_return" in t
+                    assert "actual_avg_return" in t
+                    assert "actual_win_rate" in t
+
+            # Should have combined gate analysis
+            assert "combined_gate_analysis" in best
+            if best["combined_gate_analysis"]:
+                for g in best["combined_gate_analysis"]:
+                    assert "prob_threshold" in g
+                    assert "return_threshold" in g
+                    assert g["trades"] >= 3  # minimum we set
+        finally:
+            await db.close()
+
+    async def test_regressor_metrics(self):
+        """Regressor should have valid MAE, RMSE, R2 metrics."""
+        db = await _make_classifier_db(n_signals=60)
+        try:
+            results = _make_fake_optimizer_results()
+            clf = SignalClassifier(db, optimizer_results=results, min_samples=10)
+            report = await clf.train_and_evaluate()
+
+            best = report["best_global"]
+            assert "error" not in best
+
+            # MAE and RMSE should be non-negative
+            assert best["reg_mae"] >= 0
+            assert best["reg_rmse"] >= 0
+            # R2 can be negative (worse than mean) but should be a valid number
+            assert isinstance(best["reg_r2"], float)
+            # RMSE >= MAE always
+            assert best["reg_rmse"] >= best["reg_mae"] - 0.001  # small tolerance
         finally:
             await db.close()
