@@ -65,7 +65,22 @@ CREATE TABLE IF NOT EXISTS backtest_signals (
     title            TEXT,
     url              TEXT,
     matched_keywords TEXT,
-    created_at       TEXT NOT NULL
+    created_at       TEXT NOT NULL,
+
+    -- LLM analysis (populated by Phase 2 of analyzer)
+    llm_scored       INTEGER DEFAULT 0,
+    sentry1_company  INTEGER,
+    sentry1_price    INTEGER,
+    sentry1_pass     INTEGER,
+    llm_event_type   TEXT,
+    llm_confidence   INTEGER,
+    llm_impact_score INTEGER,
+    llm_action       TEXT,
+    llm_polarity     TEXT,
+    llm_numeric_terms TEXT,
+    llm_risk_flags    TEXT,
+    llm_evidence_spans TEXT,
+    llm_rationale     TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_bt_signals_ticker ON backtest_signals(ticker);
 CREATE INDEX IF NOT EXISTS idx_bt_signals_date   ON backtest_signals(signal_date);
@@ -125,6 +140,7 @@ class FeedDatabase:
         await self._db.execute("PRAGMA foreign_keys=ON")
         await self._db.commit()
         await self._migrate_columns()
+        await self._migrate_backtest_signals_llm()
         logger.info("Database connected: %s", self._db_path)
 
     async def _migrate_backtest_prices(self) -> None:
@@ -159,6 +175,42 @@ class FeedDatabase:
             )
             await self._db.commit()
             logger.info("Migrated columns: %s", ", ".join(added))
+
+    async def _migrate_backtest_signals_llm(self) -> None:
+        """Add LLM analysis columns to backtest_signals if missing."""
+        assert self._db
+        try:
+            cur = await self._db.execute("PRAGMA table_info(backtest_signals)")
+            existing = {row[1] for row in await cur.fetchall()}
+            if not existing:
+                return  # Table doesn't exist yet
+            llm_cols = [
+                ("llm_scored", "INTEGER DEFAULT 0"),
+                ("sentry1_company", "INTEGER"),
+                ("sentry1_price", "INTEGER"),
+                ("sentry1_pass", "INTEGER"),
+                ("llm_event_type", "TEXT"),
+                ("llm_confidence", "INTEGER"),
+                ("llm_impact_score", "INTEGER"),
+                ("llm_action", "TEXT"),
+                ("llm_polarity", "TEXT"),
+                ("llm_numeric_terms", "TEXT"),
+                ("llm_risk_flags", "TEXT"),
+                ("llm_evidence_spans", "TEXT"),
+                ("llm_rationale", "TEXT"),
+            ]
+            added = []
+            for col_name, col_type in llm_cols:
+                if col_name not in existing:
+                    await self._db.execute(
+                        f"ALTER TABLE backtest_signals ADD COLUMN {col_name} {col_type}"
+                    )
+                    added.append(col_name)
+            if added:
+                await self._db.commit()
+                logger.info("Migrated backtest_signals LLM columns: %s", ", ".join(added))
+        except Exception:
+            pass  # Table doesn't exist yet
 
     async def close(self) -> None:
         if self._db:
@@ -565,6 +617,51 @@ class FeedDatabase:
         cur = await self._db.execute("SELECT COUNT(*) FROM backtest_signals")
         row = await cur.fetchone()
         return row[0] if row else 0
+
+    async def count_backtest_signals_llm_scored(self) -> int:
+        assert self._db
+        cur = await self._db.execute(
+            "SELECT COUNT(*) FROM backtest_signals WHERE llm_scored = 1"
+        )
+        row = await cur.fetchone()
+        return row[0] if row else 0
+
+    async def update_backtest_signal_llm(self, item_id: str, **kwargs: Any) -> None:
+        """Update LLM analysis fields on a backtest signal."""
+        assert self._db
+        await self._db.execute(
+            """UPDATE backtest_signals SET
+                llm_scored = 1,
+                sentry1_company = ?,
+                sentry1_price = ?,
+                sentry1_pass = ?,
+                llm_event_type = ?,
+                llm_confidence = ?,
+                llm_impact_score = ?,
+                llm_action = ?,
+                llm_polarity = ?,
+                llm_numeric_terms = ?,
+                llm_risk_flags = ?,
+                llm_evidence_spans = ?,
+                llm_rationale = ?
+            WHERE item_id = ?""",
+            (
+                kwargs.get("sentry1_company"),
+                kwargs.get("sentry1_price"),
+                kwargs.get("sentry1_pass"),
+                kwargs.get("llm_event_type"),
+                kwargs.get("llm_confidence"),
+                kwargs.get("llm_impact_score"),
+                kwargs.get("llm_action"),
+                kwargs.get("llm_polarity"),
+                kwargs.get("llm_numeric_terms"),
+                kwargs.get("llm_risk_flags"),
+                kwargs.get("llm_evidence_spans"),
+                kwargs.get("llm_rationale"),
+                item_id,
+            ),
+        )
+        await self._db.commit()
 
     async def mark_tweeted(self, item_id: str, tweet_id: str) -> None:
         """Mark an item as posted to Twitter."""

@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-"""Pipeline orchestrator: feeds → keyword screening → LLM analysis → Telegram.
+"""Pipeline orchestrator: feeds → keyword screening → subscriber fan-out.
 
 Full pipeline:
-  1. Fetch from EDGAR, FDA, EMA feeds in parallel
+  1. Fetch from EDGAR, FDA, EMA, ClinicalTrials feeds in parallel
   2. Deduplicate and persist to SQLite
   3. Keyword screen (deterministic, no LLM)
-  4. For relevant items: Sentry-1 gate → Ranker extraction (if LLM enabled)
-  5. DeterministicEventScorer + SignalDecisionPolicy
-  6. Format signal → deliver via Telegram
+  4. Fan out relevant items to each enabled subscriber
+     (each subscriber has its own screening/LLM/scoring/delivery)
 """
 
 import asyncio
@@ -20,20 +19,13 @@ import httpx
 
 from db import FeedDatabase
 from spend_tracker import SpendTracker
-from domain import (
-    DecisionInputs,
-    DeterministicEventScorer,
-    DeterministicScoring,
-    KeywordScreener,
-    RankedSignal,
-    SignalDecisionPolicy,
-    freshness_decay,
-)
+from domain import KeywordScreener
 from feeds.base import BaseFeedAdapter, FeedResult
 from feeds.edgar import EdgarFeedAdapter
 from feeds.fda import FdaFeedAdapter
 from feeds.ema import EmaFeedAdapter
 from feeds.clinical_trials import ClinicalTrialsFeedAdapter
+from subscribers.base import BaseSubscriber, SubscriberContext
 
 logger = logging.getLogger(__name__)
 
@@ -160,18 +152,20 @@ class PipelineConfig:
 
 
 class FeedPipeline:
-    """Orchestrates feed collection, screening, and database persistence."""
+    """Orchestrates feed collection, screening, and subscriber fan-out."""
 
     def __init__(
         self,
         config: PipelineConfig,
         ib_client: Optional[Any] = None,
+        subscribers: Optional[List[BaseSubscriber]] = None,
     ) -> None:
         self._config = config
         self._db = FeedDatabase(config.db_path)
         self._screener = KeywordScreener()
         self._ib_client = ib_client  # Optional IBClient for price tracking
         self._spend_tracker = SpendTracker(db_path=config.db_path)
+        self._subscribers = subscribers or []
 
     async def run(self) -> Dict[str, Any]:
         """Execute one full pipeline cycle. Returns summary stats."""
@@ -286,10 +280,29 @@ class FeedPipeline:
                 stats["total_vetoed"] += feed_stats["vetoed"]
                 relevant_items.extend(feed_relevant)
 
-            # Phase 2: LLM analysis + scoring + Telegram for relevant items
-            if relevant_items:
-                signal_stats = await self._analyze_and_deliver(relevant_items, http)
-                stats["signals"] = signal_stats
+            # Phase 2: Fan out to each enabled subscriber
+            if relevant_items and self._subscribers:
+                ctx = SubscriberContext(
+                    http=http,
+                    db=self._db,
+                    spend_tracker=self._spend_tracker,
+                    ib_client=self._ib_client,
+                )
+                for subscriber in self._subscribers:
+                    if not subscriber.enabled:
+                        continue
+                    try:
+                        sub_stats = await subscriber.process(
+                            relevant_items, ctx, self._config,
+                        )
+                        stats["signals"][subscriber.name] = sub_stats
+                    except Exception as e:
+                        logger.error(
+                            "Subscriber %s failed: %s", subscriber.name, e,
+                        )
+                        stats["signals"][subscriber.name] = {"error": str(e)}
+            elif relevant_items:
+                logger.info("No subscribers configured — signals not processed")
             else:
                 logger.info("No relevant items to analyze")
 
@@ -298,15 +311,21 @@ class FeedPipeline:
         stats["finished_at"] = datetime.now(timezone.utc).isoformat()
         stats["spend_usd"] = round(self._spend_tracker.cumulative_usd, 4)
 
+        # Sum sent/traded across all subscribers
+        total_delivered = sum(
+            s.get("sent", 0) + s.get("traded", 0)
+            for s in stats.get("signals", {}).values()
+            if isinstance(s, dict)
+        )
         logger.info(
             "Pipeline complete: %d fetched, %d new, %d relevant, %d irrelevant, %d vetoed, "
-            "%d signals sent (%.1fs)",
+            "%d signals delivered (%.1fs)",
             stats["total_fetched"],
             stats["total_new"],
             stats["total_relevant"],
             stats["total_irrelevant"],
             stats["total_vetoed"],
-            stats.get("signals", {}).get("sent", 0),
+            total_delivered,
             elapsed,
         )
 
@@ -333,451 +352,6 @@ class FeedPipeline:
                 max_age_days=self._config.fda_max_age_days,
             ),
         }
-
-    # ------------------------------------------------------------------
-    # Phase 2: LLM analysis → scoring → signal delivery
-    # ------------------------------------------------------------------
-
-    async def _analyze_and_deliver(
-        self, items: List[FeedResult], http: httpx.AsyncClient,
-    ) -> Dict[str, Any]:
-        """Run Sentry-1 → Ranker → scoring → Telegram for relevant items.
-
-        When OPENAI_API_KEY is set and LLM is enabled, uses Sentry-1 gate
-        and Ranker extraction before scoring. Otherwise falls back to
-        keyword-only scoring (no LLM calls).
-        """
-        from signal_formatter import format_signal
-        from notifier import send_signal
-
-        stats = {"analyzed": 0, "sent": 0, "skipped": 0, "ignored": 0, "errors": 0}
-        scorer = DeterministicEventScorer()
-        policy = SignalDecisionPolicy()
-        screener = self._screener
-
-        # Set up LLM gateway if credentials are available
-        llm = None
-        use_llm = bool(
-            self._config.llm_ranker_enabled
-            and (self._config.openai_api_key or "").strip()
-        )
-        if use_llm:
-            try:
-                from llm import OpenAiRegulatoryLlmGateway, OpenAiModels
-                llm = OpenAiRegulatoryLlmGateway(
-                    http=http,
-                    api_key=self._config.openai_api_key,
-                    models=OpenAiModels(
-                        sentry1=self._config.sentry1_model,
-                        ranker=self._config.ranker_model,
-                    ),
-                    timeout_seconds=self._config.http_timeout_seconds,
-                )
-                logger.info(
-                    "LLM analysis enabled (sentry=%s, ranker=%s)",
-                    self._config.sentry1_model,
-                    self._config.ranker_model,
-                )
-            except Exception as e:
-                logger.warning("Failed to initialise LLM gateway: %s — using keyword-only", e)
-                llm = None
-        else:
-            if not (self._config.openai_api_key or "").strip():
-                logger.info("LLM analysis disabled (no OPENAI_API_KEY) — keyword-only scoring")
-            else:
-                logger.info("LLM analysis disabled (LLM_RANKER_ENABLED=false) — keyword-only scoring")
-
-        for item in items:
-            try:
-                stats["analyzed"] += 1
-
-                # Re-screen to get structured result
-                screen = screener.screen(item.title, item.content_snippet or "")
-                event_type = screen.event_category
-
-                # Compute freshness
-                age_h: Optional[float] = None
-                if item.published_at:
-                    try:
-                        pub = datetime.fromisoformat(
-                            str(item.published_at).replace("Z", "+00:00")
-                        )
-                        if pub.tzinfo is None:
-                            pub = pub.replace(tzinfo=timezone.utc)
-                        age_h = max(
-                            0.0,
-                            (datetime.now(timezone.utc) - pub).total_seconds() / 3600,
-                        )
-                    except Exception:
-                        pass
-                freshness_mult = freshness_decay(age_h)
-
-                # Extract ticker / company from metadata or title
-                meta = item.metadata or {}
-                ticker = str(
-                    meta.get("ticker") or meta.get("symbol") or ""
-                ).upper().strip()
-                company_name = str(
-                    meta.get("company_name") or meta.get("entity_name") or ""
-                ).strip()
-
-                # LLM ticker resolution — if metadata has no ticker, ask gpt-5-nano
-                if not ticker and llm is not None:
-                    try:
-                        resolved = await _resolve_ticker_llm(
-                            http, self._config.openai_api_key,
-                            item.title, item.content_snippet or "",
-                            item.feed_source,
-                        )
-                        if resolved:
-                            ticker = resolved["ticker"]
-                            if not company_name:
-                                company_name = resolved["company"]
-                            logger.info(
-                                "LLM ticker resolved: %s → %s (%s)",
-                                item.title[:50], ticker, company_name,
-                            )
-                            # Record spend
-                            if self._spend_tracker and resolved.get("usage"):
-                                await self._spend_tracker.record(
-                                    "gpt-5-nano", resolved["usage"],
-                                    call_type="ticker_resolve",
-                                )
-                    except Exception as e:
-                        logger.debug("LLM ticker resolution failed: %s", e)
-
-                # If still no ticker, skip — can't trade or price it
-                if not ticker:
-                    logger.info(
-                        "SKIPPED (no ticker): %s [%s]",
-                        item.title[:60], item.feed_source,
-                    )
-                    stats["skipped"] += 1
-                    continue
-
-                if not company_name:
-                    company_name = ticker
-
-                llm_ranker_succeeded = False
-                sentry1_passed = False
-                excerpt = f"{item.title}\n\n{item.content_snippet or ''}"[:12_000]
-
-                # ── LLM path: Sentry-1 gate → Ranker extraction ─────────
-                if llm is not None:
-                    try:
-                        from application import Sentry1Request, RankerRequest
-
-                        # Sentry-1 gate
-                        sentry_result = await llm.sentry1(
-                            Sentry1Request(
-                                ticker=ticker,
-                                company_name=company_name,
-                                home_ticker=str(meta.get("home_ticker") or ""),
-                                isin=str(meta.get("isin") or ""),
-                                doc_title=item.title,
-                                doc_source=item.feed_source,
-                                document_text=excerpt,
-                            )
-                        )
-
-                        # Record sentry1 spend
-                        if llm._last_usage:
-                            await self._spend_tracker.record(
-                                llm._last_model, llm._last_usage, call_type="sentry1",
-                            )
-
-                        logger.info(
-                            "Sentry-1 %s: company=%d%% price=%d%% — %s",
-                            ticker,
-                            sentry_result.company_probability,
-                            sentry_result.price_probability,
-                            sentry_result.rationale[:80],
-                        )
-
-                        # Gate check: both must pass thresholds
-                        if sentry_result.company_probability < 60:
-                            logger.info(
-                                "Sentry-1 REJECTED %s: company_probability=%d < 60",
-                                ticker, sentry_result.company_probability,
-                            )
-                            stats["skipped"] += 1
-                            continue
-                        if sentry_result.price_probability < 50:
-                            logger.info(
-                                "Sentry-1 REJECTED %s: price_probability=%d < 50",
-                                ticker, sentry_result.price_probability,
-                            )
-                            stats["skipped"] += 1
-                            continue
-
-                        sentry1_passed = True
-                        logger.info("Sentry-1 PASSED %s — invoking Ranker", ticker)
-
-                        # Ranker extraction
-                        extraction = await llm.ranker(
-                            RankerRequest(
-                                ticker=ticker,
-                                company_name=company_name,
-                                doc_title=item.title,
-                                doc_source=item.feed_source,
-                                doc_url=item.url,
-                                published_at=(
-                                    datetime.fromisoformat(
-                                        item.published_at.replace("Z", "+00:00")
-                                    )
-                                    if item.published_at
-                                    else None
-                                ),
-                                document_text=excerpt,
-                                dossier={
-                                    "regulatory_document": {
-                                        "source": item.feed_source,
-                                        "title": item.title,
-                                        "url": item.url,
-                                    }
-                                },
-                                sentry1={
-                                    "keyword_score": screen.score,
-                                    "event_category": screen.event_category,
-                                    "matched_keywords": screen.matched_keywords,
-                                },
-                                form_type="",
-                                base_form_type="",
-                            )
-                        )
-
-                        # Record ranker spend
-                        if llm._last_usage:
-                            await self._spend_tracker.record(
-                                llm._last_model, llm._last_usage, call_type="ranker",
-                            )
-
-                        event_type = extraction.event_type
-                        llm_ranker_succeeded = True
-
-                        scoring = scorer.score(
-                            extraction={
-                                "event_type": extraction.event_type,
-                                "numeric_terms": extraction.numeric_terms,
-                                "risk_flags": extraction.risk_flags,
-                                "evidence_spans": extraction.evidence_spans,
-                            },
-                            doc_source=item.feed_source,
-                            freshness_mult=freshness_mult,
-                            dossier={},
-                        )
-
-                        logger.info(
-                            "Ranker %s: event=%s impact=%d conf=%d action=%s",
-                            ticker, event_type, scoring.impact_score,
-                            scoring.confidence, scoring.action,
-                        )
-
-                    except Exception as e:
-                        logger.warning(
-                            "LLM analysis failed for %s: %s — falling back to keyword scoring",
-                            ticker, e,
-                        )
-                        # Fall back to keyword-only scoring
-                        scoring = scorer.score(
-                            extraction={
-                                "event_type": screen.event_category,
-                                "keyword_score": screen.score,
-                                "evidence_spans": None,
-                            },
-                            doc_source=item.feed_source,
-                            freshness_mult=freshness_mult,
-                            dossier={},
-                        )
-                        if scoring.action == "trade":
-                            scoring = DeterministicScoring(
-                                impact_score=scoring.impact_score,
-                                confidence=min(scoring.confidence, 60),
-                                action="watch",
-                            )
-                else:
-                    # Keyword-only scoring
-                    scoring = scorer.score(
-                        extraction={
-                            "event_type": screen.event_category,
-                            "keyword_score": screen.score,
-                            "evidence_spans": None,
-                        },
-                        doc_source=item.feed_source,
-                        freshness_mult=freshness_mult,
-                        dossier={},
-                    )
-
-                # ── Decision policy ──────────────────────────────────────
-                impact_out = max(
-                    0, min(100, int(round(scoring.impact_score * freshness_mult)))
-                )
-                conf_out = max(0, min(100, scoring.confidence))
-
-                decision = policy.apply(
-                    DecisionInputs(
-                        doc_source=item.feed_source,
-                        form_type="",
-                        freshness_mult=freshness_mult,
-                        event_type=event_type,
-                        resolution_confidence=100,
-                        sentry1_probability=float(screen.score),
-                        ranker_impact_score=impact_out,
-                        ranker_confidence=conf_out,
-                        ranker_action=str(scoring.action or "watch"),
-                        llm_ranker_used=llm_ranker_succeeded,
-                    )
-                )
-
-                final_action = str(decision.action)
-                final_confidence = int(decision.confidence)
-
-                logger.info(
-                    "Decision %s: action=%s conf=%d impact=%d event=%s",
-                    ticker, final_action, final_confidence, impact_out, event_type,
-                )
-
-                # ── Classify + persist to DB (always, for backtesting) ─────
-                from signal_formatter import _classify_polarity, _classify_impact, _classify_latency
-                polarity = _classify_polarity(event_type)
-                impact_tier = _classify_impact(impact_out)
-                latency_class = _classify_latency(freshness_mult)
-
-                rationale = (
-                    f"keyword_score={screen.score} category={screen.event_category} "
-                    f"matched={screen.matched_keywords} "
-                    f"event_type={event_type} "
-                    f"freshness={freshness_mult:.2f} impact={impact_out} conf={conf_out}"
-                )
-
-                try:
-                    await self._db.update_signal_analysis(
-                        item.item_id,
-                        ticker=ticker,
-                        company_name=company_name,
-                        event_type=event_type,
-                        polarity=polarity,
-                        impact_score=impact_out,
-                        confidence=final_confidence,
-                        action=final_action,
-                        freshness_mult=round(freshness_mult, 4),
-                        latency_class=latency_class,
-                        sentry1_pass=sentry1_passed,
-                        llm_ranker_used=llm_ranker_succeeded,
-                        rationale=rationale,
-                    )
-                except Exception as db_err:
-                    logger.warning("Failed to persist signal analysis for %s: %s", ticker, db_err)
-
-                # Skip ignored signals
-                if final_action == "ignore" or final_confidence < 55:
-                    stats["ignored"] += 1
-                    continue
-
-                # Skip PARSE_ERROR — LLM misclassifications that hurt short-term returns
-                if event_type == "PARSE_ERROR":
-                    logger.info("Skipping PARSE_ERROR signal for %s", ticker)
-                    stats["ignored"] += 1
-                    continue
-
-                # ── Build signal + deliver via Telegram ──────────────────
-                sig = RankedSignal(
-                    doc_id=item.item_id,
-                    source=item.feed_source,
-                    title=item.title,
-                    published_at=item.published_at or "",
-                    url=item.url,
-                    ticker=ticker,
-                    company_name=company_name,
-                    resolution_confidence=100,
-                    sentry1_probability=float(screen.score),
-                    impact_score=impact_out,
-                    confidence=final_confidence,
-                    action=final_action,
-                    rationale=rationale,
-                )
-
-                # IB buy price — get before Telegram so we can include it
-                buy_price: Optional[float] = None
-                if self._ib_client is not None:
-                    try:
-                        from zoneinfo import ZoneInfo
-                        now_et = datetime.now(ZoneInfo("America/New_York"))
-                        signal_date = now_et.strftime("%Y-%m-%d")
-
-                        if _us_market_open(now_et):
-                            buy_price = await self._ib_client.get_price(ticker)
-                            if buy_price is not None:
-                                await self._db.update_buy_price(
-                                    item.item_id, buy_price, signal_date,
-                                )
-                                logger.info(
-                                    "IB buy_price: %s = $%.4f", ticker, buy_price,
-                                )
-                            else:
-                                await self._db.mark_signal_pending(
-                                    item.item_id, signal_date,
-                                )
-                                logger.warning(
-                                    "IB buy_price unavailable for %s — queued for retry",
-                                    ticker,
-                                )
-                        else:
-                            await self._db.mark_signal_pending(
-                                item.item_id, signal_date,
-                            )
-                            logger.info(
-                                "IB buy_price queued for %s — market closed, "
-                                "will fill at next open",
-                                ticker,
-                            )
-                    except Exception as ib_err:
-                        logger.warning(
-                            "IB buy_price failed for %s: %s", ticker, ib_err,
-                        )
-
-                try:
-                    from signal_formatter import format_signal_text
-                    formatted = format_signal(sig)
-
-                    # Generate 2-sentence LLM summary (falls back to deterministic)
-                    human_text = await format_signal_text(
-                        formatted,
-                        title=item.title,
-                        http_client=http,
-                        api_key=self._config.openai_api_key,
-                    )
-
-                    sent = await send_signal(
-                        formatted, human_text=human_text,
-                        buy_price=buy_price, http=http,
-                    )
-                    if sent:
-                        stats["sent"] += 1
-                        logger.info(
-                            "SIGNAL SENT: %s %s — impact=%d conf=%d action=%s",
-                            ticker, event_type, impact_out, final_confidence, final_action,
-                        )
-                    else:
-                        stats["skipped"] += 1
-                        logger.info(
-                            "SIGNAL SKIPPED (delivery failed): %s %s",
-                            ticker, event_type,
-                        )
-                except Exception as fmt_err:
-                    logger.warning("Signal format/send failed for %s: %s", ticker, fmt_err)
-                    stats["errors"] += 1
-
-            except Exception as e:
-                logger.error("Analysis failed for item %s: %s", item.item_id, e)
-                stats["errors"] += 1
-
-        logger.info(
-            "Signal analysis complete: %d analyzed, %d sent, %d skipped, %d ignored, %d errors",
-            stats["analyzed"], stats["sent"], stats["skipped"],
-            stats["ignored"], stats["errors"],
-        )
-        return stats
 
     async def _safe_fetch(
         self, adapter: BaseFeedAdapter, name: str

@@ -59,7 +59,25 @@ def _make_ib_client(config: RuntimeConfig):
 
 
 def _build_pipeline(config: RuntimeConfig) -> FeedPipeline:
+    from subscribers import TelegramSubscriber, TraderSubscriber
+
     ib_client = _make_ib_client(config)
+
+    # Build subscriber list — trader first for speed
+    subscribers = []
+    if config.subscriber_trader:
+        subscribers.append(TraderSubscriber(enabled=True))
+    if config.subscriber_telegram:
+        subscribers.append(TelegramSubscriber(enabled=True))
+
+    if subscribers:
+        logging.info(
+            "Subscribers: %s",
+            ", ".join(s.name for s in subscribers),
+        )
+    else:
+        logging.warning("No subscribers enabled — signals will not be processed")
+
     return FeedPipeline(
         PipelineConfig(
             db_path=config.db_path,
@@ -76,6 +94,7 @@ def _build_pipeline(config: RuntimeConfig) -> FeedPipeline:
             ranker_model=config.ranker_model,
         ),
         ib_client=ib_client,
+        subscribers=subscribers,
     )
 
 
@@ -172,8 +191,8 @@ async def _run_analyze(
 ) -> None:
     """Collect historical data and find optimal strategies."""
     from strategy_analyzer import (
-        DataCollector, StrategyOptimizer,
-        print_strategy_report, save_strategy_report,
+        DataCollector, LLMScorer, StrategyOptimizer, SignalClassifier,
+        print_strategy_report, save_strategy_report, print_ml_report,
     )
     from db import FeedDatabase
 
@@ -209,17 +228,42 @@ async def _run_analyze(
         collection_stats = await collector.collect(from_date, to_date)
         logging.info("Collection stats:\n%s", json.dumps(collection_stats, indent=2))
 
-        # Phase 2: Optimize strategies
+        # Phase 2: LLM-score all signals (cached — only runs on unscored)
+        if config.openai_api_key:
+            scorer = LLMScorer(
+                db,
+                openai_api_key=config.openai_api_key,
+                sentry1_model=config.sentry1_model,
+                ranker_model=config.ranker_model,
+            )
+            llm_stats = await scorer.score_all()
+            logging.info("LLM scoring stats:\n%s", json.dumps(llm_stats, indent=2))
+        else:
+            logging.info("Skipping LLM scoring (no OPENAI_API_KEY)")
+
+        # Phase 3: Optimize strategies
         optimizer = StrategyOptimizer(db)
         results = await optimizer.optimize()
 
-        # Phase 3: Report
+        # Phase 4: ML classifier — global + per-segment models
+        classifier = SignalClassifier(
+            db, optimizer_results=results,
+        )
+        ml_report = await classifier.train_and_evaluate()
+
+        # Phase 5: Report
         signals_count = collection_stats.get("total_signals_in_db", 0)
         print_strategy_report(results, signals_count=signals_count)
+        print_ml_report(ml_report)
 
         # Save JSON
         report_file = f"strategy_{from_date}_to_{to_date}.json"
         save_strategy_report(results, collection_stats, report_file)
+        # Save ML report alongside
+        ml_file = f"ml_classifier_{from_date}_to_{to_date}.json"
+        with open(ml_file, "w") as f:
+            json.dump(ml_report, f, indent=2, default=str)
+        logging.info("ML classifier report saved to %s", ml_file)
     finally:
         if ib_client:
             await ib_client.disconnect()
@@ -234,12 +278,17 @@ async def _run_continuous(config: RuntimeConfig) -> None:
         try:
             pipeline = _build_pipeline(config)
             stats = await pipeline.run()
+            total_delivered = sum(
+                s.get("sent", 0) + s.get("traded", 0)
+                for s in stats.get("signals", {}).values()
+                if isinstance(s, dict)
+            )
             logging.info(
-                "Cycle complete: %d fetched, %d new, %d relevant, %d signals sent (%.1fs)",
+                "Cycle complete: %d fetched, %d new, %d relevant, %d signals delivered (%.1fs)",
                 stats["total_fetched"],
                 stats["total_new"],
                 stats["total_relevant"],
-                stats.get("signals", {}).get("sent", 0),
+                total_delivered,
                 stats["elapsed_seconds"],
             )
         except Exception:

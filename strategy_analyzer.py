@@ -392,7 +392,204 @@ class DataCollector:
 
 
 # =====================================================================
-# Phase 2: Strategy Optimization
+# Phase 2: LLM Scoring
+# =====================================================================
+
+
+class LLMScorer:
+    """Run Sentry-1 + Ranker on all backtest signals.
+
+    Results are cached in the DB (llm_scored=1). Re-runs skip scored signals.
+    Cost: ~$0.001 per signal × 2 calls ≈ $1-2 total for 573 signals.
+    """
+
+    def __init__(
+        self,
+        db: FeedDatabase,
+        *,
+        openai_api_key: str,
+        sentry1_model: str = "gpt-5-nano",
+        ranker_model: str = "gpt-5-mini",
+        http_timeout: int = 30,
+    ) -> None:
+        self._db = db
+        self._api_key = openai_api_key
+        self._sentry1_model = sentry1_model
+        self._ranker_model = ranker_model
+        self._http_timeout = http_timeout
+
+    async def score_all(self) -> Dict[str, Any]:
+        """Run LLM on all unscored signals. Returns stats."""
+        signals = await self._db.get_all_backtest_signals()
+        already_scored = await self._db.count_backtest_signals_llm_scored()
+        unscored = [s for s in signals if not s.get("llm_scored")]
+
+        stats = {
+            "total_signals": len(signals),
+            "already_scored": already_scored,
+            "to_score": len(unscored),
+            "scored": 0,
+            "sentry1_passed": 0,
+            "sentry1_rejected": 0,
+            "ranker_succeeded": 0,
+            "errors": 0,
+        }
+
+        if not unscored:
+            logger.info("LLM scoring: all %d signals already scored", len(signals))
+            return stats
+
+        logger.info(
+            "LLM scoring: %d signals to score (%d already cached)",
+            len(unscored), already_scored,
+        )
+
+        timeout = httpx.Timeout(timeout=float(self._http_timeout))
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as http:
+            from llm import OpenAiRegulatoryLlmGateway, OpenAiModels
+            llm = OpenAiRegulatoryLlmGateway(
+                http=http,
+                api_key=self._api_key,
+                models=OpenAiModels(
+                    sentry1=self._sentry1_model,
+                    ranker=self._ranker_model,
+                ),
+                timeout_seconds=self._http_timeout,
+            )
+
+            for i, sig in enumerate(unscored):
+                try:
+                    await self._score_signal(sig, llm, stats)
+                    stats["scored"] += 1
+                    if (i + 1) % 50 == 0:
+                        logger.info(
+                            "  LLM scored %d/%d signals", i + 1, len(unscored),
+                        )
+                except Exception as e:
+                    logger.warning(
+                        "  LLM scoring failed for %s (%s): %s",
+                        sig["ticker"], sig["item_id"], e,
+                    )
+                    stats["errors"] += 1
+
+        logger.info(
+            "LLM scoring complete: %d scored, %d sentry1 passed, "
+            "%d rejected, %d ranker succeeded, %d errors",
+            stats["scored"], stats["sentry1_passed"],
+            stats["sentry1_rejected"], stats["ranker_succeeded"],
+            stats["errors"],
+        )
+        return stats
+
+    async def _score_signal(
+        self,
+        sig: Dict[str, Any],
+        llm: Any,
+        stats: Dict[str, int],
+    ) -> None:
+        """Run Sentry-1 + Ranker on one signal, persist results."""
+        from application import Sentry1Request, RankerRequest
+
+        ticker = sig["ticker"]
+        company_name = sig.get("company_name") or ticker
+        title = sig.get("title") or ""
+        source = sig.get("source") or ""
+        url = sig.get("url") or ""
+        excerpt = f"{title}"[:12_000]
+
+        # ── Sentry-1 gate ──
+        sentry_result = await llm.sentry1(
+            Sentry1Request(
+                ticker=ticker,
+                company_name=company_name,
+                home_ticker="",
+                isin="",
+                doc_title=title,
+                doc_source=source,
+                document_text=excerpt,
+            )
+        )
+
+        sentry1_pass = (
+            sentry_result.company_probability >= 60
+            and sentry_result.price_probability >= 50
+        )
+
+        llm_data: Dict[str, Any] = {
+            "sentry1_company": sentry_result.company_probability,
+            "sentry1_price": sentry_result.price_probability,
+            "sentry1_pass": 1 if sentry1_pass else 0,
+        }
+
+        if not sentry1_pass:
+            stats["sentry1_rejected"] += 1
+            llm_data["llm_rationale"] = sentry_result.rationale[:500]
+            await self._db.update_backtest_signal_llm(sig["item_id"], **llm_data)
+            return
+
+        stats["sentry1_passed"] += 1
+
+        # ── Ranker extraction ──
+        try:
+            extraction = await llm.ranker(
+                RankerRequest(
+                    ticker=ticker,
+                    company_name=company_name,
+                    doc_title=title,
+                    doc_source=source,
+                    doc_url=url,
+                    published_at=None,
+                    document_text=excerpt,
+                    dossier={},
+                    sentry1={
+                        "keyword_score": sig.get("keyword_score", 0),
+                        "event_category": sig.get("event_type", ""),
+                        "matched_keywords": sig.get("matched_keywords", ""),
+                    },
+                    form_type="",
+                    base_form_type="",
+                )
+            )
+
+            scorer = DeterministicEventScorer()
+            scoring = scorer.score(
+                extraction={
+                    "event_type": extraction.event_type,
+                    "numeric_terms": extraction.numeric_terms,
+                    "risk_flags": extraction.risk_flags,
+                    "evidence_spans": extraction.evidence_spans,
+                },
+                doc_source=source,
+                freshness_mult=1.0,
+                dossier={},
+            )
+
+            llm_data.update({
+                "llm_event_type": extraction.event_type,
+                "llm_confidence": scoring.confidence,
+                "llm_impact_score": scoring.impact_score,
+                "llm_action": str(scoring.action),
+                "llm_polarity": _classify_polarity(extraction.event_type),
+                "llm_numeric_terms": json.dumps(extraction.numeric_terms) if extraction.numeric_terms else None,
+                "llm_risk_flags": json.dumps(extraction.risk_flags) if extraction.risk_flags else None,
+                "llm_evidence_spans": json.dumps(
+                    [s for s in (extraction.evidence_spans or [])[:3]]
+                ) if extraction.evidence_spans else None,
+                "llm_rationale": (
+                    f"event={extraction.event_type} impact={scoring.impact_score} "
+                    f"conf={scoring.confidence} action={scoring.action}"
+                ),
+            })
+            stats["ranker_succeeded"] += 1
+
+        except Exception as e:
+            llm_data["llm_rationale"] = f"ranker_failed: {e}"
+
+        await self._db.update_backtest_signal_llm(sig["item_id"], **llm_data)
+
+
+# =====================================================================
+# Phase 3: Strategy Optimization
 # =====================================================================
 
 def _simulate_trade(
@@ -566,6 +763,78 @@ class StrategyOptimizer:
             if filtered:
                 filter_groups[f"kw_score>={threshold}"] = filtered
 
+        # ── LLM-based filters (only if LLM scoring has been run) ─────
+        llm_scored = [s for s in signals if s.get("llm_scored")]
+        if llm_scored:
+            filter_groups["llm_scored"] = llm_scored
+
+            # Sentry-1 passed vs rejected
+            s1_pass = [s for s in llm_scored if s.get("sentry1_pass")]
+            s1_fail = [s for s in llm_scored if not s.get("sentry1_pass")]
+            if s1_pass:
+                filter_groups["sentry1=pass"] = s1_pass
+            if s1_fail:
+                filter_groups["sentry1=fail"] = s1_fail
+
+            # By LLM event type
+            for sig in llm_scored:
+                et = sig.get("llm_event_type")
+                if et:
+                    key = f"llm_event={et}"
+                    filter_groups.setdefault(key, []).append(sig)
+
+            # By LLM polarity
+            for sig in llm_scored:
+                pol = sig.get("llm_polarity")
+                if pol:
+                    key = f"llm_polarity={pol}"
+                    filter_groups.setdefault(key, []).append(sig)
+
+            # By LLM action
+            for sig in llm_scored:
+                act = sig.get("llm_action")
+                if act:
+                    key = f"llm_action={act}"
+                    filter_groups.setdefault(key, []).append(sig)
+
+            # By LLM confidence buckets
+            for sig in llm_scored:
+                conf = sig.get("llm_confidence")
+                if conf is not None:
+                    if conf >= 80:
+                        filter_groups.setdefault("llm_conf>=80", []).append(sig)
+                    if conf >= 70:
+                        filter_groups.setdefault("llm_conf>=70", []).append(sig)
+                    if conf >= 60:
+                        filter_groups.setdefault("llm_conf>=60", []).append(sig)
+
+            # By LLM impact score buckets
+            for sig in llm_scored:
+                imp = sig.get("llm_impact_score")
+                if imp is not None:
+                    if imp >= 80:
+                        filter_groups.setdefault("llm_impact>=80", []).append(sig)
+                    if imp >= 60:
+                        filter_groups.setdefault("llm_impact>=60", []).append(sig)
+
+            # Combined: sentry1 pass + high confidence
+            high_conv = [
+                s for s in s1_pass
+                if (s.get("llm_confidence") or 0) >= 70
+                and (s.get("llm_impact_score") or 0) >= 60
+            ]
+            if high_conv:
+                filter_groups["llm_high_conviction"] = high_conv
+
+            # Keyword agrees with LLM
+            kw_llm_agree = [
+                s for s in llm_scored
+                if s.get("llm_polarity") and s.get("polarity")
+                and s["llm_polarity"] == s["polarity"]
+            ]
+            if kw_llm_agree:
+                filter_groups["kw_llm_agree"] = kw_llm_agree
+
         # Run all combos
         results: List[StrategyResult] = []
         total_combos = len(filter_groups) * len(HOLD_DAYS) * len(STOP_LOSSES)
@@ -600,6 +869,559 @@ class StrategyOptimizer:
         results.sort(key=lambda r: r.sharpe, reverse=True)
         logger.info("Optimization complete: %d viable strategies tested", len(results))
         return results
+
+
+# =====================================================================
+# Phase 4: ML Signal Classifier (XGBoost)
+# =====================================================================
+
+# Segment definitions — each segment gets its own model with optimal hold/stop
+SEGMENT_KEYS = [
+    ("source", "source"),           # edgar, fda, ema, clinical_trials
+    ("event_type", "event_type"),   # M_A_TARGET, EARNINGS_BEAT, FDA_APPROVAL, ...
+    ("polarity", "polarity"),       # positive, negative, neutral
+]
+
+
+@dataclass
+class SegmentModel:
+    """Trained model for one signal segment."""
+    segment_name: str               # e.g. "source=edgar", "event_type=M_A_TARGET"
+    hold_days: int
+    stop_loss_pct: Optional[float]
+    model: Any                      # fitted XGBClassifier
+    encoder: Any                    # fitted OneHotEncoder
+    feature_names: List[str]
+    metrics: Dict[str, Any]         # cv accuracy, auc, etc.
+    n_signals: int
+
+
+class SignalClassifier:
+    """Train XGBoost models on backtest signals to predict profitability.
+
+    Trains:
+    1. Per-segment models (by source, event_type, polarity) each with their
+       own best hold/stop from the optimizer. E.g., M&A signals might hold 10d
+       while earnings signals hold 2d.
+    2. Global models across the top N hold/stop combos for comparison.
+
+    For live scoring, uses the segment-specific model if available, else global.
+    """
+
+    NUMERIC_FEATURES = [
+        "keyword_score", "confidence", "impact_score",
+    ]
+    CATEGORICAL_FEATURES = [
+        "source", "event_type", "polarity", "impact_class",
+    ]
+    LLM_NUMERIC_FEATURES = [
+        "sentry1_company", "sentry1_price", "sentry1_pass",
+        "llm_confidence", "llm_impact_score",
+    ]
+    LLM_CATEGORICAL_FEATURES = [
+        "llm_action", "llm_polarity", "llm_event_type",
+    ]
+
+    def __init__(
+        self,
+        db: FeedDatabase,
+        *,
+        optimizer_results: Optional[List[StrategyResult]] = None,
+        top_n_global: int = 5,
+        profit_threshold: float = 0.0,
+        min_samples: int = 20,
+        min_segment_samples: int = 15,
+    ) -> None:
+        self._db = db
+        self._optimizer_results = optimizer_results or []
+        self._top_n_global = top_n_global
+        self._profit_threshold = profit_threshold
+        self._min_samples = min_samples
+        self._min_segment_samples = min_segment_samples
+        # Trained models
+        self._global_model: Optional[SegmentModel] = None
+        self._segment_models: Dict[str, SegmentModel] = {}
+
+    async def train_and_evaluate(self) -> Dict[str, Any]:
+        """Train global + per-segment models. Returns full report."""
+        import numpy as np
+
+        signals = await self._db.get_all_backtest_signals()
+        if not signals:
+            return {"error": "no_signals"}
+
+        # Load all prices into memory
+        prices_cache: Dict[str, pd.DataFrame] = {}
+        tickers = await self._db.get_backtest_signal_tickers()
+        for ticker in tickers:
+            rows = await self._db.get_backtest_prices(ticker, "2000-01-01", "2099-12-31")
+            if rows:
+                prices_cache[ticker] = pd.DataFrame(rows).set_index("datetime")
+
+        has_llm = any(s.get("llm_scored") for s in signals)
+
+        # ── Find best hold/stop per segment from optimizer results ──
+        segment_params = self._resolve_segment_params()
+
+        # ── Global models: top N hold/stop combos ──
+        global_configs = self._pick_top_global_configs()
+        global_reports = []
+
+        for hold_days, stop_loss_pct in global_configs:
+            records = self._build_records(signals, prices_cache, hold_days, stop_loss_pct)
+            if len(records) < self._min_samples:
+                continue
+            report = self._train_single_model(
+                records, f"global_hold{hold_days}_stop{stop_loss_pct}",
+                hold_days, stop_loss_pct, has_llm, is_global=True,
+            )
+            if report and "error" not in report:
+                global_reports.append(report)
+
+        # Pick best global by AUC
+        if global_reports:
+            global_reports.sort(key=lambda r: r.get("cv_auc_roc", 0), reverse=True)
+            best_global = global_reports[0]
+        else:
+            best_global = {"error": "no_viable_global_model"}
+
+        # ── Per-segment models ──
+        segment_reports = []
+        for seg_key, seg_value, hold_days, stop_loss_pct in segment_params:
+            seg_name = f"{seg_key}={seg_value}"
+            seg_signals = [s for s in signals if str(s.get(seg_key, "")) == seg_value]
+            if not seg_signals:
+                continue
+
+            records = self._build_records(seg_signals, prices_cache, hold_days, stop_loss_pct)
+            if len(records) < self._min_segment_samples:
+                segment_reports.append({
+                    "segment": seg_name,
+                    "hold_days": hold_days,
+                    "stop_loss_pct": stop_loss_pct,
+                    "skipped": True,
+                    "reason": f"only {len(records)} signals (need {self._min_segment_samples})",
+                    "n_signals": len(records),
+                })
+                continue
+
+            report = self._train_single_model(
+                records, seg_name, hold_days, stop_loss_pct, has_llm, is_global=False,
+            )
+            if report:
+                segment_reports.append(report)
+
+        return {
+            "has_llm_features": has_llm,
+            "total_signals": len(signals),
+            "signals_with_prices": sum(
+                1 for s in signals if s["ticker"] in prices_cache
+            ),
+            "global_models": global_reports,
+            "best_global": best_global,
+            "segment_models": segment_reports,
+        }
+
+    def predict_proba(self, signal: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Score a signal. Returns dict with probability, hold_days, stop_loss.
+
+        Uses segment-specific model if available, else global.
+        """
+        if not self._global_model and not self._segment_models:
+            return None
+
+        # Try segment models in priority order: event_type > source > polarity
+        for seg_key in ["event_type", "source", "polarity"]:
+            seg_value = str(signal.get(seg_key, ""))
+            seg_name = f"{seg_key}={seg_value}"
+            if seg_name in self._segment_models:
+                sm = self._segment_models[seg_name]
+                prob = self._score_with_model(signal, sm)
+                return {
+                    "probability": prob,
+                    "model": seg_name,
+                    "hold_days": sm.hold_days,
+                    "stop_loss_pct": sm.stop_loss_pct,
+                }
+
+        # Fall back to global
+        if self._global_model:
+            prob = self._score_with_model(signal, self._global_model)
+            return {
+                "probability": prob,
+                "model": "global",
+                "hold_days": self._global_model.hold_days,
+                "stop_loss_pct": self._global_model.stop_loss_pct,
+            }
+
+        return None
+
+    # ── Internal helpers ──────────────────────────────────────────────
+
+    def _resolve_segment_params(
+        self,
+    ) -> List[Tuple[str, str, int, Optional[float]]]:
+        """Extract best hold/stop per segment from optimizer results.
+
+        Returns list of (seg_key, seg_value, hold_days, stop_loss_pct).
+        """
+        if not self._optimizer_results:
+            # Default fallback: train each segment with sensible defaults
+            return []
+
+        # Index optimizer results by filter_name for quick lookup
+        best_by_filter: Dict[str, StrategyResult] = {}
+        for r in self._optimizer_results:
+            if r.filter_name not in best_by_filter:
+                best_by_filter[r.filter_name] = r
+
+        params = []
+        seen = set()
+        for r in self._optimizer_results:
+            fname = r.filter_name
+            # Parse "source=edgar", "event_type=M_A_TARGET", etc.
+            if "=" not in fname:
+                continue
+            seg_key, seg_value = fname.split("=", 1)
+            if seg_key not in ("source", "event_type", "polarity"):
+                continue
+            if fname in seen:
+                continue
+            seen.add(fname)
+            params.append((seg_key, seg_value, r.hold_days, r.stop_loss_pct))
+
+        return params
+
+    def _pick_top_global_configs(
+        self,
+    ) -> List[Tuple[int, Optional[float]]]:
+        """Pick top N unique (hold_days, stop_loss) from optimizer results."""
+        if not self._optimizer_results:
+            return [(5, 0.05), (3, 0.03), (10, 0.05)]  # sensible defaults
+
+        seen = set()
+        configs = []
+        for r in self._optimizer_results:
+            key = (r.hold_days, r.stop_loss_pct)
+            if key not in seen:
+                seen.add(key)
+                configs.append(key)
+            if len(configs) >= self._top_n_global:
+                break
+        return configs
+
+    def _build_records(
+        self,
+        signals: List[Dict[str, Any]],
+        prices_cache: Dict[str, pd.DataFrame],
+        hold_days: int,
+        stop_loss_pct: Optional[float],
+    ) -> List[Dict[str, Any]]:
+        """Simulate trades and return records with _return column."""
+        records = []
+        for sig in signals:
+            ticker = sig["ticker"]
+            if ticker not in prices_cache:
+                continue
+            ret = _simulate_trade(
+                prices_cache[ticker], sig["signal_date"],
+                hold_days, stop_loss_pct,
+            )
+            if ret is not None:
+                records.append({**sig, "_return": ret})
+        return records
+
+    def _train_single_model(
+        self,
+        records: List[Dict[str, Any]],
+        model_name: str,
+        hold_days: int,
+        stop_loss_pct: Optional[float],
+        has_llm: bool,
+        is_global: bool,
+    ) -> Dict[str, Any]:
+        """Train one XGBoost model and return its report dict."""
+        import numpy as np
+        from sklearn.model_selection import StratifiedKFold, cross_val_predict
+        from sklearn.metrics import (
+            accuracy_score, precision_score, recall_score, f1_score,
+            roc_auc_score,
+        )
+        from sklearn.preprocessing import OneHotEncoder
+        import xgboost as xgb
+
+        num_feats = list(self.NUMERIC_FEATURES)
+        cat_feats = list(self.CATEGORICAL_FEATURES)
+        if has_llm:
+            num_feats += self.LLM_NUMERIC_FEATURES
+            cat_feats += self.LLM_CATEGORICAL_FEATURES
+
+        df = pd.DataFrame(records)
+        labels = (df["_return"] > self._profit_threshold).astype(int).values
+        returns_arr = df["_return"].values
+
+        # Need both classes for classification
+        if len(set(labels)) < 2:
+            return {
+                "segment": model_name,
+                "hold_days": hold_days,
+                "stop_loss_pct": stop_loss_pct,
+                "skipped": True,
+                "reason": "single_class",
+                "n_signals": len(records),
+            }
+
+        X_num = df[num_feats].fillna(0).values
+        cat_data = df[cat_feats].fillna("UNKNOWN").astype(str)
+        encoder = OneHotEncoder(sparse_output=False, handle_unknown="ignore")
+        X_cat = encoder.fit_transform(cat_data)
+        X = np.hstack([X_num, X_cat])
+
+        cat_names = []
+        for feat, cats in zip(cat_feats, encoder.categories_):
+            for c in cats:
+                cat_names.append(f"{feat}={c}")
+        feature_names = num_feats + cat_names
+
+        n_splits = min(5, min(int(labels.sum()), int(len(labels) - labels.sum())))
+        if n_splits < 2:
+            return {
+                "segment": model_name,
+                "hold_days": hold_days,
+                "stop_loss_pct": stop_loss_pct,
+                "skipped": True,
+                "reason": f"too_few_per_class (pos={int(labels.sum())}, neg={int(len(labels)-labels.sum())})",
+                "n_signals": len(records),
+            }
+
+        model = xgb.XGBClassifier(
+            n_estimators=150,
+            max_depth=3 if len(records) < 100 else 4,
+            learning_rate=0.05,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            min_child_weight=max(2, len(records) // 50),
+            eval_metric="logloss",
+            random_state=42,
+        )
+
+        cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+        try:
+            cv_probs = cross_val_predict(model, X, labels, cv=cv, method="predict_proba")
+        except Exception as e:
+            logger.warning("CV failed for %s: %s", model_name, e)
+            return {
+                "segment": model_name,
+                "hold_days": hold_days,
+                "stop_loss_pct": stop_loss_pct,
+                "skipped": True,
+                "reason": f"cv_failed: {e}",
+                "n_signals": len(records),
+            }
+
+        cv_preds = (cv_probs[:, 1] >= 0.5).astype(int)
+
+        # Fit final model on all data
+        model.fit(X, labels)
+
+        # Store trained model
+        sm = SegmentModel(
+            segment_name=model_name,
+            hold_days=hold_days,
+            stop_loss_pct=stop_loss_pct,
+            model=model,
+            encoder=encoder,
+            feature_names=feature_names,
+            metrics={},
+            n_signals=len(records),
+        )
+        if is_global:
+            # Keep the best global (first trained, replaced if better later)
+            if self._global_model is None:
+                self._global_model = sm
+        else:
+            self._segment_models[model_name] = sm
+
+        # Metrics
+        acc = accuracy_score(labels, cv_preds)
+        prec = precision_score(labels, cv_preds, zero_division=0)
+        rec = recall_score(labels, cv_preds, zero_division=0)
+        f1 = f1_score(labels, cv_preds, zero_division=0)
+        try:
+            auc = roc_auc_score(labels, cv_probs[:, 1])
+        except ValueError:
+            auc = 0.0
+
+        importances = model.feature_importances_
+        feat_imp = sorted(
+            zip(feature_names, importances),
+            key=lambda x: x[1], reverse=True,
+        )
+
+        # Threshold analysis
+        thresholds = [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8]
+        threshold_stats = []
+        for thresh in thresholds:
+            mask = cv_probs[:, 1] >= thresh
+            n_trades = int(mask.sum())
+            if n_trades > 0:
+                sel_ret = returns_arr[mask]
+                threshold_stats.append({
+                    "threshold": thresh,
+                    "trades": n_trades,
+                    "avg_return": round(float(sel_ret.mean()), 4),
+                    "win_rate": round(float((sel_ret > 0).mean() * 100), 1),
+                    "total_return": round(float(sel_ret.sum()), 2),
+                })
+
+        sl_str = f"{stop_loss_pct*100:.0f}%" if stop_loss_pct else "none"
+        logger.info(
+            "  ML %s: hold=%dd stop=%s signals=%d AUC=%.3f F1=%.3f",
+            model_name, hold_days, sl_str, len(records), auc, f1,
+        )
+
+        return {
+            "segment": model_name,
+            "hold_days": hold_days,
+            "stop_loss_pct": stop_loss_pct,
+            "n_signals": len(records),
+            "positive_labels": int(labels.sum()),
+            "negative_labels": int(len(labels) - labels.sum()),
+            "feature_count": X.shape[1],
+            "cv_folds": n_splits,
+            "cv_accuracy": round(acc, 4),
+            "cv_precision": round(prec, 4),
+            "cv_recall": round(rec, 4),
+            "cv_f1": round(f1, 4),
+            "cv_auc_roc": round(auc, 4),
+            "feature_importance": [
+                {"feature": f, "importance": round(float(imp), 4)}
+                for f, imp in feat_imp[:15]
+            ],
+            "threshold_analysis": threshold_stats,
+            "baseline_win_rate": round(float(labels.mean()) * 100, 1),
+            "baseline_avg_return": round(float(returns_arr.mean()), 4),
+        }
+
+    def _score_with_model(self, signal: Dict[str, Any], sm: SegmentModel) -> float:
+        """Score one signal against a trained SegmentModel."""
+        import numpy as np
+
+        has_llm = any(
+            f.startswith("llm_") or f.startswith("sentry1_")
+            for f in sm.feature_names
+        )
+        num_feats = list(self.NUMERIC_FEATURES)
+        cat_feats = list(self.CATEGORICAL_FEATURES)
+        if has_llm:
+            num_feats += self.LLM_NUMERIC_FEATURES
+            cat_feats += self.LLM_CATEGORICAL_FEATURES
+
+        num_vals = [float(signal.get(f) or 0) for f in num_feats]
+        cat_vals = [[str(signal.get(f) or "UNKNOWN") for f in cat_feats]]
+
+        X_num = np.array([num_vals])
+        X_cat = sm.encoder.transform(cat_vals)
+        X = np.hstack([X_num, X_cat])
+
+        return float(sm.model.predict_proba(X)[0, 1])
+
+
+def print_ml_report(report: Dict[str, Any]) -> None:
+    """Pretty-print the ML classifier results."""
+    if "error" in report:
+        print(f"\nML Classifier: {report['error']}")
+        if report.get("signals_with_prices"):
+            print(f"  Only {report['signals_with_prices']} signals have price data "
+                  f"(need {report.get('min_required', 30)})")
+        return
+
+    print("\n" + "=" * 90)
+    print("  ML SIGNAL CLASSIFIER (XGBoost)")
+    print(f"  Total signals: {report['total_signals']} | "
+          f"With prices: {report['signals_with_prices']} | "
+          f"LLM features: {'yes' if report['has_llm_features'] else 'no'}")
+    print("=" * 90)
+
+    # ── Best global model ──
+    bg = report.get("best_global", {})
+    if bg and "error" not in bg:
+        sl = f"{bg['stop_loss_pct']*100:.0f}%" if bg.get('stop_loss_pct') else "none"
+        print(f"\n  BEST GLOBAL MODEL: hold={bg['hold_days']}d stop={sl} "
+              f"({bg['n_signals']} signals)")
+        print(f"  Baseline: {bg['baseline_win_rate']:.1f}% win, "
+              f"{bg['baseline_avg_return']:+.2f}% avg return")
+        print(f"  CV: AUC={bg['cv_auc_roc']:.3f} F1={bg['cv_f1']:.3f} "
+              f"Acc={bg['cv_accuracy']:.1%} Prec={bg['cv_precision']:.1%} "
+              f"Rec={bg['cv_recall']:.1%}")
+
+        if bg.get("feature_importance"):
+            print(f"\n  Top Features (global):")
+            for i, fi in enumerate(bg["feature_importance"][:10]):
+                bar = "█" * int(fi["importance"] * 100)
+                print(f"    {i+1:>2}. {fi['feature']:<30s} "
+                      f"{fi['importance']:.4f} {bar}")
+
+        if bg.get("threshold_analysis"):
+            print(f"\n  Threshold Analysis (global):")
+            print(f"    {'Thresh':>7s} {'Trades':>7s} {'Win%':>7s} "
+                  f"{'Avg%':>8s} {'Total%':>9s}")
+            print(f"    {'-'*40}")
+            for t in bg["threshold_analysis"]:
+                print(f"    {t['threshold']:>6.0%} {t['trades']:>7d} "
+                      f"{t['win_rate']:>6.1f}% {t['avg_return']:>+7.2f}% "
+                      f"{t['total_return']:>+8.1f}%")
+
+    # ── Global model comparison ──
+    global_models = report.get("global_models", [])
+    if len(global_models) > 1:
+        print(f"\n  ALL GLOBAL MODELS (top {len(global_models)} hold/stop combos):")
+        print(f"    {'Config':<30s} {'Signals':>7s} {'AUC':>6s} {'F1':>6s} "
+              f"{'Win%':>6s} {'Avg%':>7s}")
+        print(f"    {'-'*64}")
+        for gm in global_models:
+            if gm.get("skipped"):
+                continue
+            sl = f"{gm['stop_loss_pct']*100:.0f}%" if gm.get('stop_loss_pct') else "none"
+            label = f"hold={gm['hold_days']}d stop={sl}"
+            print(f"    {label:<30s} {gm['n_signals']:>7d} "
+                  f"{gm['cv_auc_roc']:>6.3f} {gm['cv_f1']:>6.3f} "
+                  f"{gm['baseline_win_rate']:>5.1f}% "
+                  f"{gm['baseline_avg_return']:>+6.2f}%")
+
+    # ── Per-segment models ──
+    seg_models = report.get("segment_models", [])
+    if seg_models:
+        trained = [s for s in seg_models if not s.get("skipped")]
+        skipped = [s for s in seg_models if s.get("skipped")]
+
+        if trained:
+            print(f"\n  SEGMENT MODELS (each with its own optimal hold/stop):")
+            print(f"    {'Segment':<30s} {'Hold':>4s} {'Stop':>5s} {'Sigs':>5s} "
+                  f"{'AUC':>6s} {'F1':>6s} {'Win%':>6s} {'Avg%':>7s}")
+            print(f"    {'-'*71}")
+            for sm in sorted(trained, key=lambda x: x.get("cv_auc_roc", 0), reverse=True):
+                sl = f"{sm['stop_loss_pct']*100:.0f}%" if sm.get('stop_loss_pct') else "—"
+                print(f"    {sm['segment']:<30s} {sm['hold_days']:>4d} {sl:>5s} "
+                      f"{sm['n_signals']:>5d} {sm['cv_auc_roc']:>6.3f} "
+                      f"{sm['cv_f1']:>6.3f} {sm['baseline_win_rate']:>5.1f}% "
+                      f"{sm['baseline_avg_return']:>+6.2f}%")
+
+            # Show best segment's features + thresholds
+            best_seg = max(trained, key=lambda x: x.get("cv_auc_roc", 0))
+            if best_seg.get("feature_importance"):
+                print(f"\n  Top Features ({best_seg['segment']}):")
+                for i, fi in enumerate(best_seg["feature_importance"][:8]):
+                    bar = "█" * int(fi["importance"] * 100)
+                    print(f"    {i+1:>2}. {fi['feature']:<30s} "
+                          f"{fi['importance']:.4f} {bar}")
+
+        if skipped:
+            print(f"\n  Skipped segments (insufficient data):")
+            for s in skipped:
+                print(f"    {s['segment']:<30s} — {s.get('reason', 'unknown')}")
+
+    print("=" * 90)
 
 
 # =====================================================================

@@ -123,6 +123,14 @@ class RuntimeConfig:
     ib_port: int = field(default_factory=lambda: _env_int("IB_PORT", 4002))
     ib_client_id: int = field(default_factory=lambda: _env_int("IB_CLIENT_ID", 1))
 
+    # ── Subscribers ──
+    subscriber_telegram: bool = field(
+        default_factory=lambda: _env_bool("SUBSCRIBER_TELEGRAM", True)
+    )
+    subscriber_trader: bool = field(
+        default_factory=lambda: _env_bool("SUBSCRIBER_TRADER", False)
+    )
+
     # ── Signal delivery (Telegram) ──
     telegram_bot_token: str = field(
         default_factory=lambda: (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()

@@ -8,3 +8,5 @@ tweepy==4.14.0
 uvicorn==0.30.0
 yfinance>=0.2.36
 pandas>=2.0.0
+scikit-learn>=1.4.0
+xgboost>=2.0.0

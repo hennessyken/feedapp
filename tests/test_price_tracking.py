@@ -1017,11 +1017,22 @@ class TestPipelineSignalPersistence:
                 metadata=item.metadata,
             )
 
-            # Mock send_signal to avoid real Telegram calls
+            # Use TelegramSubscriber directly (replaces old _analyze_and_deliver)
+            from subscribers.telegram import TelegramSubscriber as _TelegramSub
+            from subscribers.base import SubscriberContext
+            from spend_tracker import SpendTracker
+
+            sub = _TelegramSub(enabled=True)
+            spend = SpendTracker(db_path=":memory:")
+            await spend.connect()
+
             with patch("notifier.send_signal", new_callable=AsyncMock, return_value=True):
                 import httpx
                 async with httpx.AsyncClient() as http:
-                    stats = await pipeline._analyze_and_deliver([item], http)
+                    ctx = SubscriberContext(http=http, db=db, spend_tracker=spend, ib_client=None)
+                    stats = await sub.process([item], ctx, config)
+
+            await spend.close()
 
             # Check DB row has analysis fields
             rows = await db.get_items()
