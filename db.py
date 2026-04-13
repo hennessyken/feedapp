@@ -206,9 +206,16 @@ class FeedDatabase:
                         f"ALTER TABLE backtest_signals ADD COLUMN {col_name} {col_type}"
                     )
                     added.append(col_name)
+            # Add accepted column for benchmark analysis (accepted=1 passed screening, 0=rejected)
+            if "accepted" not in existing:
+                await self._db.execute(
+                    "ALTER TABLE backtest_signals ADD COLUMN accepted INTEGER DEFAULT 1"
+                )
+                added.append("accepted")
+
             if added:
                 await self._db.commit()
-                logger.info("Migrated backtest_signals LLM columns: %s", ", ".join(added))
+                logger.info("Migrated backtest_signals columns: %s", ", ".join(added))
         except Exception:
             pass  # Table doesn't exist yet
 
@@ -499,8 +506,8 @@ class FeedDatabase:
                    (item_id, ticker, company_name, event_type, polarity,
                     impact_class, source, signal_date, keyword_score,
                     confidence, impact_score, action, title, url,
-                    matched_keywords, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    matched_keywords, created_at, accepted)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     kwargs["item_id"], kwargs["ticker"], kwargs.get("company_name"),
                     kwargs["event_type"], kwargs.get("polarity"),
@@ -510,6 +517,7 @@ class FeedDatabase:
                     kwargs.get("action"), kwargs.get("title"), kwargs.get("url"),
                     json.dumps(kwargs.get("matched_keywords")) if kwargs.get("matched_keywords") else None,
                     now,
+                    kwargs.get("accepted", 1),
                 ),
             )
             await self._db.commit()
@@ -602,6 +610,9 @@ class FeedDatabase:
         if filters.get("min_keyword_score"):
             clauses.append("keyword_score >= ?")
             params.append(filters["min_keyword_score"])
+        if "accepted" in filters:
+            clauses.append("accepted = ?")
+            params.append(filters["accepted"])
         if filters.get("start_date"):
             clauses.append("signal_date >= ?")
             params.append(filters["start_date"])

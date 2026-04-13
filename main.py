@@ -202,29 +202,17 @@ async def _run_analyze(
     if not to_date:
         to_date = datetime.now().strftime("%Y-%m-%d")
 
-    # IB client for 5-min historical bars
-    ib_client = _make_ib_client(config)
-    if ib_client:
-        try:
-            await ib_client.connect()
-            logging.info("Using IB Gateway for 5-min historical bars")
-        except Exception as e:
-            logging.error("IB connect failed: %s — IB required for price data", e)
-            return
-    else:
-        logging.error("IB_ENABLED must be true for strategy analyzer (needs 5-min bars)")
-        return
-
+    # Price data now fetched via yfinance — IB not required for analyzer
     db = FeedDatabase(config.db_path)
     await db.connect()
     try:
         # Phase 1: Collect documents + prices (cached on re-run)
+        # Analyzer uses its own high-signal EDGAR form defaults (SC 13D, etc.)
+        # rather than the live pipeline's 8-K,6-K config
         collector = DataCollector(
             db,
-            ib_client=ib_client,
             sec_user_agent=config.sec_user_agent,
             keyword_threshold=config.keyword_score_threshold,
-            edgar_forms=config.edgar_forms,
         )
         collection_stats = await collector.collect(from_date, to_date)
         logging.info("Collection stats:\n%s", json.dumps(collection_stats, indent=2))
@@ -242,9 +230,9 @@ async def _run_analyze(
         else:
             logging.info("Skipping LLM scoring (no OPENAI_API_KEY)")
 
-        # Phase 3: Optimize strategies
+        # Phase 3: Optimize strategies + benchmark
         optimizer = StrategyOptimizer(db)
-        results = await optimizer.optimize()
+        results, benchmark_results = await optimizer.optimize()
 
         # Phase 4: ML classifier — global + per-segment models
         classifier = SignalClassifier(
@@ -254,20 +242,18 @@ async def _run_analyze(
 
         # Phase 5: Report
         signals_count = collection_stats.get("total_signals_in_db", 0)
-        print_strategy_report(results, signals_count=signals_count)
+        print_strategy_report(results, signals_count=signals_count, benchmark_results=benchmark_results)
         print_ml_report(ml_report)
 
         # Save JSON
         report_file = f"strategy_{from_date}_to_{to_date}.json"
-        save_strategy_report(results, collection_stats, report_file)
+        save_strategy_report(results, collection_stats, report_file, benchmark_results)
         # Save ML report alongside
         ml_file = f"ml_classifier_{from_date}_to_{to_date}.json"
         with open(ml_file, "w") as f:
             json.dump(ml_report, f, indent=2, default=str)
         logging.info("ML classifier report saved to %s", ml_file)
     finally:
-        if ib_client:
-            await ib_client.disconnect()
         await db.close()
 
 

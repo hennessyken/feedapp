@@ -23,6 +23,38 @@ from feeds.base import BaseFeedAdapter, FeedResult, stable_hash
 
 logger = logging.getLogger(__name__)
 
+# SEC company tickers — maps CIK → ticker for ~10k public companies
+_COMPANY_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
+
+# In-memory CIK→ticker cache (loaded once per process)
+_cik_ticker_map: Dict[str, str] = {}
+_cik_map_loaded = False
+
+
+async def _ensure_cik_map(http: httpx.AsyncClient, user_agent: str) -> None:
+    """Download SEC CIK→ticker mapping (once per process)."""
+    global _cik_ticker_map, _cik_map_loaded
+    if _cik_map_loaded:
+        return
+    try:
+        resp = await http.get(
+            _COMPANY_TICKERS_URL,
+            headers={"User-Agent": user_agent},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        for entry in data.values():
+            cik = str(entry["cik_str"])
+            ticker = entry.get("ticker", "")
+            if cik and ticker:
+                _cik_ticker_map[cik] = ticker.upper()
+        _cik_map_loaded = True
+        logger.info("Loaded SEC CIK→ticker map: %d entries", len(_cik_ticker_map))
+    except Exception as e:
+        logger.warning("Failed to load SEC CIK→ticker map: %s", e)
+
+
 # EDGAR EFTS full-text search endpoint
 _EFTS_SEARCH_URL = "https://efts.sec.gov/LATEST/search-index"
 
@@ -78,6 +110,8 @@ class EdgarFeedAdapter(BaseFeedAdapter):
         self._max_pages = max_pages
 
     async def fetch(self) -> List[FeedResult]:
+        await _ensure_cik_map(self._http, self._user_agent)
+
         now = datetime.now(timezone.utc)
         end_date = now.strftime("%Y-%m-%d")
         start_date = (now - timedelta(days=self._days_back)).strftime("%Y-%m-%d")
@@ -112,15 +146,18 @@ class EdgarFeedAdapter(BaseFeedAdapter):
     async def _search_page(
         self, start_date: str, end_date: str, page: int
     ) -> List[Dict[str, Any]]:
-        params = {
-            "q": '""',
-            "dateRange": "custom",
-            "startdt": start_date,
-            "enddt": end_date,
-            "forms": self._forms,
-            "from": str(page * self._page_size),
-            "size": str(self._page_size),
-        }
+        # EFTS requires repeated 'forms' params, not comma-separated
+        params: List[tuple] = [
+            ("dateRange", "custom"),
+            ("startdt", start_date),
+            ("enddt", end_date),
+            ("from", str(page * self._page_size)),
+            ("size", str(self._page_size)),
+        ]
+        for form in self._forms.split(","):
+            form = form.strip()
+            if form:
+                params.append(("forms", form))
         headers = {"User-Agent": self._user_agent}
 
         resp = await self._http.get(_EFTS_SEARCH_URL, params=params, headers=headers)
@@ -147,6 +184,13 @@ class EdgarFeedAdapter(BaseFeedAdapter):
             if re.fullmatch(r"[A-Z]{1,5}(?:\.[A-Z])?", m):
                 ticker = m
                 break
+
+        # Fallback: resolve ticker from CIK using SEC company_tickers.json
+        ciks = src.get("ciks", [])
+        cik = ciks[0] if ciks else ""
+        if not ticker and cik:
+            ticker = _cik_ticker_map.get(str(cik).lstrip("0"), "")
+
         form_type = src.get("form", "") or src.get("file_type", "")
         file_date = src.get("file_date", "")
         # items is a list of strings like ["1.01", "2.03", "9.01"]
@@ -155,8 +199,6 @@ class EdgarFeedAdapter(BaseFeedAdapter):
             items_list = [s.strip() for s in items_raw.split(",")]
         else:
             items_list = list(items_raw) if items_raw else []
-        ciks = src.get("ciks", [])
-        cik = ciks[0] if ciks else ""
         # Use adsh (accession number) as canonical ID
         adsh = src.get("adsh", acc_no)
 

@@ -366,8 +366,9 @@ class TestStrategyOptimizerFilters:
         db = await _make_test_db()
         try:
             optimizer = StrategyOptimizer(db)
-            results = await optimizer.optimize()
+            results, benchmark = await optimizer.optimize()
             assert results == []
+            assert benchmark == []
         finally:
             await db.close()
 
@@ -633,14 +634,15 @@ class TestDataCollectorScreening:
         finally:
             await db.close()
 
-    async def test_skips_vetoed_signal(self):
-        """Signal with veto keywords should not be stored."""
+    async def test_all_sources_stored_without_keyword_gate(self):
+        """All docs with a ticker are stored regardless of keyword score."""
         db = await _make_test_db()
         try:
             collector = DataCollector(db)
+            # Low-keyword-score EDGAR doc — should still be stored
             item = FeedResult(
                 feed_source="edgar",
-                item_id="dc-veto",
+                item_id="dc-lowscore",
                 title="Notice of AGM — annual general meeting agenda",
                 url="https://example.com",
                 published_at="2025-06-01T10:00:00Z",
@@ -651,7 +653,35 @@ class TestDataCollectorScreening:
                      "skipped_cached": 0, "skipped_no_ticker": 0}
             await collector._screen_and_store(item, stats)
 
-            assert stats["new_signals"] == 0
+            assert stats["new_signals"] == 1
+        finally:
+            await db.close()
+
+    async def test_pharma_source_stored_without_keyword_filter(self):
+        """FDA/EMA/ClinicalTrials docs with a ticker are always stored (no keyword gate)."""
+        db = await _make_test_db()
+        try:
+            collector = DataCollector(db)
+            # This title has no matching keywords, but FDA source = always accepted
+            item = FeedResult(
+                feed_source="fda",
+                item_id="dc-fda-nkw",
+                title="Some generic FDA document with no keywords",
+                url="https://example.com",
+                published_at="2025-06-01T10:00:00Z",
+                content_snippet="Nothing special here.",
+                metadata={"ticker": "PFE"},
+            )
+            stats = {"fetched": 0, "screened": 0, "new_signals": 0,
+                     "skipped_cached": 0, "skipped_no_ticker": 0}
+            await collector._screen_and_store(item, stats)
+
+            assert stats["new_signals"] == 1
+
+            all_sigs = await db.get_all_backtest_signals()
+            assert len(all_sigs) == 1
+            assert all_sigs[0]["ticker"] == "PFE"
+            assert all_sigs[0]["source"] == "fda"
         finally:
             await db.close()
 

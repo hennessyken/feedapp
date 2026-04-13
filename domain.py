@@ -167,12 +167,15 @@ class KeywordScreener:
             "definitive agreement", "scheme of arrangement", "recommended offer",
             "compulsory acquisition", "mandatory offer", "all-cash offer",
             "all-share offer", "offer for", "offer to acquire",
+            # EDGAR 8-K item descriptions
+            "completion of acquisition", "disposition of assets",
         ],
         "EARNINGS_BEAT": [
             "earnings beat", "record profit", "record revenue",
+            "exceeded expectations", "above consensus",
         ],
         "EARNINGS_MISS": [
-            "earnings miss",
+            "earnings miss", "below expectations", "missed estimates",
         ],
         "GUIDANCE_RAISE": [
             "raises guidance", "upgrades forecast", "guidance upgrade",
@@ -192,6 +195,9 @@ class KeywordScreener:
             # EMA-specific: title format is "EMA Authorised: DrugName"
             "ema authorised", "fda approves", "fda approved",
             "chmp positive opinion", "ec decision granted",
+            # FDA openFDA titles
+            "fda original", "fda supplement",
+            "fda approved", "tentative approval",
         ],
         "REGULATORY_NEGATIVE": [
             "licence revoked", "antitrust blocked", "regulatory rejection",
@@ -199,6 +205,9 @@ class KeywordScreener:
             # EMA-specific
             "ema refused", "ema withdrawn", "ema suspended", "ema revoked",
             "chmp negative opinion", "refusal of marketing authorisation",
+            # FDA
+            "complete response letter", "refuse to file",
+            "not approved", "refused to file letter",
         ],
         "CLINICAL_TRIAL": [
             "phase 3 results", "phase iii results", "pivotal trial results",
@@ -207,6 +216,7 @@ class KeywordScreener:
             "primary endpoint met", "met its primary",
             "statistically significant", "positive efficacy",
             "phase 3 completed", "phase iii completed",
+            "phase 2 results", "phase ii results",
         ],
         "CLINICAL_TRIAL_NEGATIVE": [
             "trial failed primary endpoint", "trial discontinued",
@@ -217,11 +227,14 @@ class KeywordScreener:
         ],
         "CAPITAL_RETURN": [
             "share buyback programme", "share repurchase programme",
+            "share repurchase program", "stock repurchase program",
             "return of capital", "special dividend", "extraordinary dividend",
         ],
         "CAPITAL_RAISE": [
             "rights issue", "placing and open offer", "capital raise",
-            "equity raise",
+            "equity raise", "public offering", "secondary offering",
+            # EDGAR 8-K 3.02
+            "unregistered sales of equity",
         ],
     }
 
@@ -232,12 +245,16 @@ class KeywordScreener:
             "full year results", "half year results", "quarterly results",
             "annual results", "profit announcement", "revenue announcement",
             "underlying profit", "statutory profit",
+            # EDGAR 8-K 2.02
+            "results of operations", "financial condition",
         ],
         "MATERIAL_CONTRACT": [
             "material contract", "major contract", "significant contract",
             "contract awarded", "contract win", "framework agreement",
             "strategic partnership", "joint venture", "licensing agreement",
             "offtake agreement", "supply agreement",
+            # EDGAR 8-K 1.01
+            "material definitive agreement",
         ],
         "DIVIDEND_CHANGE": [
             "dividend declared", "dividend announcement", "interim dividend",
@@ -248,12 +265,17 @@ class KeywordScreener:
             "bond offering", "note offering", "debt issuance", "credit facility",
             "revolving credit", "term loan", "refinancing", "convertible bond",
             "senior notes", "subordinated notes",
+            # EDGAR 8-K 2.03
+            "direct financial obligation",
         ],
         "INSOLVENCY": [
             "going concern", "administration", "receivership", "liquidation",
             "insolvency", "chapter 11", "restructuring plan",
             "creditor protection", "debt restructuring",
             "voluntary arrangement",
+            # EDGAR 8-K 1.03 / 2.05
+            "bankruptcy or receivership",
+            "exit or disposal activities", "costs associated with exit",
         ],
         "LITIGATION": [
             "settlement", "legal proceedings", "court judgment", "arbitration award",
@@ -264,15 +286,42 @@ class KeywordScreener:
             "disposal", "divestiture", "asset sale", "business sale",
             "spin-off", "demerger", "partial sale", "stake sale",
         ],
-    }
-
-    # ── LOW-score events (15 pts each) ───────────────────────────────────────
-    _LOW: Dict[str, List[str]] = {
         "MANAGEMENT_CHANGE": [
             "ceo appointment", "cfo appointment", "chief executive appointed",
             "chairman appointed", "board change", "director appointed",
             "director resigned", "executive change",
+            # EDGAR 8-K 5.02 / 5.01
+            "departure of directors", "appointment of directors",
+            "departure of officers", "appointment of officers",
+            "changes in control",
         ],
+        "MATERIAL_IMPAIRMENT": [
+            # EDGAR 8-K 2.06
+            "material impairment",
+        ],
+        "DELISTING": [
+            # EDGAR 8-K 3.01
+            "notice of delisting", "failure to satisfy",
+        ],
+        "RESTATEMENT": [
+            # EDGAR 8-K 4.02
+            "non-reliance on previously issued",
+            "previously issued financial statements",
+        ],
+        "AUDITOR_CHANGE": [
+            # EDGAR 8-K 4.01
+            "certifying accountant",
+            "changes in registrant's certifying",
+        ],
+        "SHAREHOLDER_RIGHTS": [
+            # EDGAR 8-K 3.03
+            "material modification to rights",
+            "modification to rights of security holders",
+        ],
+    }
+
+    # ── LOW-score events (15 pts each) ───────────────────────────────────────
+    _LOW: Dict[str, List[str]] = {
         "PRODUCTION": [
             "production update", "operational update", "drilling results",
             "resource estimate", "reserve update", "capacity expansion",
@@ -299,7 +348,6 @@ class KeywordScreener:
         "grant of options", "grant of awards", "employee share scheme",
         "scrip dividend", "dividend reinvestment",
         "result of agm", "result of egm",
-        "change of auditor",  # lower-value unless paired with going concern
     ]
 
     def screen(self, title: str, snippet: str = "") -> KeywordScreenResult:
@@ -510,6 +558,10 @@ class DeterministicEventScorer:
         "GOING_CONCERN":         (80, 75, "watch"),
         "RESTATEMENT":           (75, 70, "watch"),
         "AUDITOR_RESIGNATION":   (75, 70, "watch"),
+        "AUDITOR_CHANGE":        (65, 65, "watch"),
+        "MATERIAL_IMPAIRMENT":   (70, 70, "watch"),
+        "DELISTING":             (80, 75, "watch"),
+        "SHAREHOLDER_RIGHTS":    (65, 65, "watch"),
         "INSOLVENCY":            (80, 75, "watch"),
         "UNDERWRITTEN_OFFERING": (70, 65, "watch"),
         "DILUTION":              (65, 65, "watch"),

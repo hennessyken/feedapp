@@ -192,33 +192,49 @@ class FdaFeedAdapter(BaseFeedAdapter):
         cutoff_str = cutoff.strftime("%Y%m%d")
         today_str = datetime.now(timezone.utc).strftime("%Y%m%d")
 
-        params = {
-            "search": f"submissions.submission_status_date:[{cutoff_str}+TO+{today_str}]",
-            "limit": str(self._openfda_limit),
-        }
-
-        try:
-            data = await self._get_json(
-                _OPENFDA_APPROVALS,
-                params=params,
-                headers={"User-Agent": "FeedApp/1.0"},
-            )
-        except httpx.HTTPStatusError as e:
-            # openFDA returns 404 when no results match
-            if e.response.status_code == 404:
-                logger.info("openFDA: no recent approvals found")
-                return []
-            logger.warning("openFDA request failed: %s", e)
-            return []
-        except Exception as e:
-            logger.warning("openFDA request failed: %s", e)
-            return []
-
         results: List[FeedResult] = []
-        for record in data.get("results", []):
-            items = self._parse_openfda_record(record)
-            results.extend(items)
+        skip = 0
+        page_size = 100  # openFDA max per request
+        max_pages = 50   # safety cap: 5,000 records max
 
+        for page in range(max_pages):
+            params = {
+                "search": f"submissions.submission_status_date:[{cutoff_str} TO {today_str}]",
+                "limit": str(page_size),
+                "skip": str(skip),
+            }
+
+            try:
+                data = await self._get_json(
+                    _OPENFDA_APPROVALS,
+                    params=params,
+                    headers={"User-Agent": "FeedApp/1.0"},
+                )
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 404:
+                    break  # no more results
+                logger.warning("openFDA page %d failed: %s", page, e)
+                break
+            except Exception as e:
+                logger.warning("openFDA page %d failed: %s", page, e)
+                break
+
+            page_results = data.get("results", [])
+            if not page_results:
+                break
+
+            for record in page_results:
+                items = self._parse_openfda_record(record)
+                results.extend(items)
+
+            # Check if there are more pages
+            total = data.get("meta", {}).get("results", {}).get("total", 0)
+            skip += page_size
+            if skip >= total:
+                break
+
+        logger.info("openFDA: fetched %d approval records across %d pages",
+                    len(results), page + 1)
         return results
 
     def _parse_openfda_record(self, record: Dict[str, Any]) -> List[FeedResult]:
@@ -241,7 +257,23 @@ class FdaFeedAdapter(BaseFeedAdapter):
             if not sub_status:
                 continue
 
-            title = f"FDA {sub_type}: {drug_name} — {sub_status}"
+            # Map FDA codes to human-readable labels for keyword screening
+            status_labels = {
+                "AP": "Approved",
+                "TA": "Tentative Approval",
+                "NA": "Not Approved",
+                "WD": "Withdrawn",
+                "RL": "Refused to File Letter",
+            }
+            type_labels = {
+                "ORIG": "Original Application",
+                "SUPPL": "Supplemental Application",
+                "ANDA": "Generic Application",
+            }
+            status_label = status_labels.get(sub_status, sub_status)
+            type_label = type_labels.get(sub_type, sub_type)
+
+            title = f"FDA {status_label}: {drug_name} — {type_label}"
             if manufacturer:
                 title += f" ({manufacturer})"
 

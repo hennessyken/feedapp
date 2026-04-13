@@ -26,7 +26,7 @@ import pandas as pd
 from db import FeedDatabase
 from domain import KeywordScreener, DeterministicEventScorer, freshness_decay
 from feeds.base import FeedResult
-from feeds.edgar import EdgarFeedAdapter
+from feeds.edgar import EdgarFeedAdapter, _ensure_cik_map
 from feeds.fda import FdaFeedAdapter
 from feeds.ema import EmaFeedAdapter
 from feeds.clinical_trials import ClinicalTrialsFeedAdapter
@@ -76,7 +76,7 @@ def _chunk_date_range(
 
 
 class DataCollector:
-    """Fetch documents, screen, get prices via IB 5-min bars, persist everything."""
+    """Fetch documents, screen, get prices via yfinance daily bars, persist everything."""
 
     def __init__(
         self,
@@ -85,10 +85,10 @@ class DataCollector:
         ib_client: Any = None,
         sec_user_agent: str = "FeedApp/1.0 (feedapp@example.com)",
         keyword_threshold: int = 30,
-        edgar_forms: str = "8-K,6-K,13D,13D/A,13G,13G/A",
+        edgar_forms: str = "SC 13D,SC 13D/A,DEFM14A,DEFA14A,S-1,S-4,6-K,SC TO-T,CB",
     ) -> None:
         self._db = db
-        self._ib_client = ib_client
+        self._ib_client = ib_client  # kept for backward compat, not used for prices
         self._sec_user_agent = sec_user_agent
         self._keyword_threshold = keyword_threshold
         self._edgar_forms = edgar_forms
@@ -128,6 +128,7 @@ class DataCollector:
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as http:
             # ── EDGAR ──
             logger.info("Fetching EDGAR filings...")
+            await _ensure_cik_map(http, self._sec_user_agent)
             chunks = _chunk_date_range(start_dt, end_dt, chunk_days=7)
             for i, (cs, ce) in enumerate(chunks):
                 logger.info("  EDGAR chunk %d/%d: %s to %s", i + 1, len(chunks), cs, ce)
@@ -137,13 +138,16 @@ class DataCollector:
                 ).days + 1
                 adapter = EdgarFeedAdapter(
                     http, user_agent=self._sec_user_agent,
-                    days_back=chunk_days_n, forms=self._edgar_forms, max_pages=10,
+                    days_back=chunk_days_n, forms=self._edgar_forms,
+                    page_size=100, max_pages=20,
                 )
+                edgar_chunk_hits = 0
                 try:
                     for page in range(adapter._max_pages):
                         try:
                             hits = await adapter._search_page(cs, ce, page)
-                        except Exception:
+                        except Exception as e:
+                            logger.warning("EDGAR page %d failed for %s–%s: %s", page, cs, ce, e)
                             break
                         if not hits:
                             break
@@ -155,11 +159,16 @@ class DataCollector:
                             seen.add(acc_no)
                             item = adapter._parse_hit(acc_no, src)
                             if item:
+                                edgar_chunk_hits += 1
                                 stats["fetched"] += 1
                                 await self._screen_and_store(item, stats)
                 except Exception as e:
-                    logger.warning("EDGAR chunk failed: %s", e)
+                    logger.warning("EDGAR chunk %s–%s failed: %s", cs, ce, e)
+                if edgar_chunk_hits > 0:
+                    logger.info("  EDGAR chunk %d: %d filings found", i + 1, edgar_chunk_hits)
                 await asyncio.sleep(0.5)
+            edgar_total = stats["fetched"]
+            logger.info("EDGAR total: %d filings fetched", edgar_total)
 
             # ── ClinicalTrials.gov ──
             logger.info("Fetching ClinicalTrials.gov...")
@@ -210,7 +219,12 @@ class DataCollector:
     async def _screen_and_store(
         self, item: FeedResult, stats: Dict[str, int],
     ) -> None:
-        """Screen one item, store if it qualifies."""
+        """Screen one item and store if it has a ticker.
+
+        All sources accept every doc with a resolvable ticker — the form type
+        itself is the filter (high-signal EDGAR forms, pharma-only feeds).
+        Keyword screening still runs for metadata but does not gate storage.
+        """
         # Skip if already in DB
         if await self._db.backtest_signal_exists(item.item_id):
             stats["skipped_cached"] += 1
@@ -218,9 +232,6 @@ class DataCollector:
 
         screen = self._screener.screen(item.title, item.content_snippet or "")
         stats["screened"] += 1
-
-        if screen.vetoed or screen.score < self._keyword_threshold:
-            return
 
         meta = item.metadata or {}
         ticker = str(meta.get("ticker") or meta.get("symbol") or "").upper().strip()
@@ -251,7 +262,7 @@ class DataCollector:
 
         scoring = self._scorer.score(
             extraction={
-                "event_type": screen.event_category,
+                "event_type": screen.event_category or "UNKNOWN",
                 "keyword_score": screen.score,
                 "evidence_spans": None,
             },
@@ -260,7 +271,7 @@ class DataCollector:
             dossier={},
         )
 
-        event_type = screen.event_category
+        event_type = screen.event_category or "UNKNOWN"
         polarity = _classify_polarity(event_type)
         impact_class = _classify_impact(scoring.impact_score)
 
@@ -286,104 +297,99 @@ class DataCollector:
     async def _fetch_and_store_prices(
         self, start_date: str, end_date: str,
     ) -> Dict[str, Any]:
-        """Fetch 1-min OHLCV bars from IB for 20 trading days around each signal.
+        """Fetch daily OHLCV bars from yfinance for all tickers with signals.
 
-        IB constraints:
-        - 1-min bars: max "1 D" per request (one trading day at a time)
-        - Pacing: max 60 historical requests per 10 minutes
-        - We fetch 2 days before signal + 20 days after = ~22 requests per ticker
-        - Sleep 11s between requests to stay safely under the pacing limit
+        yfinance advantages over IB:
+        - No pacing limits — bulk download entire history in one call per ticker
+        - Handles OTC/ADR tickers (BAYRY, DSNKY, etc.) that IB can't resolve
+        - Much faster: minutes instead of hours
         """
-        if self._ib_client is None:
-            logger.error("IB client required for price data — set IB_ENABLED=true")
-            return {"tickers_total": 0, "error": "no_ib_client"}
+        import yfinance as yf
 
-        # Build per-signal fetch windows: 2 days before + 20 days after each signal
-        # Deduplicate by (ticker, date) so we don't re-fetch overlapping windows
         signals = await self._db.get_all_backtest_signals()
-        analysis_start = start_date
-        analysis_end = end_date
 
-        # Collect all (ticker, trading_day) pairs we need
-        needed: Dict[str, set] = {}  # ticker -> set of dates to fetch
+        # Collect unique tickers that have signals in our date range
+        # Include both accepted and rejected signals so we can benchmark
+        needed: Dict[str, Tuple[str, str]] = {}  # ticker -> (earliest_date, latest_date)
         for sig in signals:
             ticker = sig["ticker"]
             sig_date = sig["signal_date"]
-            if sig_date < analysis_start or sig_date > analysis_end:
+            if sig_date < start_date or sig_date > end_date:
                 continue
-            if ticker not in needed:
-                needed[ticker] = set()
             sig_dt = datetime.strptime(sig_date, "%Y-%m-%d")
-            # 2 days before + 20 days after (calendar days, weekdays only fetched)
-            for offset in range(-3, 29):
-                day = sig_dt + timedelta(days=offset)
-                if day.weekday() < 5:  # skip weekends
-                    needed[ticker].add(day.strftime("%Y-%m-%d"))
+            fetch_start = (sig_dt - timedelta(days=5)).strftime("%Y-%m-%d")
+            fetch_end = (sig_dt + timedelta(days=35)).strftime("%Y-%m-%d")
+            if ticker not in needed:
+                needed[ticker] = (fetch_start, fetch_end)
+            else:
+                cur_start, cur_end = needed[ticker]
+                needed[ticker] = (min(cur_start, fetch_start), max(cur_end, fetch_end))
+
+        # Always include SPY as market benchmark — full date range
+        spy_start = (datetime.strptime(start_date, "%Y-%m-%d") - timedelta(days=5)).strftime("%Y-%m-%d")
+        spy_end = (datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=35)).strftime("%Y-%m-%d")
+        if "SPY" not in needed:
+            needed["SPY"] = (spy_start, spy_end)
+        else:
+            cur_s, cur_e = needed["SPY"]
+            needed["SPY"] = (min(cur_s, spy_start), max(cur_e, spy_end))
 
         stats = {"tickers_total": len(needed), "tickers_cached": 0,
                  "tickers_fetched": 0, "tickers_failed": 0, "price_rows_stored": 0,
-                 "bar_size": "1 min", "requests_made": 0}
+                 "bar_size": "1d", "requests_made": 0}
 
-        for i, (ticker, dates_needed) in enumerate(needed.items()):
-            # Check which dates we already have in the DB
-            dates_to_fetch = []
-            for d in sorted(dates_needed):
-                if not await self._db.has_backtest_prices(ticker, d, d):
-                    dates_to_fetch.append(d)
-
-            if not dates_to_fetch:
+        for i, (ticker, (t_start, t_end)) in enumerate(needed.items()):
+            # Check if we already have price data for this ticker's full range
+            if await self._db.has_backtest_prices(ticker, t_start, t_end):
                 stats["tickers_cached"] += 1
                 continue
 
             logger.info(
-                "  Fetching 1-min bars for %s (%d days needed, %d cached) [%d/%d]",
-                ticker, len(dates_to_fetch), len(dates_needed) - len(dates_to_fetch),
-                i + 1, len(needed),
+                "  Fetching daily bars for %s (%s to %s) [%d/%d]",
+                ticker, t_start, t_end, i + 1, len(needed),
             )
 
-            total_rows = 0
-            for d in dates_to_fetch:
-                end_str = f"{d.replace('-', '')} 23:59:59 US/Eastern"
+            try:
+                df = yf.download(
+                    ticker, start=t_start, end=t_end,
+                    interval="1d", progress=False, auto_adjust=True,
+                )
+                stats["requests_made"] += 1
 
-                try:
-                    bars = await self._ib_client.get_historical(
-                        ticker,
-                        end_date=end_str,
-                        duration="1 D",
-                        bar_size="1 min",
-                    )
-                    stats["requests_made"] += 1
+                if df is None or df.empty:
+                    stats["tickers_failed"] += 1
+                    logger.warning("  %s: no data from yfinance", ticker)
+                    continue
 
-                    if bars:
-                        rows = []
-                        for bar in bars:
-                            rows.append({
-                                "datetime": bar["date"],
-                                "open": bar["Open"],
-                                "high": bar["High"],
-                                "low": bar["Low"],
-                                "close": bar["Close"],
-                                "volume": bar["Volume"],
-                            })
-                        inserted = await self._db.upsert_backtest_prices(ticker, rows)
-                        total_rows += inserted
-                except Exception as e:
-                    logger.debug("IB 1-min fetch failed for %s on %s: %s", ticker, d, e)
+                # yfinance returns MultiIndex columns for single tickers;
+                # flatten to simple column names
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = df.columns.droplevel("Ticker")
 
-                # IB pacing: max 60 requests per 10 min = 1 per 10s, use 11s for safety
-                await asyncio.sleep(11.0)
+                rows = []
+                for idx, row in df.iterrows():
+                    dt_str = idx.strftime("%Y-%m-%d 00:00:00")
+                    rows.append({
+                        "datetime": dt_str,
+                        "open": float(row["Open"]),
+                        "high": float(row["High"]),
+                        "low": float(row["Low"]),
+                        "close": float(row["Close"]),
+                        "volume": int(row["Volume"]),
+                    })
 
-            if total_rows > 0:
+                inserted = await self._db.upsert_backtest_prices(ticker, rows)
                 stats["tickers_fetched"] += 1
-                stats["price_rows_stored"] += total_rows
-                logger.info("  %s: %d 1-min bars stored", ticker, total_rows)
-            else:
+                stats["price_rows_stored"] += inserted
+                logger.info("  %s: %d daily bars stored", ticker, inserted)
+
+            except Exception as e:
                 stats["tickers_failed"] += 1
-                logger.warning("  %s: no price data from IB", ticker)
+                logger.warning("  %s: yfinance fetch failed: %s", ticker, e)
 
         logger.info(
-            "Prices (IB 1-min): %d tickers (%d fetched, %d cached, %d failed), "
-            "%d bars stored, %d IB requests",
+            "Prices (yfinance daily): %d tickers (%d fetched, %d cached, %d failed), "
+            "%d bars stored, %d requests",
             stats["tickers_total"], stats["tickers_fetched"],
             stats["tickers_cached"], stats["tickers_failed"],
             stats["price_rows_stored"], stats["requests_made"],
@@ -598,11 +604,11 @@ def _simulate_trade(
     hold_days: int,
     stop_loss_pct: Optional[float],
 ) -> Optional[float]:
-    """Simulate a trade using 5-min intraday bars.
+    """Simulate a trade using daily OHLCV bars.
 
-    Buy: open of first bar on signal_date (or next trading day).
-    Stop loss: checked against every 5-min bar's low during hold.
-    Sell: close of last bar on the final hold day.
+    Buy: open of signal_date (or next trading day).
+    Stop loss: checked against each day's low during hold.
+    Sell: close on the final hold day.
 
     Returns percentage return or None if no data.
     """
@@ -704,25 +710,40 @@ def _compute_strategy_stats(
     )
 
 
+@dataclass
+class BenchmarkResult:
+    """Benchmark: signal returns vs SPY over the same trade windows."""
+    hold_days: int
+    signal_trades: int
+    signal_avg_return: float
+    signal_win_rate: float
+    signal_total_return: float
+    spy_avg_return: float
+    spy_trades: int
+    excess_return: float         # signal avg minus SPY avg (same windows)
+
+
 class StrategyOptimizer:
     """Test strategy combinations and rank by risk-adjusted return."""
 
     def __init__(self, db: FeedDatabase) -> None:
         self._db = db
 
-    async def optimize(self) -> List[StrategyResult]:
-        """Load data, test all combos, return results sorted by Sharpe."""
-        # Load all signals
+    async def optimize(self) -> Tuple[List[StrategyResult], List[BenchmarkResult]]:
+        """Load data, test all combos, return results sorted by Sharpe + benchmark."""
         signals = await self._db.get_all_backtest_signals()
         if not signals:
             logger.warning("No signals in database")
-            return []
+            return [], []
 
         logger.info("Loaded %d signals for optimization", len(signals))
 
         # Load all prices into memory (ticker -> DataFrame)
         prices_cache: Dict[str, pd.DataFrame] = {}
         tickers = await self._db.get_backtest_signal_tickers()
+        # Always include SPY for benchmark
+        if "SPY" not in tickers:
+            tickers.append("SPY")
 
         for ticker in tickers:
             rows = await self._db.get_backtest_prices(ticker, "2000-01-01", "2099-12-31")
@@ -868,7 +889,77 @@ class StrategyOptimizer:
 
         results.sort(key=lambda r: r.sharpe, reverse=True)
         logger.info("Optimization complete: %d viable strategies tested", len(results))
-        return results
+
+        # ── Benchmark: signal returns vs SPY ────────────────────────
+        benchmark_results = self._compute_benchmark(signals, prices_cache)
+
+        return results, benchmark_results
+
+    def _compute_benchmark(
+        self,
+        signals: List[Dict],
+        prices_cache: Dict[str, pd.DataFrame],
+    ) -> List[BenchmarkResult]:
+        """Compare signal returns vs SPY over the same trade windows.
+
+        For each hold period, simulate trades on signals and on SPY
+        starting on the same date. The excess return (signal minus SPY)
+        shows whether signals beat the market after controlling for drift.
+        """
+        spy_df = prices_cache.get("SPY")
+        if spy_df is None or spy_df.empty:
+            logger.warning("No SPY price data — benchmark skipped")
+            return []
+
+        benchmarks: List[BenchmarkResult] = []
+
+        for hold_days in HOLD_DAYS:
+            sig_returns: List[float] = []
+            spy_returns: List[float] = []
+
+            for sig in signals:
+                ticker = sig["ticker"]
+                if ticker not in prices_cache:
+                    continue
+                ret = _simulate_trade(
+                    prices_cache[ticker], sig["signal_date"],
+                    hold_days, None,
+                )
+                if ret is not None:
+                    sig_returns.append(ret)
+                    spy_ret = _simulate_trade(
+                        spy_df, sig["signal_date"], hold_days, None,
+                    )
+                    if spy_ret is not None:
+                        spy_returns.append(spy_ret)
+
+            if not sig_returns:
+                continue
+
+            sig_avg = sum(sig_returns) / len(sig_returns)
+            sig_wins = sum(1 for r in sig_returns if r > 0)
+            sig_total = sum(sig_returns)
+            spy_avg = (sum(spy_returns) / len(spy_returns)) if spy_returns else 0.0
+            excess = sig_avg - spy_avg
+
+            benchmarks.append(BenchmarkResult(
+                hold_days=hold_days,
+                signal_trades=len(sig_returns),
+                signal_avg_return=round(sig_avg, 4),
+                signal_win_rate=round(sig_wins / len(sig_returns) * 100, 1),
+                signal_total_return=round(sig_total, 4),
+                spy_avg_return=round(spy_avg, 4),
+                spy_trades=len(spy_returns),
+                excess_return=round(excess, 4),
+            ))
+
+            logger.info(
+                "Benchmark hold=%dd: signals %.2f%% (%d trades), "
+                "SPY %.2f%%, excess=%.2f%%",
+                hold_days, sig_avg, len(sig_returns), spy_avg, excess,
+            )
+
+        return benchmarks
 
 
 # =====================================================================
@@ -1678,7 +1769,11 @@ def print_ml_report(report: Dict[str, Any]) -> None:
 # Reporting
 # =====================================================================
 
-def print_strategy_report(results: List[StrategyResult], signals_count: int = 0) -> None:
+def print_strategy_report(
+    results: List[StrategyResult],
+    signals_count: int = 0,
+    benchmark_results: Optional[List[BenchmarkResult]] = None,
+) -> None:
     """Pretty-print strategy analysis to console."""
     if not results:
         print("\nNo viable strategies found (need at least 5 trades per combo)")
@@ -1730,6 +1825,28 @@ def print_strategy_report(results: List[StrategyResult], signals_count: int = 0)
           f"MaxDD={top.max_drawdown:.2f}%")
     print("=" * 90)
 
+    # Benchmark: signals vs SPY
+    if benchmark_results:
+        print("\n" + "=" * 90)
+        print("  BENCHMARK: SIGNALS vs SPY (same trade windows)")
+        print("  Positive excess = signals beat the market")
+        print("=" * 90)
+        header = (
+            f"{'Hold':>4s}  {'Trades':>7s} {'Avg%':>8s} {'Win%':>7s} {'Total%':>9s}  "
+            f"{'SPY Avg%':>8s}  {'Excess%':>8s}"
+        )
+        print(header)
+        print("-" * len(header))
+        for b in benchmark_results:
+            print(
+                f"{b.hold_days:>4d}  "
+                f"{b.signal_trades:>7d} {b.signal_avg_return:>+8.2f} {b.signal_win_rate:>7.1f} "
+                f"{b.signal_total_return:>+9.1f}  "
+                f"{b.spy_avg_return:>+8.2f}  "
+                f"{b.excess_return:>+8.2f}"
+            )
+        print("=" * 90)
+
 
 def _print_table(rows: List[StrategyResult]) -> None:
     header = (
@@ -1753,6 +1870,7 @@ def save_strategy_report(
     results: List[StrategyResult],
     collection_stats: Dict[str, Any],
     output_path: str,
+    benchmark_results: Optional[List[BenchmarkResult]] = None,
 ) -> None:
     """Save full results to JSON."""
     report = {
@@ -1771,6 +1889,18 @@ def save_strategy_report(
         ],
         "all_strategies": [asdict(r) for r in results],
     }
+
+    # Benchmark: signals vs SPY
+    if benchmark_results:
+        report["benchmark"] = {
+            "description": (
+                "Signal returns vs SPY over the same trade windows. "
+                "Excess return = signal avg return minus SPY avg return. "
+                "Positive excess means signals beat the market."
+            ),
+            "by_hold_period": [asdict(b) for b in benchmark_results],
+        }
+
     with open(output_path, "w") as f:
         json.dump(report, f, indent=2, default=str)
     logger.info("Strategy report saved to %s", output_path)

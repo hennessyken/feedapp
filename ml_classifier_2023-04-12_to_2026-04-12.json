@@ -1,0 +1,5413 @@
+{
+  "has_llm_features": true,
+  "total_signals": 4779,
+  "signals_with_prices": 4720,
+  "global_models": [
+    {
+      "segment": "global_hold3_stopNone",
+      "hold_days": 3,
+      "stop_loss_pct": null,
+      "n_signals": 4713,
+      "positive_labels": 1831,
+      "negative_labels": 2882,
+      "feature_count": 28,
+      "walk_forward_windows": 3,
+      "oos_signals_tested": 2828,
+      "cv_accuracy": 0.5364,
+      "cv_precision": 0.0,
+      "cv_recall": 0.0,
+      "cv_f1": 0.0,
+      "cv_auc_roc": 0.5627,
+      "clf_feature_importance": [
+        {
+          "feature": "source=fda",
+          "importance": 0.4249
+        },
+        {
+          "feature": "source=ema",
+          "importance": 0.4174
+        },
+        {
+          "feature": "sentry1_company",
+          "importance": 0.1323
+        },
+        {
+          "feature": "sentry1_price",
+          "importance": 0.0254
+        },
+        {
+          "feature": "keyword_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "sentry1_pass",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=clinical_trials",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=edgar",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=CLINICAL_TRIAL",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=M_A",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=OTHER",
+          "importance": 0.0
+        }
+      ],
+      "reg_mae": 2.2465,
+      "reg_rmse": 3.0046,
+      "reg_r2": -0.0728,
+      "reg_feature_importance": [
+        {
+          "feature": "source=ema",
+          "importance": 0.654
+        },
+        {
+          "feature": "source=fda",
+          "importance": 0.1526
+        },
+        {
+          "feature": "sentry1_company",
+          "importance": 0.102
+        },
+        {
+          "feature": "sentry1_price",
+          "importance": 0.0914
+        },
+        {
+          "feature": "keyword_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "sentry1_pass",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=clinical_trials",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=edgar",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=CLINICAL_TRIAL",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=M_A",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=OTHER",
+          "importance": 0.0
+        }
+      ],
+      "walk_forward_detail": [
+        {
+          "window": 1,
+          "train_size": 1885,
+          "test_size": 942,
+          "train_dates": "1955-12-05 to 2013-12-19",
+          "test_dates": "2013-12-20 to 2020-01-24",
+          "accuracy": 0.5913,
+          "auc_roc": 0.526,
+          "reg_mae": 1.9119
+        },
+        {
+          "window": 2,
+          "train_size": 2827,
+          "test_size": 942,
+          "train_dates": "1955-12-05 to 2020-01-24",
+          "test_dates": "2020-01-27 to 2024-09-19",
+          "accuracy": 0.5807,
+          "auc_roc": 0.5336,
+          "reg_mae": 2.086
+        },
+        {
+          "window": 3,
+          "train_size": 3769,
+          "test_size": 944,
+          "train_dates": "1955-12-05 to 2024-09-19",
+          "test_dates": "2024-09-19 to 2026-04-09",
+          "accuracy": 0.4375,
+          "auc_roc": 0.5279,
+          "reg_mae": 2.7404
+        }
+      ],
+      "threshold_analysis": [],
+      "return_threshold_analysis": [],
+      "combined_gate_analysis": [],
+      "baseline_win_rate": 38.8,
+      "baseline_avg_return": -0.4968,
+      "feature_importance": [
+        {
+          "feature": "source=fda",
+          "importance": 0.4249
+        },
+        {
+          "feature": "source=ema",
+          "importance": 0.4174
+        },
+        {
+          "feature": "sentry1_company",
+          "importance": 0.1323
+        },
+        {
+          "feature": "sentry1_price",
+          "importance": 0.0254
+        },
+        {
+          "feature": "keyword_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "sentry1_pass",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=clinical_trials",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=edgar",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=CLINICAL_TRIAL",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=M_A",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=OTHER",
+          "importance": 0.0
+        }
+      ]
+    },
+    {
+      "segment": "global_hold3_stop0.1",
+      "hold_days": 3,
+      "stop_loss_pct": 0.1,
+      "n_signals": 4713,
+      "positive_labels": 1830,
+      "negative_labels": 2883,
+      "feature_count": 28,
+      "walk_forward_windows": 3,
+      "oos_signals_tested": 2828,
+      "cv_accuracy": 0.5368,
+      "cv_precision": 0.0,
+      "cv_recall": 0.0,
+      "cv_f1": 0.0,
+      "cv_auc_roc": 0.5625,
+      "clf_feature_importance": [
+        {
+          "feature": "source=ema",
+          "importance": 0.5552
+        },
+        {
+          "feature": "source=fda",
+          "importance": 0.2937
+        },
+        {
+          "feature": "sentry1_company",
+          "importance": 0.1279
+        },
+        {
+          "feature": "sentry1_price",
+          "importance": 0.0232
+        },
+        {
+          "feature": "keyword_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "sentry1_pass",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=clinical_trials",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=edgar",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=CLINICAL_TRIAL",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=M_A",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=OTHER",
+          "importance": 0.0
+        }
+      ],
+      "reg_mae": 2.2457,
+      "reg_rmse": 2.9552,
+      "reg_r2": -0.0775,
+      "reg_feature_importance": [
+        {
+          "feature": "source=ema",
+          "importance": 0.7449
+        },
+        {
+          "feature": "source=fda",
+          "importance": 0.0983
+        },
+        {
+          "feature": "sentry1_company",
+          "importance": 0.0856
+        },
+        {
+          "feature": "sentry1_price",
+          "importance": 0.0713
+        },
+        {
+          "feature": "keyword_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "sentry1_pass",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=clinical_trials",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=edgar",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=CLINICAL_TRIAL",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=M_A",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=OTHER",
+          "importance": 0.0
+        }
+      ],
+      "walk_forward_detail": [
+        {
+          "window": 1,
+          "train_size": 1885,
+          "test_size": 942,
+          "train_dates": "1955-12-05 to 2013-12-19",
+          "test_dates": "2013-12-20 to 2020-01-24",
+          "accuracy": 0.5913,
+          "auc_roc": 0.526,
+          "reg_mae": 1.9119
+        },
+        {
+          "window": 2,
+          "train_size": 2827,
+          "test_size": 942,
+          "train_dates": "1955-12-05 to 2020-01-24",
+          "test_dates": "2020-01-27 to 2024-09-19",
+          "accuracy": 0.5817,
+          "auc_roc": 0.533,
+          "reg_mae": 2.0772
+        },
+        {
+          "window": 3,
+          "train_size": 3769,
+          "test_size": 944,
+          "train_dates": "1955-12-05 to 2024-09-19",
+          "test_dates": "2024-09-19 to 2026-04-09",
+          "accuracy": 0.4375,
+          "auc_roc": 0.5279,
+          "reg_mae": 2.7468
+        }
+      ],
+      "threshold_analysis": [],
+      "return_threshold_analysis": [],
+      "combined_gate_analysis": [],
+      "baseline_win_rate": 38.8,
+      "baseline_avg_return": -0.497,
+      "feature_importance": [
+        {
+          "feature": "source=ema",
+          "importance": 0.5552
+        },
+        {
+          "feature": "source=fda",
+          "importance": 0.2937
+        },
+        {
+          "feature": "sentry1_company",
+          "importance": 0.1279
+        },
+        {
+          "feature": "sentry1_price",
+          "importance": 0.0232
+        },
+        {
+          "feature": "keyword_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "sentry1_pass",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=clinical_trials",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=edgar",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=CLINICAL_TRIAL",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=M_A",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=OTHER",
+          "importance": 0.0
+        }
+      ]
+    },
+    {
+      "segment": "global_hold3_stop0.07",
+      "hold_days": 3,
+      "stop_loss_pct": 0.07,
+      "n_signals": 4713,
+      "positive_labels": 1829,
+      "negative_labels": 2884,
+      "feature_count": 28,
+      "walk_forward_windows": 3,
+      "oos_signals_tested": 2828,
+      "cv_accuracy": 0.5371,
+      "cv_precision": 0.0,
+      "cv_recall": 0.0,
+      "cv_f1": 0.0,
+      "cv_auc_roc": 0.5622,
+      "clf_feature_importance": [
+        {
+          "feature": "source=ema",
+          "importance": 0.4598
+        },
+        {
+          "feature": "source=fda",
+          "importance": 0.3779
+        },
+        {
+          "feature": "sentry1_company",
+          "importance": 0.1392
+        },
+        {
+          "feature": "sentry1_price",
+          "importance": 0.0231
+        },
+        {
+          "feature": "keyword_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "sentry1_pass",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=clinical_trials",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=edgar",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=CLINICAL_TRIAL",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=M_A",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=OTHER",
+          "importance": 0.0
+        }
+      ],
+      "reg_mae": 2.2001,
+      "reg_rmse": 2.8623,
+      "reg_r2": -0.0531,
+      "reg_feature_importance": [
+        {
+          "feature": "source=ema",
+          "importance": 0.7033
+        },
+        {
+          "feature": "source=fda",
+          "importance": 0.1826
+        },
+        {
+          "feature": "sentry1_company",
+          "importance": 0.0716
+        },
+        {
+          "feature": "sentry1_price",
+          "importance": 0.0424
+        },
+        {
+          "feature": "keyword_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "sentry1_pass",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=clinical_trials",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=edgar",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=CLINICAL_TRIAL",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=M_A",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=OTHER",
+          "importance": 0.0
+        }
+      ],
+      "walk_forward_detail": [
+        {
+          "window": 1,
+          "train_size": 1885,
+          "test_size": 942,
+          "train_dates": "1955-12-05 to 2013-12-19",
+          "test_dates": "2013-12-20 to 2020-01-24",
+          "accuracy": 0.5913,
+          "auc_roc": 0.526,
+          "reg_mae": 1.9156
+        },
+        {
+          "window": 2,
+          "train_size": 2827,
+          "test_size": 942,
+          "train_dates": "1955-12-05 to 2020-01-24",
+          "test_dates": "2020-01-27 to 2024-09-19",
+          "accuracy": 0.5817,
+          "auc_roc": 0.533,
+          "reg_mae": 2.0683
+        },
+        {
+          "window": 3,
+          "train_size": 3769,
+          "test_size": 944,
+          "train_dates": "1955-12-05 to 2024-09-19",
+          "test_dates": "2024-09-19 to 2026-04-09",
+          "accuracy": 0.4386,
+          "auc_roc": 0.527,
+          "reg_mae": 2.6155
+        }
+      ],
+      "threshold_analysis": [],
+      "return_threshold_analysis": [
+        {
+          "min_predicted_return": 0.0,
+          "trades": 106,
+          "actual_avg_return": 1.087,
+          "actual_win_rate": 62.3,
+          "actual_total_return": 115.22
+        }
+      ],
+      "combined_gate_analysis": [],
+      "baseline_win_rate": 38.8,
+      "baseline_avg_return": -0.4904,
+      "feature_importance": [
+        {
+          "feature": "source=ema",
+          "importance": 0.4598
+        },
+        {
+          "feature": "source=fda",
+          "importance": 0.3779
+        },
+        {
+          "feature": "sentry1_company",
+          "importance": 0.1392
+        },
+        {
+          "feature": "sentry1_price",
+          "importance": 0.0231
+        },
+        {
+          "feature": "keyword_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "sentry1_pass",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=clinical_trials",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=edgar",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=CLINICAL_TRIAL",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=M_A",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=OTHER",
+          "importance": 0.0
+        }
+      ]
+    },
+    {
+      "segment": "global_hold1_stop0.02",
+      "hold_days": 1,
+      "stop_loss_pct": 0.02,
+      "n_signals": 4713,
+      "positive_labels": 1944,
+      "negative_labels": 2769,
+      "feature_count": 28,
+      "walk_forward_windows": 3,
+      "oos_signals_tested": 2828,
+      "cv_accuracy": 0.5269,
+      "cv_precision": 0.5193,
+      "cv_recall": 0.2667,
+      "cv_f1": 0.3524,
+      "cv_auc_roc": 0.5191,
+      "clf_feature_importance": [
+        {
+          "feature": "source=ema",
+          "importance": 0.4877
+        },
+        {
+          "feature": "sentry1_company",
+          "importance": 0.3524
+        },
+        {
+          "feature": "source=fda",
+          "importance": 0.1018
+        },
+        {
+          "feature": "sentry1_price",
+          "importance": 0.0582
+        },
+        {
+          "feature": "keyword_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "sentry1_pass",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=clinical_trials",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=edgar",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=CLINICAL_TRIAL",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=M_A",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=OTHER",
+          "importance": 0.0
+        }
+      ],
+      "reg_mae": 1.8676,
+      "reg_rmse": 2.321,
+      "reg_r2": -0.4092,
+      "reg_feature_importance": [
+        {
+          "feature": "sentry1_company",
+          "importance": 0.6355
+        },
+        {
+          "feature": "source=fda",
+          "importance": 0.1489
+        },
+        {
+          "feature": "sentry1_price",
+          "importance": 0.1412
+        },
+        {
+          "feature": "source=ema",
+          "importance": 0.0744
+        },
+        {
+          "feature": "keyword_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "sentry1_pass",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=clinical_trials",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=edgar",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=CLINICAL_TRIAL",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=M_A",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=OTHER",
+          "importance": 0.0
+        }
+      ],
+      "walk_forward_detail": [
+        {
+          "window": 1,
+          "train_size": 1885,
+          "test_size": 942,
+          "train_dates": "1955-12-05 to 2013-12-19",
+          "test_dates": "2013-12-20 to 2020-01-24",
+          "accuracy": 0.5563,
+          "auc_roc": 0.5099,
+          "reg_mae": 1.8932
+        },
+        {
+          "window": 2,
+          "train_size": 2827,
+          "test_size": 942,
+          "train_dates": "1955-12-05 to 2020-01-24",
+          "test_dates": "2020-01-27 to 2024-09-19",
+          "accuracy": 0.5531,
+          "auc_roc": 0.5403,
+          "reg_mae": 1.8905
+        },
+        {
+          "window": 3,
+          "train_size": 3769,
+          "test_size": 944,
+          "train_dates": "1955-12-05 to 2024-09-19",
+          "test_dates": "2024-09-19 to 2026-04-09",
+          "accuracy": 0.4714,
+          "auc_roc": 0.4866,
+          "reg_mae": 1.8192
+        }
+      ],
+      "threshold_analysis": [
+        {
+          "threshold": 0.5,
+          "trades": 701,
+          "avg_return": 0.3551,
+          "win_rate": 51.9,
+          "total_return": 248.9,
+          "avg_predicted_return": 2.1071
+        },
+        {
+          "threshold": 0.55,
+          "trades": 174,
+          "avg_return": 0.3808,
+          "win_rate": 52.3,
+          "total_return": 66.25,
+          "avg_predicted_return": 2.2167
+        },
+        {
+          "threshold": 0.6,
+          "trades": 5,
+          "avg_return": -0.3386,
+          "win_rate": 40.0,
+          "total_return": -1.69,
+          "avg_predicted_return": 4.1575
+        }
+      ],
+      "return_threshold_analysis": [
+        {
+          "min_predicted_return": 0.0,
+          "trades": 2824,
+          "actual_avg_return": 0.0976,
+          "actual_win_rate": 48.3,
+          "actual_total_return": 275.55
+        },
+        {
+          "min_predicted_return": 0.5,
+          "trades": 2725,
+          "actual_avg_return": 0.0854,
+          "actual_win_rate": 48.3,
+          "actual_total_return": 232.6
+        },
+        {
+          "min_predicted_return": 1.0,
+          "trades": 1365,
+          "actual_avg_return": 0.152,
+          "actual_win_rate": 48.2,
+          "actual_total_return": 207.54
+        },
+        {
+          "min_predicted_return": 1.5,
+          "trades": 1110,
+          "actual_avg_return": 0.1952,
+          "actual_win_rate": 48.0,
+          "actual_total_return": 216.64
+        },
+        {
+          "min_predicted_return": 2.0,
+          "trades": 704,
+          "actual_avg_return": 0.3368,
+          "actual_win_rate": 51.7,
+          "actual_total_return": 237.09
+        },
+        {
+          "min_predicted_return": 3.0,
+          "trades": 6,
+          "actual_avg_return": -0.0536,
+          "actual_win_rate": 50.0,
+          "actual_total_return": -0.32
+        }
+      ],
+      "combined_gate_analysis": [
+        {
+          "prob_threshold": 0.5,
+          "return_threshold": 0.5,
+          "trades": 701,
+          "actual_avg_return": 0.3551,
+          "actual_win_rate": 51.9,
+          "actual_total_return": 248.9
+        },
+        {
+          "prob_threshold": 0.5,
+          "return_threshold": 1.0,
+          "trades": 700,
+          "actual_avg_return": 0.349,
+          "actual_win_rate": 51.9,
+          "actual_total_return": 244.28
+        },
+        {
+          "prob_threshold": 0.5,
+          "return_threshold": 1.5,
+          "trades": 700,
+          "actual_avg_return": 0.349,
+          "actual_win_rate": 51.9,
+          "actual_total_return": 244.28
+        },
+        {
+          "prob_threshold": 0.5,
+          "return_threshold": 2.0,
+          "trades": 689,
+          "actual_avg_return": 0.351,
+          "actual_win_rate": 52.0,
+          "actual_total_return": 241.83
+        },
+        {
+          "prob_threshold": 0.6,
+          "return_threshold": 0.5,
+          "trades": 5,
+          "actual_avg_return": -0.3386,
+          "actual_win_rate": 40.0,
+          "actual_total_return": -1.69
+        },
+        {
+          "prob_threshold": 0.6,
+          "return_threshold": 1.0,
+          "trades": 5,
+          "actual_avg_return": -0.3386,
+          "actual_win_rate": 40.0,
+          "actual_total_return": -1.69
+        },
+        {
+          "prob_threshold": 0.6,
+          "return_threshold": 1.5,
+          "trades": 5,
+          "actual_avg_return": -0.3386,
+          "actual_win_rate": 40.0,
+          "actual_total_return": -1.69
+        },
+        {
+          "prob_threshold": 0.6,
+          "return_threshold": 2.0,
+          "trades": 5,
+          "actual_avg_return": -0.3386,
+          "actual_win_rate": 40.0,
+          "actual_total_return": -1.69
+        }
+      ],
+      "baseline_win_rate": 41.2,
+      "baseline_avg_return": -0.0642,
+      "feature_importance": [
+        {
+          "feature": "source=ema",
+          "importance": 0.4877
+        },
+        {
+          "feature": "sentry1_company",
+          "importance": 0.3524
+        },
+        {
+          "feature": "source=fda",
+          "importance": 0.1018
+        },
+        {
+          "feature": "sentry1_price",
+          "importance": 0.0582
+        },
+        {
+          "feature": "keyword_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "sentry1_pass",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=clinical_trials",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=edgar",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=CLINICAL_TRIAL",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=M_A",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=OTHER",
+          "importance": 0.0
+        }
+      ]
+    },
+    {
+      "segment": "global_hold1_stop0.03",
+      "hold_days": 1,
+      "stop_loss_pct": 0.03,
+      "n_signals": 4713,
+      "positive_labels": 1974,
+      "negative_labels": 2739,
+      "feature_count": 28,
+      "walk_forward_windows": 3,
+      "oos_signals_tested": 2828,
+      "cv_accuracy": 0.5194,
+      "cv_precision": 0.5251,
+      "cv_recall": 0.2695,
+      "cv_f1": 0.3562,
+      "cv_auc_roc": 0.5165,
+      "clf_feature_importance": [
+        {
+          "feature": "source=ema",
+          "importance": 0.4872
+        },
+        {
+          "feature": "sentry1_company",
+          "importance": 0.392
+        },
+        {
+          "feature": "sentry1_price",
+          "importance": 0.0719
+        },
+        {
+          "feature": "source=fda",
+          "importance": 0.0489
+        },
+        {
+          "feature": "keyword_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "sentry1_pass",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=clinical_trials",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=edgar",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=CLINICAL_TRIAL",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=M_A",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=OTHER",
+          "importance": 0.0
+        }
+      ],
+      "reg_mae": 1.9742,
+      "reg_rmse": 2.4546,
+      "reg_r2": -0.4532,
+      "reg_feature_importance": [
+        {
+          "feature": "sentry1_company",
+          "importance": 0.5887
+        },
+        {
+          "feature": "source=fda",
+          "importance": 0.1991
+        },
+        {
+          "feature": "sentry1_price",
+          "importance": 0.142
+        },
+        {
+          "feature": "source=ema",
+          "importance": 0.0702
+        },
+        {
+          "feature": "keyword_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "sentry1_pass",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=clinical_trials",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=edgar",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=CLINICAL_TRIAL",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=M_A",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=OTHER",
+          "importance": 0.0
+        }
+      ],
+      "walk_forward_detail": [
+        {
+          "window": 1,
+          "train_size": 1885,
+          "test_size": 942,
+          "train_dates": "1955-12-05 to 2013-12-19",
+          "test_dates": "2013-12-20 to 2020-01-24",
+          "accuracy": 0.5563,
+          "auc_roc": 0.5109,
+          "reg_mae": 2.0275
+        },
+        {
+          "window": 2,
+          "train_size": 2827,
+          "test_size": 942,
+          "train_dates": "1955-12-05 to 2020-01-24",
+          "test_dates": "2020-01-27 to 2024-09-19",
+          "accuracy": 0.552,
+          "auc_roc": 0.5369,
+          "reg_mae": 2.01
+        },
+        {
+          "window": 3,
+          "train_size": 3769,
+          "test_size": 944,
+          "train_dates": "1955-12-05 to 2024-09-19",
+          "test_dates": "2024-09-19 to 2026-04-09",
+          "accuracy": 0.4502,
+          "auc_roc": 0.4795,
+          "reg_mae": 1.8852
+        }
+      ],
+      "threshold_analysis": [
+        {
+          "threshold": 0.5,
+          "trades": 716,
+          "avg_return": 0.3307,
+          "win_rate": 52.5,
+          "total_return": 236.76,
+          "avg_predicted_return": 2.1163
+        },
+        {
+          "threshold": 0.55,
+          "trades": 406,
+          "avg_return": 0.3301,
+          "win_rate": 53.9,
+          "total_return": 134.04,
+          "avg_predicted_return": 2.1493
+        },
+        {
+          "threshold": 0.6,
+          "trades": 6,
+          "avg_return": 0.1722,
+          "win_rate": 50.0,
+          "total_return": 1.03,
+          "avg_predicted_return": 4.1551
+        }
+      ],
+      "return_threshold_analysis": [
+        {
+          "min_predicted_return": 0.0,
+          "trades": 2828,
+          "actual_avg_return": 0.0883,
+          "actual_win_rate": 49.3,
+          "actual_total_return": 249.76
+        },
+        {
+          "min_predicted_return": 0.5,
+          "trades": 2828,
+          "actual_avg_return": 0.0883,
+          "actual_win_rate": 49.3,
+          "actual_total_return": 249.76
+        },
+        {
+          "min_predicted_return": 1.0,
+          "trades": 1487,
+          "actual_avg_return": 0.1509,
+          "actual_win_rate": 49.2,
+          "actual_total_return": 224.4
+        },
+        {
+          "min_predicted_return": 1.5,
+          "trades": 1122,
+          "actual_avg_return": 0.1982,
+          "actual_win_rate": 48.7,
+          "actual_total_return": 222.39
+        },
+        {
+          "min_predicted_return": 2.0,
+          "trades": 904,
+          "actual_avg_return": 0.2565,
+          "actual_win_rate": 49.9,
+          "actual_total_return": 231.85
+        },
+        {
+          "min_predicted_return": 3.0,
+          "trades": 9,
+          "actual_avg_return": 0.5199,
+          "actual_win_rate": 66.7,
+          "actual_total_return": 4.68
+        }
+      ],
+      "combined_gate_analysis": [
+        {
+          "prob_threshold": 0.5,
+          "return_threshold": 0.5,
+          "trades": 716,
+          "actual_avg_return": 0.3307,
+          "actual_win_rate": 52.5,
+          "actual_total_return": 236.76
+        },
+        {
+          "prob_threshold": 0.5,
+          "return_threshold": 1.0,
+          "trades": 716,
+          "actual_avg_return": 0.3307,
+          "actual_win_rate": 52.5,
+          "actual_total_return": 236.76
+        },
+        {
+          "prob_threshold": 0.5,
+          "return_threshold": 1.5,
+          "trades": 712,
+          "actual_avg_return": 0.3304,
+          "actual_win_rate": 52.5,
+          "actual_total_return": 235.21
+        },
+        {
+          "prob_threshold": 0.5,
+          "return_threshold": 2.0,
+          "trades": 689,
+          "actual_avg_return": 0.3335,
+          "actual_win_rate": 52.5,
+          "actual_total_return": 229.77
+        },
+        {
+          "prob_threshold": 0.6,
+          "return_threshold": 0.5,
+          "trades": 6,
+          "actual_avg_return": 0.1722,
+          "actual_win_rate": 50.0,
+          "actual_total_return": 1.03
+        },
+        {
+          "prob_threshold": 0.6,
+          "return_threshold": 1.0,
+          "trades": 6,
+          "actual_avg_return": 0.1722,
+          "actual_win_rate": 50.0,
+          "actual_total_return": 1.03
+        },
+        {
+          "prob_threshold": 0.6,
+          "return_threshold": 1.5,
+          "trades": 6,
+          "actual_avg_return": 0.1722,
+          "actual_win_rate": 50.0,
+          "actual_total_return": 1.03
+        },
+        {
+          "prob_threshold": 0.6,
+          "return_threshold": 2.0,
+          "trades": 6,
+          "actual_avg_return": 0.1722,
+          "actual_win_rate": 50.0,
+          "actual_total_return": 1.03
+        }
+      ],
+      "baseline_win_rate": 41.9,
+      "baseline_avg_return": -0.0302,
+      "feature_importance": [
+        {
+          "feature": "source=ema",
+          "importance": 0.4872
+        },
+        {
+          "feature": "sentry1_company",
+          "importance": 0.392
+        },
+        {
+          "feature": "sentry1_price",
+          "importance": 0.0719
+        },
+        {
+          "feature": "source=fda",
+          "importance": 0.0489
+        },
+        {
+          "feature": "keyword_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "sentry1_pass",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=clinical_trials",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=edgar",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=CLINICAL_TRIAL",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=M_A",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=OTHER",
+          "importance": 0.0
+        }
+      ]
+    }
+  ],
+  "best_global": {
+    "segment": "global_hold3_stopNone",
+    "hold_days": 3,
+    "stop_loss_pct": null,
+    "n_signals": 4713,
+    "positive_labels": 1831,
+    "negative_labels": 2882,
+    "feature_count": 28,
+    "walk_forward_windows": 3,
+    "oos_signals_tested": 2828,
+    "cv_accuracy": 0.5364,
+    "cv_precision": 0.0,
+    "cv_recall": 0.0,
+    "cv_f1": 0.0,
+    "cv_auc_roc": 0.5627,
+    "clf_feature_importance": [
+      {
+        "feature": "source=fda",
+        "importance": 0.4249
+      },
+      {
+        "feature": "source=ema",
+        "importance": 0.4174
+      },
+      {
+        "feature": "sentry1_company",
+        "importance": 0.1323
+      },
+      {
+        "feature": "sentry1_price",
+        "importance": 0.0254
+      },
+      {
+        "feature": "keyword_score",
+        "importance": 0.0
+      },
+      {
+        "feature": "confidence",
+        "importance": 0.0
+      },
+      {
+        "feature": "impact_score",
+        "importance": 0.0
+      },
+      {
+        "feature": "sentry1_pass",
+        "importance": 0.0
+      },
+      {
+        "feature": "llm_confidence",
+        "importance": 0.0
+      },
+      {
+        "feature": "llm_impact_score",
+        "importance": 0.0
+      },
+      {
+        "feature": "source=clinical_trials",
+        "importance": 0.0
+      },
+      {
+        "feature": "source=edgar",
+        "importance": 0.0
+      },
+      {
+        "feature": "event_type=CLINICAL_TRIAL",
+        "importance": 0.0
+      },
+      {
+        "feature": "event_type=M_A",
+        "importance": 0.0
+      },
+      {
+        "feature": "event_type=OTHER",
+        "importance": 0.0
+      }
+    ],
+    "reg_mae": 2.2465,
+    "reg_rmse": 3.0046,
+    "reg_r2": -0.0728,
+    "reg_feature_importance": [
+      {
+        "feature": "source=ema",
+        "importance": 0.654
+      },
+      {
+        "feature": "source=fda",
+        "importance": 0.1526
+      },
+      {
+        "feature": "sentry1_company",
+        "importance": 0.102
+      },
+      {
+        "feature": "sentry1_price",
+        "importance": 0.0914
+      },
+      {
+        "feature": "keyword_score",
+        "importance": 0.0
+      },
+      {
+        "feature": "confidence",
+        "importance": 0.0
+      },
+      {
+        "feature": "impact_score",
+        "importance": 0.0
+      },
+      {
+        "feature": "sentry1_pass",
+        "importance": 0.0
+      },
+      {
+        "feature": "llm_confidence",
+        "importance": 0.0
+      },
+      {
+        "feature": "llm_impact_score",
+        "importance": 0.0
+      },
+      {
+        "feature": "source=clinical_trials",
+        "importance": 0.0
+      },
+      {
+        "feature": "source=edgar",
+        "importance": 0.0
+      },
+      {
+        "feature": "event_type=CLINICAL_TRIAL",
+        "importance": 0.0
+      },
+      {
+        "feature": "event_type=M_A",
+        "importance": 0.0
+      },
+      {
+        "feature": "event_type=OTHER",
+        "importance": 0.0
+      }
+    ],
+    "walk_forward_detail": [
+      {
+        "window": 1,
+        "train_size": 1885,
+        "test_size": 942,
+        "train_dates": "1955-12-05 to 2013-12-19",
+        "test_dates": "2013-12-20 to 2020-01-24",
+        "accuracy": 0.5913,
+        "auc_roc": 0.526,
+        "reg_mae": 1.9119
+      },
+      {
+        "window": 2,
+        "train_size": 2827,
+        "test_size": 942,
+        "train_dates": "1955-12-05 to 2020-01-24",
+        "test_dates": "2020-01-27 to 2024-09-19",
+        "accuracy": 0.5807,
+        "auc_roc": 0.5336,
+        "reg_mae": 2.086
+      },
+      {
+        "window": 3,
+        "train_size": 3769,
+        "test_size": 944,
+        "train_dates": "1955-12-05 to 2024-09-19",
+        "test_dates": "2024-09-19 to 2026-04-09",
+        "accuracy": 0.4375,
+        "auc_roc": 0.5279,
+        "reg_mae": 2.7404
+      }
+    ],
+    "threshold_analysis": [],
+    "return_threshold_analysis": [],
+    "combined_gate_analysis": [],
+    "baseline_win_rate": 38.8,
+    "baseline_avg_return": -0.4968,
+    "feature_importance": [
+      {
+        "feature": "source=fda",
+        "importance": 0.4249
+      },
+      {
+        "feature": "source=ema",
+        "importance": 0.4174
+      },
+      {
+        "feature": "sentry1_company",
+        "importance": 0.1323
+      },
+      {
+        "feature": "sentry1_price",
+        "importance": 0.0254
+      },
+      {
+        "feature": "keyword_score",
+        "importance": 0.0
+      },
+      {
+        "feature": "confidence",
+        "importance": 0.0
+      },
+      {
+        "feature": "impact_score",
+        "importance": 0.0
+      },
+      {
+        "feature": "sentry1_pass",
+        "importance": 0.0
+      },
+      {
+        "feature": "llm_confidence",
+        "importance": 0.0
+      },
+      {
+        "feature": "llm_impact_score",
+        "importance": 0.0
+      },
+      {
+        "feature": "source=clinical_trials",
+        "importance": 0.0
+      },
+      {
+        "feature": "source=edgar",
+        "importance": 0.0
+      },
+      {
+        "feature": "event_type=CLINICAL_TRIAL",
+        "importance": 0.0
+      },
+      {
+        "feature": "event_type=M_A",
+        "importance": 0.0
+      },
+      {
+        "feature": "event_type=OTHER",
+        "importance": 0.0
+      }
+    ]
+  },
+  "segment_models": [
+    {
+      "segment": "event_type=CLINICAL_TRIAL",
+      "hold_days": 3,
+      "stop_loss_pct": null,
+      "skipped": true,
+      "reason": "too_few_for_walk_forward (16 signals)",
+      "n_signals": 16
+    },
+    {
+      "segment": "source=ema",
+      "hold_days": 1,
+      "stop_loss_pct": 0.02,
+      "n_signals": 681,
+      "positive_labels": 361,
+      "negative_labels": 320,
+      "feature_count": 23,
+      "walk_forward_windows": 3,
+      "oos_signals_tested": 409,
+      "cv_accuracy": 0.5477,
+      "cv_precision": 0.5719,
+      "cv_recall": 0.75,
+      "cv_f1": 0.649,
+      "cv_auc_roc": 0.5028,
+      "clf_feature_importance": [
+        {
+          "feature": "sentry1_company",
+          "importance": 0.5772
+        },
+        {
+          "feature": "sentry1_price",
+          "importance": 0.4228
+        },
+        {
+          "feature": "keyword_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "sentry1_pass",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=ema",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=OTHER",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=REGULATORY_DECISION",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=REGULATORY_NEGATIVE",
+          "importance": 0.0
+        },
+        {
+          "feature": "polarity=negative",
+          "importance": 0.0
+        },
+        {
+          "feature": "polarity=neutral",
+          "importance": 0.0
+        },
+        {
+          "feature": "polarity=positive",
+          "importance": 0.0
+        }
+      ],
+      "reg_mae": 1.8277,
+      "reg_rmse": 2.312,
+      "reg_r2": -0.1491,
+      "reg_feature_importance": [
+        {
+          "feature": "sentry1_company",
+          "importance": 0.5522
+        },
+        {
+          "feature": "sentry1_price",
+          "importance": 0.176
+        },
+        {
+          "feature": "polarity=positive",
+          "importance": 0.1249
+        },
+        {
+          "feature": "event_type=REGULATORY_DECISION",
+          "importance": 0.1173
+        },
+        {
+          "feature": "sentry1_pass",
+          "importance": 0.0296
+        },
+        {
+          "feature": "keyword_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=ema",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=OTHER",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=REGULATORY_NEGATIVE",
+          "importance": 0.0
+        },
+        {
+          "feature": "polarity=negative",
+          "importance": 0.0
+        },
+        {
+          "feature": "polarity=neutral",
+          "importance": 0.0
+        }
+      ],
+      "walk_forward_detail": [
+        {
+          "window": 1,
+          "train_size": 272,
+          "test_size": 136,
+          "train_dates": "2023-04-18 to 2025-09-25",
+          "test_dates": "2025-09-25 to 2025-12-10",
+          "accuracy": 0.5294,
+          "auc_roc": 0.5488,
+          "reg_mae": 1.7913
+        },
+        {
+          "window": 2,
+          "train_size": 408,
+          "test_size": 136,
+          "train_dates": "2023-04-18 to 2025-12-10",
+          "test_dates": "2025-12-10 to 2026-02-06",
+          "accuracy": 0.5882,
+          "auc_roc": 0.4995,
+          "reg_mae": 1.8556
+        },
+        {
+          "window": 3,
+          "train_size": 544,
+          "test_size": 137,
+          "train_dates": "2023-04-18 to 2026-02-06",
+          "test_dates": "2026-02-06 to 2026-04-09",
+          "accuracy": 0.5255,
+          "auc_roc": 0.4374,
+          "reg_mae": 1.8361
+        }
+      ],
+      "threshold_analysis": [
+        {
+          "threshold": 0.5,
+          "trades": 299,
+          "avg_return": 0.487,
+          "win_rate": 57.2,
+          "total_return": 145.61,
+          "avg_predicted_return": 1.0051
+        },
+        {
+          "threshold": 0.55,
+          "trades": 169,
+          "avg_return": 0.301,
+          "win_rate": 53.8,
+          "total_return": 50.87,
+          "avg_predicted_return": 1.3381
+        },
+        {
+          "threshold": 0.6,
+          "trades": 116,
+          "avg_return": 0.1833,
+          "win_rate": 53.4,
+          "total_return": 21.26,
+          "avg_predicted_return": 1.6154
+        },
+        {
+          "threshold": 0.65,
+          "trades": 20,
+          "avg_return": -0.2678,
+          "win_rate": 45.0,
+          "total_return": -5.36,
+          "avg_predicted_return": 2.0122
+        },
+        {
+          "threshold": 0.7,
+          "trades": 3,
+          "avg_return": -2.0,
+          "win_rate": 0.0,
+          "total_return": -6.0,
+          "avg_predicted_return": 2.0096
+        }
+      ],
+      "return_threshold_analysis": [
+        {
+          "min_predicted_return": 0.0,
+          "trades": 375,
+          "actual_avg_return": 0.5071,
+          "actual_win_rate": 55.7,
+          "actual_total_return": 190.16
+        },
+        {
+          "min_predicted_return": 0.5,
+          "trades": 247,
+          "actual_avg_return": 0.4528,
+          "actual_win_rate": 56.3,
+          "actual_total_return": 111.85
+        },
+        {
+          "min_predicted_return": 1.0,
+          "trades": 119,
+          "actual_avg_return": 0.158,
+          "actual_win_rate": 52.1,
+          "actual_total_return": 18.8
+        },
+        {
+          "min_predicted_return": 1.5,
+          "trades": 40,
+          "actual_avg_return": 0.2679,
+          "actual_win_rate": 55.0,
+          "actual_total_return": 10.72
+        },
+        {
+          "min_predicted_return": 2.0,
+          "trades": 39,
+          "actual_avg_return": 0.1837,
+          "actual_win_rate": 53.8,
+          "actual_total_return": 7.16
+        }
+      ],
+      "combined_gate_analysis": [
+        {
+          "prob_threshold": 0.5,
+          "return_threshold": 0.5,
+          "trades": 246,
+          "actual_avg_return": 0.4628,
+          "actual_win_rate": 56.5,
+          "actual_total_return": 113.85
+        },
+        {
+          "prob_threshold": 0.5,
+          "return_threshold": 1.0,
+          "trades": 119,
+          "actual_avg_return": 0.158,
+          "actual_win_rate": 52.1,
+          "actual_total_return": 18.8
+        },
+        {
+          "prob_threshold": 0.5,
+          "return_threshold": 1.5,
+          "trades": 40,
+          "actual_avg_return": 0.2679,
+          "actual_win_rate": 55.0,
+          "actual_total_return": 10.72
+        },
+        {
+          "prob_threshold": 0.5,
+          "return_threshold": 2.0,
+          "trades": 39,
+          "actual_avg_return": 0.1837,
+          "actual_win_rate": 53.8,
+          "actual_total_return": 7.16
+        },
+        {
+          "prob_threshold": 0.6,
+          "return_threshold": 0.5,
+          "trades": 115,
+          "actual_avg_return": 0.2023,
+          "actual_win_rate": 53.9,
+          "actual_total_return": 23.26
+        },
+        {
+          "prob_threshold": 0.6,
+          "return_threshold": 1.0,
+          "trades": 115,
+          "actual_avg_return": 0.2023,
+          "actual_win_rate": 53.9,
+          "actual_total_return": 23.26
+        },
+        {
+          "prob_threshold": 0.6,
+          "return_threshold": 1.5,
+          "trades": 40,
+          "actual_avg_return": 0.2679,
+          "actual_win_rate": 55.0,
+          "actual_total_return": 10.72
+        },
+        {
+          "prob_threshold": 0.6,
+          "return_threshold": 2.0,
+          "trades": 39,
+          "actual_avg_return": 0.1837,
+          "actual_win_rate": 53.8,
+          "actual_total_return": 7.16
+        },
+        {
+          "prob_threshold": 0.7,
+          "return_threshold": 0.5,
+          "trades": 3,
+          "actual_avg_return": -2.0,
+          "actual_win_rate": 0.0,
+          "actual_total_return": -6.0
+        },
+        {
+          "prob_threshold": 0.7,
+          "return_threshold": 1.0,
+          "trades": 3,
+          "actual_avg_return": -2.0,
+          "actual_win_rate": 0.0,
+          "actual_total_return": -6.0
+        },
+        {
+          "prob_threshold": 0.7,
+          "return_threshold": 1.5,
+          "trades": 3,
+          "actual_avg_return": -2.0,
+          "actual_win_rate": 0.0,
+          "actual_total_return": -6.0
+        },
+        {
+          "prob_threshold": 0.7,
+          "return_threshold": 2.0,
+          "trades": 3,
+          "actual_avg_return": -2.0,
+          "actual_win_rate": 0.0,
+          "actual_total_return": -6.0
+        }
+      ],
+      "baseline_win_rate": 53.0,
+      "baseline_avg_return": 0.2989,
+      "feature_importance": [
+        {
+          "feature": "sentry1_company",
+          "importance": 0.5772
+        },
+        {
+          "feature": "sentry1_price",
+          "importance": 0.4228
+        },
+        {
+          "feature": "keyword_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "sentry1_pass",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=ema",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=OTHER",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=REGULATORY_DECISION",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=REGULATORY_NEGATIVE",
+          "importance": 0.0
+        },
+        {
+          "feature": "polarity=negative",
+          "importance": 0.0
+        },
+        {
+          "feature": "polarity=neutral",
+          "importance": 0.0
+        },
+        {
+          "feature": "polarity=positive",
+          "importance": 0.0
+        }
+      ]
+    },
+    {
+      "segment": "event_type=REGULATORY_NEGATIVE",
+      "hold_days": 1,
+      "stop_loss_pct": 0.02,
+      "n_signals": 25,
+      "positive_labels": 15,
+      "negative_labels": 10,
+      "feature_count": 15,
+      "walk_forward_windows": 2,
+      "oos_signals_tested": 10,
+      "cv_accuracy": 0.7,
+      "cv_precision": 0.7,
+      "cv_recall": 1.0,
+      "cv_f1": 0.8235,
+      "cv_auc_roc": 0.5476,
+      "clf_feature_importance": [
+        {
+          "feature": "sentry1_price",
+          "importance": 1.0
+        },
+        {
+          "feature": "keyword_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "sentry1_company",
+          "importance": 0.0
+        },
+        {
+          "feature": "sentry1_pass",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=ema",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=REGULATORY_NEGATIVE",
+          "importance": 0.0
+        },
+        {
+          "feature": "polarity=negative",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_class=high",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_action=ignore",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_polarity=neutral",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_event_type=PARSE_ERROR",
+          "importance": 0.0
+        }
+      ],
+      "reg_mae": 1.0263,
+      "reg_rmse": 1.1917,
+      "reg_r2": 0.1903,
+      "reg_feature_importance": [
+        {
+          "feature": "sentry1_price",
+          "importance": 0.7257
+        },
+        {
+          "feature": "sentry1_company",
+          "importance": 0.2743
+        },
+        {
+          "feature": "keyword_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "sentry1_pass",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=ema",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=REGULATORY_NEGATIVE",
+          "importance": 0.0
+        },
+        {
+          "feature": "polarity=negative",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_class=high",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_action=ignore",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_polarity=neutral",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_event_type=PARSE_ERROR",
+          "importance": 0.0
+        }
+      ],
+      "walk_forward_detail": [
+        {
+          "window": 1,
+          "train_size": 15,
+          "test_size": 5,
+          "train_dates": "2023-05-04 to 2025-04-30",
+          "test_dates": "2025-06-11 to 2025-10-14",
+          "accuracy": 0.8,
+          "auc_roc": 0.5,
+          "reg_mae": 1.0864
+        },
+        {
+          "window": 2,
+          "train_size": 20,
+          "test_size": 5,
+          "train_dates": "2023-05-04 to 2025-10-14",
+          "test_dates": "2025-10-20 to 2026-03-04",
+          "accuracy": 0.6,
+          "auc_roc": 0.5833,
+          "reg_mae": 0.9661
+        }
+      ],
+      "threshold_analysis": [
+        {
+          "threshold": 0.5,
+          "trades": 10,
+          "avg_return": 0.1519,
+          "win_rate": 70.0,
+          "total_return": 1.52,
+          "avg_predicted_return": 0.3027
+        },
+        {
+          "threshold": 0.55,
+          "trades": 8,
+          "avg_return": 0.4348,
+          "win_rate": 75.0,
+          "total_return": 3.48,
+          "avg_predicted_return": 0.6322
+        },
+        {
+          "threshold": 0.6,
+          "trades": 8,
+          "avg_return": 0.4348,
+          "win_rate": 75.0,
+          "total_return": 3.48,
+          "avg_predicted_return": 0.6322
+        },
+        {
+          "threshold": 0.65,
+          "trades": 3,
+          "avg_return": 0.8572,
+          "win_rate": 66.7,
+          "total_return": 2.57,
+          "avg_predicted_return": 0.3702
+        },
+        {
+          "threshold": 0.7,
+          "trades": 3,
+          "avg_return": 0.8572,
+          "win_rate": 66.7,
+          "total_return": 2.57,
+          "avg_predicted_return": 0.3702
+        }
+      ],
+      "return_threshold_analysis": [
+        {
+          "min_predicted_return": 0.0,
+          "trades": 6,
+          "actual_avg_return": 0.8168,
+          "actual_win_rate": 83.3,
+          "actual_total_return": 4.9
+        },
+        {
+          "min_predicted_return": 0.5,
+          "trades": 3,
+          "actual_avg_return": 0.7763,
+          "actual_win_rate": 100.0,
+          "actual_total_return": 2.33
+        },
+        {
+          "min_predicted_return": 1.0,
+          "trades": 3,
+          "actual_avg_return": 0.7763,
+          "actual_win_rate": 100.0,
+          "actual_total_return": 2.33
+        },
+        {
+          "min_predicted_return": 1.5,
+          "trades": 3,
+          "actual_avg_return": 0.7763,
+          "actual_win_rate": 100.0,
+          "actual_total_return": 2.33
+        }
+      ],
+      "combined_gate_analysis": [
+        {
+          "prob_threshold": 0.5,
+          "return_threshold": 0.5,
+          "trades": 3,
+          "actual_avg_return": 0.7763,
+          "actual_win_rate": 100.0,
+          "actual_total_return": 2.33
+        },
+        {
+          "prob_threshold": 0.5,
+          "return_threshold": 1.0,
+          "trades": 3,
+          "actual_avg_return": 0.7763,
+          "actual_win_rate": 100.0,
+          "actual_total_return": 2.33
+        },
+        {
+          "prob_threshold": 0.5,
+          "return_threshold": 1.5,
+          "trades": 3,
+          "actual_avg_return": 0.7763,
+          "actual_win_rate": 100.0,
+          "actual_total_return": 2.33
+        },
+        {
+          "prob_threshold": 0.6,
+          "return_threshold": 0.5,
+          "trades": 3,
+          "actual_avg_return": 0.7763,
+          "actual_win_rate": 100.0,
+          "actual_total_return": 2.33
+        },
+        {
+          "prob_threshold": 0.6,
+          "return_threshold": 1.0,
+          "trades": 3,
+          "actual_avg_return": 0.7763,
+          "actual_win_rate": 100.0,
+          "actual_total_return": 2.33
+        },
+        {
+          "prob_threshold": 0.6,
+          "return_threshold": 1.5,
+          "trades": 3,
+          "actual_avg_return": 0.7763,
+          "actual_win_rate": 100.0,
+          "actual_total_return": 2.33
+        }
+      ],
+      "baseline_win_rate": 60.0,
+      "baseline_avg_return": 0.1555,
+      "feature_importance": [
+        {
+          "feature": "sentry1_price",
+          "importance": 1.0
+        },
+        {
+          "feature": "keyword_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "sentry1_company",
+          "importance": 0.0
+        },
+        {
+          "feature": "sentry1_pass",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=ema",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=REGULATORY_NEGATIVE",
+          "importance": 0.0
+        },
+        {
+          "feature": "polarity=negative",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_class=high",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_action=ignore",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_polarity=neutral",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_event_type=PARSE_ERROR",
+          "importance": 0.0
+        }
+      ]
+    },
+    {
+      "segment": "polarity=negative",
+      "hold_days": 1,
+      "stop_loss_pct": 0.02,
+      "n_signals": 25,
+      "positive_labels": 15,
+      "negative_labels": 10,
+      "feature_count": 15,
+      "walk_forward_windows": 2,
+      "oos_signals_tested": 10,
+      "cv_accuracy": 0.7,
+      "cv_precision": 0.7,
+      "cv_recall": 1.0,
+      "cv_f1": 0.8235,
+      "cv_auc_roc": 0.5476,
+      "clf_feature_importance": [
+        {
+          "feature": "sentry1_price",
+          "importance": 1.0
+        },
+        {
+          "feature": "keyword_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "sentry1_company",
+          "importance": 0.0
+        },
+        {
+          "feature": "sentry1_pass",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=ema",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=REGULATORY_NEGATIVE",
+          "importance": 0.0
+        },
+        {
+          "feature": "polarity=negative",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_class=high",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_action=ignore",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_polarity=neutral",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_event_type=PARSE_ERROR",
+          "importance": 0.0
+        }
+      ],
+      "reg_mae": 1.0263,
+      "reg_rmse": 1.1917,
+      "reg_r2": 0.1903,
+      "reg_feature_importance": [
+        {
+          "feature": "sentry1_price",
+          "importance": 0.7257
+        },
+        {
+          "feature": "sentry1_company",
+          "importance": 0.2743
+        },
+        {
+          "feature": "keyword_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "sentry1_pass",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=ema",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=REGULATORY_NEGATIVE",
+          "importance": 0.0
+        },
+        {
+          "feature": "polarity=negative",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_class=high",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_action=ignore",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_polarity=neutral",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_event_type=PARSE_ERROR",
+          "importance": 0.0
+        }
+      ],
+      "walk_forward_detail": [
+        {
+          "window": 1,
+          "train_size": 15,
+          "test_size": 5,
+          "train_dates": "2023-05-04 to 2025-04-30",
+          "test_dates": "2025-06-11 to 2025-10-14",
+          "accuracy": 0.8,
+          "auc_roc": 0.5,
+          "reg_mae": 1.0864
+        },
+        {
+          "window": 2,
+          "train_size": 20,
+          "test_size": 5,
+          "train_dates": "2023-05-04 to 2025-10-14",
+          "test_dates": "2025-10-20 to 2026-03-04",
+          "accuracy": 0.6,
+          "auc_roc": 0.5833,
+          "reg_mae": 0.9661
+        }
+      ],
+      "threshold_analysis": [
+        {
+          "threshold": 0.5,
+          "trades": 10,
+          "avg_return": 0.1519,
+          "win_rate": 70.0,
+          "total_return": 1.52,
+          "avg_predicted_return": 0.3027
+        },
+        {
+          "threshold": 0.55,
+          "trades": 8,
+          "avg_return": 0.4348,
+          "win_rate": 75.0,
+          "total_return": 3.48,
+          "avg_predicted_return": 0.6322
+        },
+        {
+          "threshold": 0.6,
+          "trades": 8,
+          "avg_return": 0.4348,
+          "win_rate": 75.0,
+          "total_return": 3.48,
+          "avg_predicted_return": 0.6322
+        },
+        {
+          "threshold": 0.65,
+          "trades": 3,
+          "avg_return": 0.8572,
+          "win_rate": 66.7,
+          "total_return": 2.57,
+          "avg_predicted_return": 0.3702
+        },
+        {
+          "threshold": 0.7,
+          "trades": 3,
+          "avg_return": 0.8572,
+          "win_rate": 66.7,
+          "total_return": 2.57,
+          "avg_predicted_return": 0.3702
+        }
+      ],
+      "return_threshold_analysis": [
+        {
+          "min_predicted_return": 0.0,
+          "trades": 6,
+          "actual_avg_return": 0.8168,
+          "actual_win_rate": 83.3,
+          "actual_total_return": 4.9
+        },
+        {
+          "min_predicted_return": 0.5,
+          "trades": 3,
+          "actual_avg_return": 0.7763,
+          "actual_win_rate": 100.0,
+          "actual_total_return": 2.33
+        },
+        {
+          "min_predicted_return": 1.0,
+          "trades": 3,
+          "actual_avg_return": 0.7763,
+          "actual_win_rate": 100.0,
+          "actual_total_return": 2.33
+        },
+        {
+          "min_predicted_return": 1.5,
+          "trades": 3,
+          "actual_avg_return": 0.7763,
+          "actual_win_rate": 100.0,
+          "actual_total_return": 2.33
+        }
+      ],
+      "combined_gate_analysis": [
+        {
+          "prob_threshold": 0.5,
+          "return_threshold": 0.5,
+          "trades": 3,
+          "actual_avg_return": 0.7763,
+          "actual_win_rate": 100.0,
+          "actual_total_return": 2.33
+        },
+        {
+          "prob_threshold": 0.5,
+          "return_threshold": 1.0,
+          "trades": 3,
+          "actual_avg_return": 0.7763,
+          "actual_win_rate": 100.0,
+          "actual_total_return": 2.33
+        },
+        {
+          "prob_threshold": 0.5,
+          "return_threshold": 1.5,
+          "trades": 3,
+          "actual_avg_return": 0.7763,
+          "actual_win_rate": 100.0,
+          "actual_total_return": 2.33
+        },
+        {
+          "prob_threshold": 0.6,
+          "return_threshold": 0.5,
+          "trades": 3,
+          "actual_avg_return": 0.7763,
+          "actual_win_rate": 100.0,
+          "actual_total_return": 2.33
+        },
+        {
+          "prob_threshold": 0.6,
+          "return_threshold": 1.0,
+          "trades": 3,
+          "actual_avg_return": 0.7763,
+          "actual_win_rate": 100.0,
+          "actual_total_return": 2.33
+        },
+        {
+          "prob_threshold": 0.6,
+          "return_threshold": 1.5,
+          "trades": 3,
+          "actual_avg_return": 0.7763,
+          "actual_win_rate": 100.0,
+          "actual_total_return": 2.33
+        }
+      ],
+      "baseline_win_rate": 60.0,
+      "baseline_avg_return": 0.1555,
+      "feature_importance": [
+        {
+          "feature": "sentry1_price",
+          "importance": 1.0
+        },
+        {
+          "feature": "keyword_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "sentry1_company",
+          "importance": 0.0
+        },
+        {
+          "feature": "sentry1_pass",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=ema",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=REGULATORY_NEGATIVE",
+          "importance": 0.0
+        },
+        {
+          "feature": "polarity=negative",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_class=high",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_action=ignore",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_polarity=neutral",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_event_type=PARSE_ERROR",
+          "importance": 0.0
+        }
+      ]
+    },
+    {
+      "segment": "source=clinical_trials",
+      "hold_days": 3,
+      "stop_loss_pct": null,
+      "n_signals": 25,
+      "positive_labels": 17,
+      "negative_labels": 8,
+      "feature_count": 21,
+      "walk_forward_windows": 2,
+      "oos_signals_tested": 10,
+      "cv_accuracy": 0.4,
+      "cv_precision": 0.8,
+      "cv_recall": 0.4444,
+      "cv_f1": 0.5714,
+      "cv_auc_roc": 0.2222,
+      "clf_feature_importance": [
+        {
+          "feature": "llm_impact_score",
+          "importance": 0.6917
+        },
+        {
+          "feature": "sentry1_price",
+          "importance": 0.1679
+        },
+        {
+          "feature": "sentry1_pass",
+          "importance": 0.1404
+        },
+        {
+          "feature": "keyword_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "sentry1_company",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=clinical_trials",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=CLINICAL_TRIAL",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=OTHER",
+          "importance": 0.0
+        },
+        {
+          "feature": "polarity=neutral",
+          "importance": 0.0
+        },
+        {
+          "feature": "polarity=positive",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_class=high",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_class=low",
+          "importance": 0.0
+        }
+      ],
+      "reg_mae": 1.1827,
+      "reg_rmse": 1.3679,
+      "reg_r2": -4.7602,
+      "reg_feature_importance": [
+        {
+          "feature": "llm_impact_score",
+          "importance": 0.3016
+        },
+        {
+          "feature": "sentry1_price",
+          "importance": 0.1804
+        },
+        {
+          "feature": "confidence",
+          "importance": 0.1504
+        },
+        {
+          "feature": "sentry1_pass",
+          "importance": 0.143
+        },
+        {
+          "feature": "keyword_score",
+          "importance": 0.1189
+        },
+        {
+          "feature": "sentry1_company",
+          "importance": 0.1058
+        },
+        {
+          "feature": "impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=clinical_trials",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=CLINICAL_TRIAL",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=OTHER",
+          "importance": 0.0
+        },
+        {
+          "feature": "polarity=neutral",
+          "importance": 0.0
+        },
+        {
+          "feature": "polarity=positive",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_class=high",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_class=low",
+          "importance": 0.0
+        }
+      ],
+      "walk_forward_detail": [
+        {
+          "window": 1,
+          "train_size": 15,
+          "test_size": 5,
+          "train_dates": "2021-05-17 to 2026-04-08",
+          "test_dates": "2026-04-09 to 2026-04-09",
+          "accuracy": 0.0,
+          "auc_roc": NaN,
+          "reg_mae": 1.1
+        },
+        {
+          "window": 2,
+          "train_size": 20,
+          "test_size": 5,
+          "train_dates": "2021-05-17 to 2026-04-09",
+          "test_dates": "2026-04-09 to 2026-04-09",
+          "accuracy": 0.8,
+          "auc_roc": 0.5,
+          "reg_mae": 1.2653
+        }
+      ],
+      "threshold_analysis": [
+        {
+          "threshold": 0.5,
+          "trades": 5,
+          "avg_return": 0.6895,
+          "win_rate": 80.0,
+          "total_return": 3.45,
+          "avg_predicted_return": -0.0259
+        },
+        {
+          "threshold": 0.55,
+          "trades": 5,
+          "avg_return": 0.6895,
+          "win_rate": 80.0,
+          "total_return": 3.45,
+          "avg_predicted_return": -0.0259
+        }
+      ],
+      "return_threshold_analysis": [
+        {
+          "min_predicted_return": 0.0,
+          "trades": 5,
+          "actual_avg_return": 0.6438,
+          "actual_win_rate": 80.0,
+          "actual_total_return": 3.22
+        },
+        {
+          "min_predicted_return": 0.5,
+          "trades": 3,
+          "actual_avg_return": 0.4634,
+          "actual_win_rate": 66.7,
+          "actual_total_return": 1.39
+        },
+        {
+          "min_predicted_return": 1.0,
+          "trades": 1,
+          "actual_avg_return": 1.4393,
+          "actual_win_rate": 100.0,
+          "actual_total_return": 1.44
+        },
+        {
+          "min_predicted_return": 1.5,
+          "trades": 1,
+          "actual_avg_return": 1.4393,
+          "actual_win_rate": 100.0,
+          "actual_total_return": 1.44
+        }
+      ],
+      "combined_gate_analysis": [],
+      "baseline_win_rate": 68.0,
+      "baseline_avg_return": 0.2919,
+      "feature_importance": [
+        {
+          "feature": "llm_impact_score",
+          "importance": 0.6917
+        },
+        {
+          "feature": "sentry1_price",
+          "importance": 0.1679
+        },
+        {
+          "feature": "sentry1_pass",
+          "importance": 0.1404
+        },
+        {
+          "feature": "keyword_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "sentry1_company",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=clinical_trials",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=CLINICAL_TRIAL",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=OTHER",
+          "importance": 0.0
+        },
+        {
+          "feature": "polarity=neutral",
+          "importance": 0.0
+        },
+        {
+          "feature": "polarity=positive",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_class=high",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_class=low",
+          "importance": 0.0
+        }
+      ]
+    },
+    {
+      "segment": "event_type=OTHER",
+      "hold_days": 1,
+      "stop_loss_pct": 0.01,
+      "n_signals": 47,
+      "positive_labels": 20,
+      "negative_labels": 27,
+      "feature_count": 20,
+      "walk_forward_windows": 3,
+      "oos_signals_tested": 29,
+      "cv_accuracy": 0.7241,
+      "cv_precision": 0.6471,
+      "cv_recall": 0.8462,
+      "cv_f1": 0.7333,
+      "cv_auc_roc": 0.6659,
+      "clf_feature_importance": [
+        {
+          "feature": "sentry1_company",
+          "importance": 0.2598
+        },
+        {
+          "feature": "source=edgar",
+          "importance": 0.227
+        },
+        {
+          "feature": "sentry1_price",
+          "importance": 0.1874
+        },
+        {
+          "feature": "source=ema",
+          "importance": 0.1625
+        },
+        {
+          "feature": "llm_impact_score",
+          "importance": 0.0821
+        },
+        {
+          "feature": "sentry1_pass",
+          "importance": 0.0812
+        },
+        {
+          "feature": "keyword_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=clinical_trials",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=OTHER",
+          "importance": 0.0
+        },
+        {
+          "feature": "polarity=neutral",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_class=low",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_action=UNKNOWN",
+          "importance": 0.0
+        }
+      ],
+      "reg_mae": 1.1406,
+      "reg_rmse": 1.5342,
+      "reg_r2": -0.0681,
+      "reg_feature_importance": [
+        {
+          "feature": "source=edgar",
+          "importance": 0.3395
+        },
+        {
+          "feature": "sentry1_price",
+          "importance": 0.1825
+        },
+        {
+          "feature": "sentry1_company",
+          "importance": 0.1594
+        },
+        {
+          "feature": "llm_impact_score",
+          "importance": 0.1024
+        },
+        {
+          "feature": "source=ema",
+          "importance": 0.0831
+        },
+        {
+          "feature": "sentry1_pass",
+          "importance": 0.0689
+        },
+        {
+          "feature": "source=clinical_trials",
+          "importance": 0.0641
+        },
+        {
+          "feature": "keyword_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=OTHER",
+          "importance": 0.0
+        },
+        {
+          "feature": "polarity=neutral",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_class=low",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_action=UNKNOWN",
+          "importance": 0.0
+        }
+      ],
+      "walk_forward_detail": [
+        {
+          "window": 1,
+          "train_size": 18,
+          "test_size": 9,
+          "train_dates": "2023-06-06 to 2024-04-10",
+          "test_dates": "2024-04-12 to 2025-04-14",
+          "accuracy": 0.8889,
+          "auc_roc": 0.9167,
+          "reg_mae": 1.3019
+        },
+        {
+          "window": 2,
+          "train_size": 27,
+          "test_size": 9,
+          "train_dates": "2023-06-06 to 2025-04-14",
+          "test_dates": "2025-06-24 to 2026-02-05",
+          "accuracy": 0.8889,
+          "auc_roc": 0.875,
+          "reg_mae": 0.7095
+        },
+        {
+          "window": 3,
+          "train_size": 36,
+          "test_size": 11,
+          "train_dates": "2023-06-06 to 2026-02-05",
+          "test_dates": "2026-02-19 to 2026-04-09",
+          "accuracy": 0.4545,
+          "auc_roc": 0.35,
+          "reg_mae": 1.3614
+        }
+      ],
+      "threshold_analysis": [
+        {
+          "threshold": 0.5,
+          "trades": 17,
+          "avg_return": 0.8171,
+          "win_rate": 64.7,
+          "total_return": 13.89,
+          "avg_predicted_return": 0.736
+        },
+        {
+          "threshold": 0.55,
+          "trades": 13,
+          "avg_return": 0.6412,
+          "win_rate": 61.5,
+          "total_return": 8.34,
+          "avg_predicted_return": 0.975
+        },
+        {
+          "threshold": 0.6,
+          "trades": 12,
+          "avg_return": 0.6185,
+          "win_rate": 58.3,
+          "total_return": 7.42,
+          "avg_predicted_return": 1.0102
+        },
+        {
+          "threshold": 0.65,
+          "trades": 8,
+          "avg_return": 0.9491,
+          "win_rate": 62.5,
+          "total_return": 7.59,
+          "avg_predicted_return": 1.068
+        },
+        {
+          "threshold": 0.7,
+          "trades": 3,
+          "avg_return": -0.3497,
+          "win_rate": 33.3,
+          "total_return": -1.05,
+          "avg_predicted_return": 1.2473
+        },
+        {
+          "threshold": 0.75,
+          "trades": 1,
+          "avg_return": 0.6859,
+          "win_rate": 100.0,
+          "total_return": 0.69,
+          "avg_predicted_return": 1.2275
+        },
+        {
+          "threshold": 0.8,
+          "trades": 1,
+          "avg_return": 0.6859,
+          "win_rate": 100.0,
+          "total_return": 0.69,
+          "avg_predicted_return": 1.2275
+        }
+      ],
+      "return_threshold_analysis": [
+        {
+          "min_predicted_return": 0.0,
+          "trades": 20,
+          "actual_avg_return": 0.384,
+          "actual_win_rate": 50.0,
+          "actual_total_return": 7.68
+        },
+        {
+          "min_predicted_return": 0.5,
+          "trades": 13,
+          "actual_avg_return": 0.8282,
+          "actual_win_rate": 69.2,
+          "actual_total_return": 10.77
+        },
+        {
+          "min_predicted_return": 1.0,
+          "trades": 6,
+          "actual_avg_return": 0.23,
+          "actual_win_rate": 66.7,
+          "actual_total_return": 1.38
+        },
+        {
+          "min_predicted_return": 1.5,
+          "trades": 1,
+          "actual_avg_return": -0.7352,
+          "actual_win_rate": 0.0,
+          "actual_total_return": -0.74
+        }
+      ],
+      "combined_gate_analysis": [
+        {
+          "prob_threshold": 0.5,
+          "return_threshold": 0.5,
+          "trades": 13,
+          "actual_avg_return": 0.8282,
+          "actual_win_rate": 69.2,
+          "actual_total_return": 10.77
+        },
+        {
+          "prob_threshold": 0.5,
+          "return_threshold": 1.0,
+          "trades": 6,
+          "actual_avg_return": 0.23,
+          "actual_win_rate": 66.7,
+          "actual_total_return": 1.38
+        },
+        {
+          "prob_threshold": 0.6,
+          "return_threshold": 0.5,
+          "trades": 11,
+          "actual_avg_return": 0.7656,
+          "actual_win_rate": 63.6,
+          "actual_total_return": 8.42
+        },
+        {
+          "prob_threshold": 0.6,
+          "return_threshold": 1.0,
+          "trades": 6,
+          "actual_avg_return": 0.23,
+          "actual_win_rate": 66.7,
+          "actual_total_return": 1.38
+        },
+        {
+          "prob_threshold": 0.7,
+          "return_threshold": 0.5,
+          "trades": 3,
+          "actual_avg_return": -0.3497,
+          "actual_win_rate": 33.3,
+          "actual_total_return": -1.05
+        }
+      ],
+      "baseline_win_rate": 42.6,
+      "baseline_avg_return": 0.1476,
+      "feature_importance": [
+        {
+          "feature": "sentry1_company",
+          "importance": 0.2598
+        },
+        {
+          "feature": "source=edgar",
+          "importance": 0.227
+        },
+        {
+          "feature": "sentry1_price",
+          "importance": 0.1874
+        },
+        {
+          "feature": "source=ema",
+          "importance": 0.1625
+        },
+        {
+          "feature": "llm_impact_score",
+          "importance": 0.0821
+        },
+        {
+          "feature": "sentry1_pass",
+          "importance": 0.0812
+        },
+        {
+          "feature": "keyword_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=clinical_trials",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=OTHER",
+          "importance": 0.0
+        },
+        {
+          "feature": "polarity=neutral",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_class=low",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_action=UNKNOWN",
+          "importance": 0.0
+        }
+      ]
+    },
+    {
+      "segment": "polarity=neutral",
+      "hold_days": 7,
+      "stop_loss_pct": 0.01,
+      "n_signals": 55,
+      "positive_labels": 13,
+      "negative_labels": 42,
+      "feature_count": 23,
+      "walk_forward_windows": 3,
+      "oos_signals_tested": 33,
+      "cv_accuracy": 0.303,
+      "cv_precision": 0.0588,
+      "cv_recall": 0.125,
+      "cv_f1": 0.08,
+      "cv_auc_roc": 0.2125,
+      "clf_feature_importance": [
+        {
+          "feature": "llm_impact_score",
+          "importance": 0.3667
+        },
+        {
+          "feature": "source=ema",
+          "importance": 0.1763
+        },
+        {
+          "feature": "source=edgar",
+          "importance": 0.1371
+        },
+        {
+          "feature": "sentry1_pass",
+          "importance": 0.1314
+        },
+        {
+          "feature": "sentry1_company",
+          "importance": 0.0994
+        },
+        {
+          "feature": "sentry1_price",
+          "importance": 0.0891
+        },
+        {
+          "feature": "keyword_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=clinical_trials",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=fda",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=M_A",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=OTHER",
+          "importance": 0.0
+        },
+        {
+          "feature": "polarity=neutral",
+          "importance": 0.0
+        }
+      ],
+      "reg_mae": 4.1036,
+      "reg_rmse": 4.9066,
+      "reg_r2": -1.5255,
+      "reg_feature_importance": [
+        {
+          "feature": "sentry1_company",
+          "importance": 0.384
+        },
+        {
+          "feature": "source=ema",
+          "importance": 0.1878
+        },
+        {
+          "feature": "source=edgar",
+          "importance": 0.1078
+        },
+        {
+          "feature": "sentry1_price",
+          "importance": 0.0818
+        },
+        {
+          "feature": "llm_impact_score",
+          "importance": 0.0649
+        },
+        {
+          "feature": "sentry1_pass",
+          "importance": 0.0483
+        },
+        {
+          "feature": "confidence",
+          "importance": 0.0383
+        },
+        {
+          "feature": "keyword_score",
+          "importance": 0.0383
+        },
+        {
+          "feature": "source=clinical_trials",
+          "importance": 0.0309
+        },
+        {
+          "feature": "impact_score",
+          "importance": 0.018
+        },
+        {
+          "feature": "llm_confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=fda",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=M_A",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=OTHER",
+          "importance": 0.0
+        },
+        {
+          "feature": "polarity=neutral",
+          "importance": 0.0
+        }
+      ],
+      "walk_forward_detail": [
+        {
+          "window": 1,
+          "train_size": 22,
+          "test_size": 11,
+          "train_dates": "2015-01-09 to 2024-01-31",
+          "test_dates": "2024-03-04 to 2025-02-04",
+          "accuracy": 0.2727,
+          "auc_roc": 0.3,
+          "reg_mae": 4.8941
+        },
+        {
+          "window": 2,
+          "train_size": 33,
+          "test_size": 11,
+          "train_dates": "2015-01-09 to 2025-02-04",
+          "test_dates": "2025-04-14 to 2026-02-19",
+          "accuracy": 0.1818,
+          "auc_roc": 0.1389,
+          "reg_mae": 4.8703
+        },
+        {
+          "window": 3,
+          "train_size": 44,
+          "test_size": 11,
+          "train_dates": "2015-01-09 to 2026-02-19",
+          "test_dates": "2026-02-24 to 2026-04-09",
+          "accuracy": 0.4545,
+          "auc_roc": 0.5333,
+          "reg_mae": 2.5464
+        }
+      ],
+      "threshold_analysis": [
+        {
+          "threshold": 0.5,
+          "trades": 17,
+          "avg_return": -0.0236,
+          "win_rate": 5.9,
+          "total_return": -0.4,
+          "avg_predicted_return": 3.9495
+        },
+        {
+          "threshold": 0.55,
+          "trades": 13,
+          "avg_return": -1.0,
+          "win_rate": 0.0,
+          "total_return": -13.0,
+          "avg_predicted_return": 4.5611
+        },
+        {
+          "threshold": 0.6,
+          "trades": 7,
+          "avg_return": -1.0,
+          "win_rate": 0.0,
+          "total_return": -7.0,
+          "avg_predicted_return": 5.4303
+        },
+        {
+          "threshold": 0.65,
+          "trades": 7,
+          "avg_return": -1.0,
+          "win_rate": 0.0,
+          "total_return": -7.0,
+          "avg_predicted_return": 5.4303
+        },
+        {
+          "threshold": 0.7,
+          "trades": 7,
+          "avg_return": -1.0,
+          "win_rate": 0.0,
+          "total_return": -7.0,
+          "avg_predicted_return": 5.4303
+        },
+        {
+          "threshold": 0.75,
+          "trades": 7,
+          "avg_return": -1.0,
+          "win_rate": 0.0,
+          "total_return": -7.0,
+          "avg_predicted_return": 5.4303
+        }
+      ],
+      "return_threshold_analysis": [
+        {
+          "min_predicted_return": 0.0,
+          "trades": 23,
+          "actual_avg_return": 0.0394,
+          "actual_win_rate": 13.0,
+          "actual_total_return": 0.91
+        },
+        {
+          "min_predicted_return": 0.5,
+          "trades": 22,
+          "actual_avg_return": -0.1568,
+          "actual_win_rate": 9.1,
+          "actual_total_return": -3.45
+        },
+        {
+          "min_predicted_return": 1.0,
+          "trades": 21,
+          "actual_avg_return": -0.1167,
+          "actual_win_rate": 9.5,
+          "actual_total_return": -2.45
+        },
+        {
+          "min_predicted_return": 1.5,
+          "trades": 16,
+          "actual_avg_return": -0.8321,
+          "actual_win_rate": 6.2,
+          "actual_total_return": -13.31
+        },
+        {
+          "min_predicted_return": 2.0,
+          "trades": 15,
+          "actual_avg_return": -0.8209,
+          "actual_win_rate": 6.7,
+          "actual_total_return": -12.31
+        },
+        {
+          "min_predicted_return": 3.0,
+          "trades": 14,
+          "actual_avg_return": -0.9286,
+          "actual_win_rate": 0.0,
+          "actual_total_return": -13.0
+        },
+        {
+          "min_predicted_return": 5.0,
+          "trades": 7,
+          "actual_avg_return": -1.0,
+          "actual_win_rate": 0.0,
+          "actual_total_return": -7.0
+        }
+      ],
+      "combined_gate_analysis": [
+        {
+          "prob_threshold": 0.5,
+          "return_threshold": 0.5,
+          "trades": 17,
+          "actual_avg_return": -0.0236,
+          "actual_win_rate": 5.9,
+          "actual_total_return": -0.4
+        },
+        {
+          "prob_threshold": 0.5,
+          "return_threshold": 1.0,
+          "trades": 17,
+          "actual_avg_return": -0.0236,
+          "actual_win_rate": 5.9,
+          "actual_total_return": -0.4
+        },
+        {
+          "prob_threshold": 0.5,
+          "return_threshold": 1.5,
+          "trades": 14,
+          "actual_avg_return": -0.9286,
+          "actual_win_rate": 0.0,
+          "actual_total_return": -13.0
+        },
+        {
+          "prob_threshold": 0.5,
+          "return_threshold": 2.0,
+          "trades": 14,
+          "actual_avg_return": -0.9286,
+          "actual_win_rate": 0.0,
+          "actual_total_return": -13.0
+        },
+        {
+          "prob_threshold": 0.6,
+          "return_threshold": 0.5,
+          "trades": 7,
+          "actual_avg_return": -1.0,
+          "actual_win_rate": 0.0,
+          "actual_total_return": -7.0
+        },
+        {
+          "prob_threshold": 0.6,
+          "return_threshold": 1.0,
+          "trades": 7,
+          "actual_avg_return": -1.0,
+          "actual_win_rate": 0.0,
+          "actual_total_return": -7.0
+        },
+        {
+          "prob_threshold": 0.6,
+          "return_threshold": 1.5,
+          "trades": 7,
+          "actual_avg_return": -1.0,
+          "actual_win_rate": 0.0,
+          "actual_total_return": -7.0
+        },
+        {
+          "prob_threshold": 0.6,
+          "return_threshold": 2.0,
+          "trades": 7,
+          "actual_avg_return": -1.0,
+          "actual_win_rate": 0.0,
+          "actual_total_return": -7.0
+        },
+        {
+          "prob_threshold": 0.7,
+          "return_threshold": 0.5,
+          "trades": 7,
+          "actual_avg_return": -1.0,
+          "actual_win_rate": 0.0,
+          "actual_total_return": -7.0
+        },
+        {
+          "prob_threshold": 0.7,
+          "return_threshold": 1.0,
+          "trades": 7,
+          "actual_avg_return": -1.0,
+          "actual_win_rate": 0.0,
+          "actual_total_return": -7.0
+        },
+        {
+          "prob_threshold": 0.7,
+          "return_threshold": 1.5,
+          "trades": 7,
+          "actual_avg_return": -1.0,
+          "actual_win_rate": 0.0,
+          "actual_total_return": -7.0
+        },
+        {
+          "prob_threshold": 0.7,
+          "return_threshold": 2.0,
+          "trades": 7,
+          "actual_avg_return": -1.0,
+          "actual_win_rate": 0.0,
+          "actual_total_return": -7.0
+        }
+      ],
+      "baseline_win_rate": 23.6,
+      "baseline_avg_return": 0.2335,
+      "feature_importance": [
+        {
+          "feature": "llm_impact_score",
+          "importance": 0.3667
+        },
+        {
+          "feature": "source=ema",
+          "importance": 0.1763
+        },
+        {
+          "feature": "source=edgar",
+          "importance": 0.1371
+        },
+        {
+          "feature": "sentry1_pass",
+          "importance": 0.1314
+        },
+        {
+          "feature": "sentry1_company",
+          "importance": 0.0994
+        },
+        {
+          "feature": "sentry1_price",
+          "importance": 0.0891
+        },
+        {
+          "feature": "keyword_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=clinical_trials",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=fda",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=M_A",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=OTHER",
+          "importance": 0.0
+        },
+        {
+          "feature": "polarity=neutral",
+          "importance": 0.0
+        }
+      ]
+    },
+    {
+      "segment": "source=edgar",
+      "hold_days": 15,
+      "stop_loss_pct": null,
+      "n_signals": 27,
+      "positive_labels": 14,
+      "negative_labels": 13,
+      "feature_count": 15,
+      "walk_forward_windows": 2,
+      "oos_signals_tested": 12,
+      "cv_accuracy": 0.5,
+      "cv_precision": 0.5,
+      "cv_recall": 1.0,
+      "cv_f1": 0.6667,
+      "cv_auc_roc": 0.4167,
+      "clf_feature_importance": [
+        {
+          "feature": "sentry1_company",
+          "importance": 1.0
+        },
+        {
+          "feature": "keyword_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "sentry1_price",
+          "importance": 0.0
+        },
+        {
+          "feature": "sentry1_pass",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=edgar",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=OTHER",
+          "importance": 0.0
+        },
+        {
+          "feature": "polarity=neutral",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_class=low",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_action=UNKNOWN",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_polarity=UNKNOWN",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_event_type=UNKNOWN",
+          "importance": 0.0
+        }
+      ],
+      "reg_mae": 15.6391,
+      "reg_rmse": 20.7867,
+      "reg_r2": -6.6027,
+      "reg_feature_importance": [
+        {
+          "feature": "sentry1_company",
+          "importance": 0.7661
+        },
+        {
+          "feature": "sentry1_price",
+          "importance": 0.2339
+        },
+        {
+          "feature": "keyword_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "sentry1_pass",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=edgar",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=OTHER",
+          "importance": 0.0
+        },
+        {
+          "feature": "polarity=neutral",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_class=low",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_action=UNKNOWN",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_polarity=UNKNOWN",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_event_type=UNKNOWN",
+          "importance": 0.0
+        }
+      ],
+      "walk_forward_detail": [
+        {
+          "window": 1,
+          "train_size": 15,
+          "test_size": 5,
+          "train_dates": "2023-06-06 to 2024-05-07",
+          "test_dates": "2024-05-08 to 2025-06-24",
+          "accuracy": 0.4,
+          "auc_roc": 0.5,
+          "reg_mae": 6.8478
+        },
+        {
+          "window": 2,
+          "train_size": 20,
+          "test_size": 7,
+          "train_dates": "2023-06-06 to 2025-06-24",
+          "test_dates": "2025-07-01 to 2026-02-24",
+          "accuracy": 0.5714,
+          "auc_roc": 0.5,
+          "reg_mae": 21.9187
+        }
+      ],
+      "threshold_analysis": [
+        {
+          "threshold": 0.5,
+          "trades": 12,
+          "avg_return": -1.4536,
+          "win_rate": 50.0,
+          "total_return": -17.44,
+          "avg_predicted_return": -12.9962
+        },
+        {
+          "threshold": 0.55,
+          "trades": 12,
+          "avg_return": -1.4536,
+          "win_rate": 50.0,
+          "total_return": -17.44,
+          "avg_predicted_return": -12.9962
+        },
+        {
+          "threshold": 0.6,
+          "trades": 12,
+          "avg_return": -1.4536,
+          "win_rate": 50.0,
+          "total_return": -17.44,
+          "avg_predicted_return": -12.9962
+        },
+        {
+          "threshold": 0.65,
+          "trades": 5,
+          "avg_return": -2.4672,
+          "win_rate": 40.0,
+          "total_return": -12.34,
+          "avg_predicted_return": -7.3106
+        },
+        {
+          "threshold": 0.7,
+          "trades": 5,
+          "avg_return": -2.4672,
+          "win_rate": 40.0,
+          "total_return": -12.34,
+          "avg_predicted_return": -7.3106
+        },
+        {
+          "threshold": 0.75,
+          "trades": 5,
+          "avg_return": -2.4672,
+          "win_rate": 40.0,
+          "total_return": -12.34,
+          "avg_predicted_return": -7.3106
+        }
+      ],
+      "return_threshold_analysis": [],
+      "combined_gate_analysis": [],
+      "baseline_win_rate": 51.9,
+      "baseline_avg_return": 2.3417,
+      "feature_importance": [
+        {
+          "feature": "sentry1_company",
+          "importance": 1.0
+        },
+        {
+          "feature": "keyword_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "sentry1_price",
+          "importance": 0.0
+        },
+        {
+          "feature": "sentry1_pass",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=edgar",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=OTHER",
+          "importance": 0.0
+        },
+        {
+          "feature": "polarity=neutral",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_class=low",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_action=UNKNOWN",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_polarity=UNKNOWN",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_event_type=UNKNOWN",
+          "importance": 0.0
+        }
+      ]
+    },
+    {
+      "segment": "event_type=REGULATORY_DECISION",
+      "hold_days": 20,
+      "stop_loss_pct": 0.02,
+      "n_signals": 4617,
+      "positive_labels": 1077,
+      "negative_labels": 3540,
+      "feature_count": 19,
+      "walk_forward_windows": 3,
+      "oos_signals_tested": 2771,
+      "cv_accuracy": 0.577,
+      "cv_precision": 0.2789,
+      "cv_recall": 0.4164,
+      "cv_f1": 0.3341,
+      "cv_auc_roc": 0.5313,
+      "clf_feature_importance": [
+        {
+          "feature": "source=fda",
+          "importance": 0.3469
+        },
+        {
+          "feature": "source=ema",
+          "importance": 0.3356
+        },
+        {
+          "feature": "sentry1_company",
+          "importance": 0.27
+        },
+        {
+          "feature": "sentry1_price",
+          "importance": 0.0474
+        },
+        {
+          "feature": "keyword_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "sentry1_pass",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=REGULATORY_DECISION",
+          "importance": 0.0
+        },
+        {
+          "feature": "polarity=positive",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_class=high",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_action=UNKNOWN",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_action=ignore",
+          "importance": 0.0
+        }
+      ],
+      "reg_mae": 6.5987,
+      "reg_rmse": 7.2491,
+      "reg_r2": -0.9405,
+      "reg_feature_importance": [
+        {
+          "feature": "sentry1_company",
+          "importance": 0.3184
+        },
+        {
+          "feature": "source=fda",
+          "importance": 0.3009
+        },
+        {
+          "feature": "source=ema",
+          "importance": 0.2768
+        },
+        {
+          "feature": "sentry1_price",
+          "importance": 0.1038
+        },
+        {
+          "feature": "keyword_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "sentry1_pass",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=REGULATORY_DECISION",
+          "importance": 0.0
+        },
+        {
+          "feature": "polarity=positive",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_class=high",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_action=UNKNOWN",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_action=ignore",
+          "importance": 0.0
+        }
+      ],
+      "walk_forward_detail": [
+        {
+          "window": 1,
+          "train_size": 1846,
+          "test_size": 923,
+          "train_dates": "1955-12-05 to 2013-10-16",
+          "test_dates": "2013-10-17 to 2019-10-03",
+          "accuracy": 0.6403,
+          "auc_roc": 0.5557,
+          "reg_mae": 6.8976
+        },
+        {
+          "window": 2,
+          "train_size": 2769,
+          "test_size": 923,
+          "train_dates": "1955-12-05 to 2019-10-03",
+          "test_dates": "2019-10-04 to 2024-08-09",
+          "accuracy": 0.5515,
+          "auc_roc": 0.5274,
+          "reg_mae": 6.6249
+        },
+        {
+          "window": 3,
+          "train_size": 3692,
+          "test_size": 925,
+          "train_dates": "1955-12-05 to 2024-08-09",
+          "test_dates": "2024-08-12 to 2026-04-09",
+          "accuracy": 0.5395,
+          "auc_roc": 0.4979,
+          "reg_mae": 6.2744
+        }
+      ],
+      "threshold_analysis": [
+        {
+          "threshold": 0.5,
+          "trades": 1054,
+          "avg_return": 0.7727,
+          "win_rate": 27.9,
+          "total_return": 814.41,
+          "avg_predicted_return": 7.1169
+        },
+        {
+          "threshold": 0.55,
+          "trades": 725,
+          "avg_return": 0.9427,
+          "win_rate": 28.1,
+          "total_return": 683.48,
+          "avg_predicted_return": 7.7735
+        },
+        {
+          "threshold": 0.6,
+          "trades": 694,
+          "avg_return": 0.9301,
+          "win_rate": 28.0,
+          "total_return": 645.48,
+          "avg_predicted_return": 7.8662
+        },
+        {
+          "threshold": 0.65,
+          "trades": 6,
+          "avg_return": 4.4346,
+          "win_rate": 50.0,
+          "total_return": 26.61,
+          "avg_predicted_return": 5.509
+        }
+      ],
+      "return_threshold_analysis": [
+        {
+          "min_predicted_return": 0.0,
+          "trades": 2771,
+          "actual_avg_return": 0.5004,
+          "actual_win_rate": 25.5,
+          "actual_total_return": 1386.62
+        },
+        {
+          "min_predicted_return": 0.5,
+          "trades": 2771,
+          "actual_avg_return": 0.5004,
+          "actual_win_rate": 25.5,
+          "actual_total_return": 1386.62
+        },
+        {
+          "min_predicted_return": 1.0,
+          "trades": 2771,
+          "actual_avg_return": 0.5004,
+          "actual_win_rate": 25.5,
+          "actual_total_return": 1386.62
+        },
+        {
+          "min_predicted_return": 1.5,
+          "trades": 2771,
+          "actual_avg_return": 0.5004,
+          "actual_win_rate": 25.5,
+          "actual_total_return": 1386.62
+        },
+        {
+          "min_predicted_return": 2.0,
+          "trades": 2771,
+          "actual_avg_return": 0.5004,
+          "actual_win_rate": 25.5,
+          "actual_total_return": 1386.62
+        },
+        {
+          "min_predicted_return": 3.0,
+          "trades": 2771,
+          "actual_avg_return": 0.5004,
+          "actual_win_rate": 25.5,
+          "actual_total_return": 1386.62
+        },
+        {
+          "min_predicted_return": 5.0,
+          "trades": 1266,
+          "actual_avg_return": 0.6203,
+          "actual_win_rate": 26.4,
+          "actual_total_return": 785.28
+        }
+      ],
+      "combined_gate_analysis": [
+        {
+          "prob_threshold": 0.5,
+          "return_threshold": 0.5,
+          "trades": 1054,
+          "actual_avg_return": 0.7727,
+          "actual_win_rate": 27.9,
+          "actual_total_return": 814.41
+        },
+        {
+          "prob_threshold": 0.5,
+          "return_threshold": 1.0,
+          "trades": 1054,
+          "actual_avg_return": 0.7727,
+          "actual_win_rate": 27.9,
+          "actual_total_return": 814.41
+        },
+        {
+          "prob_threshold": 0.5,
+          "return_threshold": 1.5,
+          "trades": 1054,
+          "actual_avg_return": 0.7727,
+          "actual_win_rate": 27.9,
+          "actual_total_return": 814.41
+        },
+        {
+          "prob_threshold": 0.5,
+          "return_threshold": 2.0,
+          "trades": 1054,
+          "actual_avg_return": 0.7727,
+          "actual_win_rate": 27.9,
+          "actual_total_return": 814.41
+        },
+        {
+          "prob_threshold": 0.6,
+          "return_threshold": 0.5,
+          "trades": 694,
+          "actual_avg_return": 0.9301,
+          "actual_win_rate": 28.0,
+          "actual_total_return": 645.48
+        },
+        {
+          "prob_threshold": 0.6,
+          "return_threshold": 1.0,
+          "trades": 694,
+          "actual_avg_return": 0.9301,
+          "actual_win_rate": 28.0,
+          "actual_total_return": 645.48
+        },
+        {
+          "prob_threshold": 0.6,
+          "return_threshold": 1.5,
+          "trades": 694,
+          "actual_avg_return": 0.9301,
+          "actual_win_rate": 28.0,
+          "actual_total_return": 645.48
+        },
+        {
+          "prob_threshold": 0.6,
+          "return_threshold": 2.0,
+          "trades": 694,
+          "actual_avg_return": 0.9301,
+          "actual_win_rate": 28.0,
+          "actual_total_return": 645.48
+        }
+      ],
+      "baseline_win_rate": 23.3,
+      "baseline_avg_return": 0.3419,
+      "feature_importance": [
+        {
+          "feature": "source=fda",
+          "importance": 0.3469
+        },
+        {
+          "feature": "source=ema",
+          "importance": 0.3356
+        },
+        {
+          "feature": "sentry1_company",
+          "importance": 0.27
+        },
+        {
+          "feature": "sentry1_price",
+          "importance": 0.0474
+        },
+        {
+          "feature": "keyword_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "sentry1_pass",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=REGULATORY_DECISION",
+          "importance": 0.0
+        },
+        {
+          "feature": "polarity=positive",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_class=high",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_action=UNKNOWN",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_action=ignore",
+          "importance": 0.0
+        }
+      ]
+    },
+    {
+      "segment": "polarity=positive",
+      "hold_days": 20,
+      "stop_loss_pct": 0.02,
+      "n_signals": 4633,
+      "positive_labels": 1083,
+      "negative_labels": 3550,
+      "feature_count": 21,
+      "walk_forward_windows": 3,
+      "oos_signals_tested": 2780,
+      "cv_accuracy": 0.577,
+      "cv_precision": 0.2806,
+      "cv_recall": 0.4197,
+      "cv_f1": 0.3363,
+      "cv_auc_roc": 0.5326,
+      "clf_feature_importance": [
+        {
+          "feature": "source=fda",
+          "importance": 0.3757
+        },
+        {
+          "feature": "source=ema",
+          "importance": 0.3232
+        },
+        {
+          "feature": "sentry1_company",
+          "importance": 0.2493
+        },
+        {
+          "feature": "sentry1_price",
+          "importance": 0.0518
+        },
+        {
+          "feature": "keyword_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "sentry1_pass",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=clinical_trials",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=CLINICAL_TRIAL",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=REGULATORY_DECISION",
+          "importance": 0.0
+        },
+        {
+          "feature": "polarity=positive",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_class=high",
+          "importance": 0.0
+        }
+      ],
+      "reg_mae": 6.5966,
+      "reg_rmse": 7.2414,
+      "reg_r2": -0.9388,
+      "reg_feature_importance": [
+        {
+          "feature": "source=ema",
+          "importance": 0.3693
+        },
+        {
+          "feature": "sentry1_company",
+          "importance": 0.3192
+        },
+        {
+          "feature": "source=fda",
+          "importance": 0.1966
+        },
+        {
+          "feature": "sentry1_price",
+          "importance": 0.115
+        },
+        {
+          "feature": "keyword_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "sentry1_pass",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=clinical_trials",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=CLINICAL_TRIAL",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=REGULATORY_DECISION",
+          "importance": 0.0
+        },
+        {
+          "feature": "polarity=positive",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_class=high",
+          "importance": 0.0
+        }
+      ],
+      "walk_forward_detail": [
+        {
+          "window": 1,
+          "train_size": 1853,
+          "test_size": 926,
+          "train_dates": "1955-12-05 to 2013-10-23",
+          "test_dates": "2013-10-23 to 2019-10-21",
+          "accuracy": 0.6404,
+          "auc_roc": 0.5539,
+          "reg_mae": 6.8991
+        },
+        {
+          "window": 2,
+          "train_size": 2779,
+          "test_size": 926,
+          "train_dates": "1955-12-05 to 2019-10-21",
+          "test_dates": "2019-10-22 to 2024-08-23",
+          "accuracy": 0.5518,
+          "auc_roc": 0.5297,
+          "reg_mae": 6.5912
+        },
+        {
+          "window": 3,
+          "train_size": 3705,
+          "test_size": 928,
+          "train_dates": "1955-12-05 to 2024-08-23",
+          "test_dates": "2024-08-23 to 2026-04-09",
+          "accuracy": 0.5388,
+          "auc_roc": 0.4953,
+          "reg_mae": 6.3
+        }
+      ],
+      "threshold_analysis": [
+        {
+          "threshold": 0.5,
+          "trades": 1062,
+          "avg_return": 0.7679,
+          "win_rate": 28.1,
+          "total_return": 815.56,
+          "avg_predicted_return": 7.0873
+        },
+        {
+          "threshold": 0.55,
+          "trades": 723,
+          "avg_return": 0.9383,
+          "win_rate": 28.1,
+          "total_return": 678.37,
+          "avg_predicted_return": 7.7448
+        },
+        {
+          "threshold": 0.6,
+          "trades": 694,
+          "avg_return": 0.9341,
+          "win_rate": 28.0,
+          "total_return": 648.26,
+          "avg_predicted_return": 7.8395
+        },
+        {
+          "threshold": 0.65,
+          "trades": 13,
+          "avg_return": 3.0909,
+          "win_rate": 38.5,
+          "total_return": 40.18,
+          "avg_predicted_return": 5.2877
+        }
+      ],
+      "return_threshold_analysis": [
+        {
+          "min_predicted_return": 0.0,
+          "trades": 2780,
+          "actual_avg_return": 0.4995,
+          "actual_win_rate": 25.5,
+          "actual_total_return": 1388.57
+        },
+        {
+          "min_predicted_return": 0.5,
+          "trades": 2780,
+          "actual_avg_return": 0.4995,
+          "actual_win_rate": 25.5,
+          "actual_total_return": 1388.57
+        },
+        {
+          "min_predicted_return": 1.0,
+          "trades": 2780,
+          "actual_avg_return": 0.4995,
+          "actual_win_rate": 25.5,
+          "actual_total_return": 1388.57
+        },
+        {
+          "min_predicted_return": 1.5,
+          "trades": 2780,
+          "actual_avg_return": 0.4995,
+          "actual_win_rate": 25.5,
+          "actual_total_return": 1388.57
+        },
+        {
+          "min_predicted_return": 2.0,
+          "trades": 2780,
+          "actual_avg_return": 0.4995,
+          "actual_win_rate": 25.5,
+          "actual_total_return": 1388.57
+        },
+        {
+          "min_predicted_return": 3.0,
+          "trades": 2780,
+          "actual_avg_return": 0.4995,
+          "actual_win_rate": 25.5,
+          "actual_total_return": 1388.57
+        },
+        {
+          "min_predicted_return": 5.0,
+          "trades": 1181,
+          "actual_avg_return": 0.7141,
+          "actual_win_rate": 27.2,
+          "actual_total_return": 843.36
+        }
+      ],
+      "combined_gate_analysis": [
+        {
+          "prob_threshold": 0.5,
+          "return_threshold": 0.5,
+          "trades": 1062,
+          "actual_avg_return": 0.7679,
+          "actual_win_rate": 28.1,
+          "actual_total_return": 815.56
+        },
+        {
+          "prob_threshold": 0.5,
+          "return_threshold": 1.0,
+          "trades": 1062,
+          "actual_avg_return": 0.7679,
+          "actual_win_rate": 28.1,
+          "actual_total_return": 815.56
+        },
+        {
+          "prob_threshold": 0.5,
+          "return_threshold": 1.5,
+          "trades": 1062,
+          "actual_avg_return": 0.7679,
+          "actual_win_rate": 28.1,
+          "actual_total_return": 815.56
+        },
+        {
+          "prob_threshold": 0.5,
+          "return_threshold": 2.0,
+          "trades": 1062,
+          "actual_avg_return": 0.7679,
+          "actual_win_rate": 28.1,
+          "actual_total_return": 815.56
+        },
+        {
+          "prob_threshold": 0.6,
+          "return_threshold": 0.5,
+          "trades": 694,
+          "actual_avg_return": 0.9341,
+          "actual_win_rate": 28.0,
+          "actual_total_return": 648.26
+        },
+        {
+          "prob_threshold": 0.6,
+          "return_threshold": 1.0,
+          "trades": 694,
+          "actual_avg_return": 0.9341,
+          "actual_win_rate": 28.0,
+          "actual_total_return": 648.26
+        },
+        {
+          "prob_threshold": 0.6,
+          "return_threshold": 1.5,
+          "trades": 694,
+          "actual_avg_return": 0.9341,
+          "actual_win_rate": 28.0,
+          "actual_total_return": 648.26
+        },
+        {
+          "prob_threshold": 0.6,
+          "return_threshold": 2.0,
+          "trades": 694,
+          "actual_avg_return": 0.9341,
+          "actual_win_rate": 28.0,
+          "actual_total_return": 648.26
+        }
+      ],
+      "baseline_win_rate": 23.4,
+      "baseline_avg_return": 0.3417,
+      "feature_importance": [
+        {
+          "feature": "source=fda",
+          "importance": 0.3757
+        },
+        {
+          "feature": "source=ema",
+          "importance": 0.3232
+        },
+        {
+          "feature": "sentry1_company",
+          "importance": 0.2493
+        },
+        {
+          "feature": "sentry1_price",
+          "importance": 0.0518
+        },
+        {
+          "feature": "keyword_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "sentry1_pass",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=clinical_trials",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=CLINICAL_TRIAL",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=REGULATORY_DECISION",
+          "importance": 0.0
+        },
+        {
+          "feature": "polarity=positive",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_class=high",
+          "importance": 0.0
+        }
+      ]
+    },
+    {
+      "segment": "source=fda",
+      "hold_days": 20,
+      "stop_loss_pct": 0.02,
+      "n_signals": 3980,
+      "positive_labels": 861,
+      "negative_labels": 3119,
+      "feature_count": 20,
+      "walk_forward_windows": 3,
+      "oos_signals_tested": 2388,
+      "cv_accuracy": 0.549,
+      "cv_precision": 0.2561,
+      "cv_recall": 0.4901,
+      "cv_f1": 0.3364,
+      "cv_auc_roc": 0.5466,
+      "clf_feature_importance": [
+        {
+          "feature": "sentry1_company",
+          "importance": 0.8651
+        },
+        {
+          "feature": "sentry1_price",
+          "importance": 0.1349
+        },
+        {
+          "feature": "keyword_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "sentry1_pass",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=fda",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=M_A",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=REGULATORY_DECISION",
+          "importance": 0.0
+        },
+        {
+          "feature": "polarity=neutral",
+          "importance": 0.0
+        },
+        {
+          "feature": "polarity=positive",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_class=high",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_action=UNKNOWN",
+          "importance": 0.0
+        }
+      ],
+      "reg_mae": 6.5901,
+      "reg_rmse": 7.2826,
+      "reg_r2": -0.9942,
+      "reg_feature_importance": [
+        {
+          "feature": "sentry1_company",
+          "importance": 0.8189
+        },
+        {
+          "feature": "sentry1_price",
+          "importance": 0.1811
+        },
+        {
+          "feature": "keyword_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "sentry1_pass",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=fda",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=M_A",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=REGULATORY_DECISION",
+          "importance": 0.0
+        },
+        {
+          "feature": "polarity=neutral",
+          "importance": 0.0
+        },
+        {
+          "feature": "polarity=positive",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_class=high",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_action=UNKNOWN",
+          "importance": 0.0
+        }
+      ],
+      "walk_forward_detail": [
+        {
+          "window": 1,
+          "train_size": 1592,
+          "test_size": 796,
+          "train_dates": "1955-12-05 to 2011-08-01",
+          "test_dates": "2011-08-04 to 2016-12-23",
+          "accuracy": 0.647,
+          "auc_roc": 0.5991,
+          "reg_mae": 6.3379
+        },
+        {
+          "window": 2,
+          "train_size": 2388,
+          "test_size": 796,
+          "train_dates": "1955-12-05 to 2016-12-23",
+          "test_dates": "2017-01-04 to 2022-02-10",
+          "accuracy": 0.4472,
+          "auc_roc": 0.5242,
+          "reg_mae": 6.9905
+        },
+        {
+          "window": 3,
+          "train_size": 3184,
+          "test_size": 796,
+          "train_dates": "1955-12-05 to 2022-02-10",
+          "test_dates": "2022-02-15 to 2026-04-07",
+          "accuracy": 0.5528,
+          "auc_roc": 0.5133,
+          "reg_mae": 6.4421
+        }
+      ],
+      "threshold_analysis": [
+        {
+          "threshold": 0.5,
+          "trades": 1066,
+          "avg_return": 0.5776,
+          "win_rate": 25.6,
+          "total_return": 615.76,
+          "avg_predicted_return": 6.9827
+        },
+        {
+          "threshold": 0.55,
+          "trades": 715,
+          "avg_return": 1.0324,
+          "win_rate": 28.3,
+          "total_return": 738.16,
+          "avg_predicted_return": 7.6594
+        },
+        {
+          "threshold": 0.6,
+          "trades": 465,
+          "avg_return": 0.6899,
+          "win_rate": 26.2,
+          "total_return": 320.83,
+          "avg_predicted_return": 8.0311
+        },
+        {
+          "threshold": 0.65,
+          "trades": 41,
+          "avg_return": 0.0806,
+          "win_rate": 22.0,
+          "total_return": 3.31,
+          "avg_predicted_return": 8.9392
+        },
+        {
+          "threshold": 0.7,
+          "trades": 2,
+          "avg_return": -2.0,
+          "win_rate": 0.0,
+          "total_return": -4.0,
+          "avg_predicted_return": 9.0223
+        }
+      ],
+      "return_threshold_analysis": [
+        {
+          "min_predicted_return": 0.0,
+          "trades": 2388,
+          "actual_avg_return": 0.3281,
+          "actual_win_rate": 23.3,
+          "actual_total_return": 783.5
+        },
+        {
+          "min_predicted_return": 0.5,
+          "trades": 2388,
+          "actual_avg_return": 0.3281,
+          "actual_win_rate": 23.3,
+          "actual_total_return": 783.5
+        },
+        {
+          "min_predicted_return": 1.0,
+          "trades": 2388,
+          "actual_avg_return": 0.3281,
+          "actual_win_rate": 23.3,
+          "actual_total_return": 783.5
+        },
+        {
+          "min_predicted_return": 1.5,
+          "trades": 2388,
+          "actual_avg_return": 0.3281,
+          "actual_win_rate": 23.3,
+          "actual_total_return": 783.5
+        },
+        {
+          "min_predicted_return": 2.0,
+          "trades": 2388,
+          "actual_avg_return": 0.3281,
+          "actual_win_rate": 23.3,
+          "actual_total_return": 783.5
+        },
+        {
+          "min_predicted_return": 3.0,
+          "trades": 2076,
+          "actual_avg_return": 0.3441,
+          "actual_win_rate": 24.2,
+          "actual_total_return": 714.38
+        },
+        {
+          "min_predicted_return": 5.0,
+          "trades": 985,
+          "actual_avg_return": 0.8123,
+          "actual_win_rate": 27.4,
+          "actual_total_return": 800.14
+        }
+      ],
+      "combined_gate_analysis": [
+        {
+          "prob_threshold": 0.5,
+          "return_threshold": 0.5,
+          "trades": 1066,
+          "actual_avg_return": 0.5776,
+          "actual_win_rate": 25.6,
+          "actual_total_return": 615.76
+        },
+        {
+          "prob_threshold": 0.5,
+          "return_threshold": 1.0,
+          "trades": 1066,
+          "actual_avg_return": 0.5776,
+          "actual_win_rate": 25.6,
+          "actual_total_return": 615.76
+        },
+        {
+          "prob_threshold": 0.5,
+          "return_threshold": 1.5,
+          "trades": 1066,
+          "actual_avg_return": 0.5776,
+          "actual_win_rate": 25.6,
+          "actual_total_return": 615.76
+        },
+        {
+          "prob_threshold": 0.5,
+          "return_threshold": 2.0,
+          "trades": 1066,
+          "actual_avg_return": 0.5776,
+          "actual_win_rate": 25.6,
+          "actual_total_return": 615.76
+        },
+        {
+          "prob_threshold": 0.6,
+          "return_threshold": 0.5,
+          "trades": 465,
+          "actual_avg_return": 0.6899,
+          "actual_win_rate": 26.2,
+          "actual_total_return": 320.83
+        },
+        {
+          "prob_threshold": 0.6,
+          "return_threshold": 1.0,
+          "trades": 465,
+          "actual_avg_return": 0.6899,
+          "actual_win_rate": 26.2,
+          "actual_total_return": 320.83
+        },
+        {
+          "prob_threshold": 0.6,
+          "return_threshold": 1.5,
+          "trades": 465,
+          "actual_avg_return": 0.6899,
+          "actual_win_rate": 26.2,
+          "actual_total_return": 320.83
+        },
+        {
+          "prob_threshold": 0.6,
+          "return_threshold": 2.0,
+          "trades": 465,
+          "actual_avg_return": 0.6899,
+          "actual_win_rate": 26.2,
+          "actual_total_return": 320.83
+        }
+      ],
+      "baseline_win_rate": 21.6,
+      "baseline_avg_return": 0.1485,
+      "feature_importance": [
+        {
+          "feature": "sentry1_company",
+          "importance": 0.8651
+        },
+        {
+          "feature": "sentry1_price",
+          "importance": 0.1349
+        },
+        {
+          "feature": "keyword_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "sentry1_pass",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_confidence",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_impact_score",
+          "importance": 0.0
+        },
+        {
+          "feature": "source=fda",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=M_A",
+          "importance": 0.0
+        },
+        {
+          "feature": "event_type=REGULATORY_DECISION",
+          "importance": 0.0
+        },
+        {
+          "feature": "polarity=neutral",
+          "importance": 0.0
+        },
+        {
+          "feature": "polarity=positive",
+          "importance": 0.0
+        },
+        {
+          "feature": "impact_class=high",
+          "importance": 0.0
+        },
+        {
+          "feature": "llm_action=UNKNOWN",
+          "importance": 0.0
+        }
+      ]
+    },
+    {
+      "segment": "event_type=M_A",
+      "hold_days": 20,
+      "stop_loss_pct": 0.1,
+      "skipped": true,
+      "reason": "only 8 signals (need 15)",
+      "n_signals": 8
+    }
+  ]
+}

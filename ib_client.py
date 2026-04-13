@@ -63,6 +63,16 @@ class IBClient:
                 "ib_insync is not installed. Run: pip install ib_insync"
             ) from exc
 
+        # ib_insync runs its own event loop; if we're inside an async context
+        # (e.g. strategy analyzer), nest_asyncio allows the nested loop.
+        try:
+            loop = asyncio.get_running_loop()
+            if loop.is_running():
+                import nest_asyncio
+                nest_asyncio.apply()
+        except RuntimeError:
+            pass  # no running loop — fine
+
         if self._ib is None:
             self._ib = IB()
 
