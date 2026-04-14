@@ -1030,9 +1030,10 @@ class OpenAiRegulatoryLlmGateway:
                 raise TypeError("Ranker schema: event_type must be a string")
             if not isinstance(obj.get("evidence_spans"), list):
                 raise TypeError("Ranker schema: evidence_spans must be a list")
-            if not isinstance(obj.get("numeric_terms"), dict):
+            # numeric_terms and risk_flags are required for non-pharma only
+            if "numeric_terms" in obj and not isinstance(obj["numeric_terms"], dict):
                 raise TypeError("Ranker schema: numeric_terms must be an object")
-            if not isinstance(obj.get("risk_flags"), dict):
+            if "risk_flags" in obj and not isinstance(obj["risk_flags"], dict):
                 raise TypeError("Ranker schema: risk_flags must be an object")
             # label_analysis is optional — the prompt asks for issuer_context instead.
             # Parse label_analysis if the LLM returns it; otherwise keep defaults.

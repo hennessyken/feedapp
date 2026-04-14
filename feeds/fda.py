@@ -106,10 +106,13 @@ class FdaFeedAdapter(BaseFeedAdapter):
         *,
         max_age_days: int = 7,
         openfda_limit: int = 50,
+        submission_types: Optional[List[str]] = None,
     ) -> None:
         super().__init__(http)
         self._max_age_days = max_age_days
         self._openfda_limit = openfda_limit
+        # If set, only keep these submission types (e.g. ["ORIG"] for new drugs only)
+        self._submission_types = submission_types
 
     async def fetch(self) -> List[FeedResult]:
         results: List[FeedResult] = []
@@ -224,7 +227,7 @@ class FdaFeedAdapter(BaseFeedAdapter):
                 break
 
             for record in page_results:
-                items = self._parse_openfda_record(record)
+                items = self._parse_openfda_record(record, cutoff_str=cutoff_str)
                 results.extend(items)
 
             # Check if there are more pages
@@ -237,7 +240,7 @@ class FdaFeedAdapter(BaseFeedAdapter):
                     len(results), page + 1)
         return results
 
-    def _parse_openfda_record(self, record: Dict[str, Any]) -> List[FeedResult]:
+    def _parse_openfda_record(self, record: Dict[str, Any], *, cutoff_str: str = "") -> List[FeedResult]:
         openfda = record.get("openfda", {})
         brand_names = openfda.get("brand_name", [])
         generic_names = openfda.get("generic_name", [])
@@ -255,6 +258,16 @@ class FdaFeedAdapter(BaseFeedAdapter):
             sub_date = sub.get("submission_status_date", "")
 
             if not sub_status:
+                continue
+
+            # Filter by submission type if configured
+            if self._submission_types and sub_type not in self._submission_types:
+                continue
+
+            # Filter by date: skip submissions whose date is before cutoff
+            # (the API returns records where ANY submission is in range,
+            # but individual submissions may be from decades ago)
+            if cutoff_str and sub_date and sub_date < cutoff_str:
                 continue
 
             # Map FDA codes to human-readable labels for keyword screening

@@ -85,13 +85,21 @@ class DataCollector:
         ib_client: Any = None,
         sec_user_agent: str = "FeedApp/1.0 (feedapp@example.com)",
         keyword_threshold: int = 30,
-        edgar_forms: str = "SC 13D,SC 13D/A,DEFM14A,DEFA14A,S-1,S-4,6-K,SC TO-T,CB",
+        edgar_forms: Optional[List[Tuple[str, str]]] = None,
     ) -> None:
         self._db = db
         self._ib_client = ib_client  # kept for backward compat, not used for prices
         self._sec_user_agent = sec_user_agent
         self._keyword_threshold = keyword_threshold
-        self._edgar_forms = edgar_forms
+        # Each entry is (form_type, efts_query).  Empty query = no text filter.
+        self._edgar_forms: List[Tuple[str, str]] = edgar_forms or [
+            ("DEFM14A", ""),
+            ("S-4",     ""),
+            ("SC TO-T", ""),
+            ("CB",      ""),
+            ("6-K",     '"definitive agreement" OR "tender offer"'),
+            ("8-K",     '"Item 1.01" OR "Item 2.01" OR "Item 2.05" OR "Item 4.02" OR "Item 5.01"'),
+        ]
         self._screener = KeywordScreener()
         self._scorer = DeterministicEventScorer()
 
@@ -127,47 +135,52 @@ class DataCollector:
         timeout = httpx.Timeout(timeout=30.0)
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as http:
             # ── EDGAR ──
+            # Query each form type separately — EFTS API breaks when
+            # multiple form types are combined in one request.
             logger.info("Fetching EDGAR filings...")
             await _ensure_cik_map(http, self._sec_user_agent)
             chunks = _chunk_date_range(start_dt, end_dt, chunk_days=7)
-            for i, (cs, ce) in enumerate(chunks):
-                logger.info("  EDGAR chunk %d/%d: %s to %s", i + 1, len(chunks), cs, ce)
-                chunk_days_n = (
-                    datetime.strptime(ce, "%Y-%m-%d")
-                    - datetime.strptime(cs, "%Y-%m-%d")
-                ).days + 1
-                adapter = EdgarFeedAdapter(
-                    http, user_agent=self._sec_user_agent,
-                    days_back=chunk_days_n, forms=self._edgar_forms,
-                    page_size=100, max_pages=20,
-                )
-                edgar_chunk_hits = 0
-                try:
-                    for page in range(adapter._max_pages):
-                        try:
-                            hits = await adapter._search_page(cs, ce, page)
-                        except Exception as e:
-                            logger.warning("EDGAR page %d failed for %s–%s: %s", page, cs, ce, e)
-                            break
-                        if not hits:
-                            break
-                        for hit in hits:
-                            src = hit.get("_source", {})
-                            acc_no = hit.get("_id", "")
-                            if not acc_no or acc_no in seen:
-                                continue
-                            seen.add(acc_no)
-                            item = adapter._parse_hit(acc_no, src)
-                            if item:
-                                edgar_chunk_hits += 1
-                                stats["fetched"] += 1
-                                await self._screen_and_store(item, stats)
-                except Exception as e:
-                    logger.warning("EDGAR chunk %s–%s failed: %s", cs, ce, e)
-                if edgar_chunk_hits > 0:
-                    logger.info("  EDGAR chunk %d: %d filings found", i + 1, edgar_chunk_hits)
-                await asyncio.sleep(0.5)
-            edgar_total = stats["fetched"]
+            edgar_pre = stats["fetched"]
+            for form_type, efts_query in self._edgar_forms:
+                form_hits_total = 0
+                q_label = f' q="{efts_query}"' if efts_query else ""
+                logger.info("  EDGAR scanning %s%s ...", form_type, q_label)
+                for i, (cs, ce) in enumerate(chunks):
+                    chunk_days_n = (
+                        datetime.strptime(ce, "%Y-%m-%d")
+                        - datetime.strptime(cs, "%Y-%m-%d")
+                    ).days + 1
+                    adapter = EdgarFeedAdapter(
+                        http, user_agent=self._sec_user_agent,
+                        days_back=chunk_days_n, forms=form_type,
+                        page_size=100, max_pages=20,
+                        query=efts_query,
+                    )
+                    try:
+                        for page in range(adapter._max_pages):
+                            try:
+                                hits = await adapter._search_page(cs, ce, page)
+                            except Exception as e:
+                                logger.warning("EDGAR %s page %d failed for %s–%s: %s", form_type, page, cs, ce, e)
+                                break
+                            if not hits:
+                                break
+                            for hit in hits:
+                                src = hit.get("_source", {})
+                                acc_no = hit.get("_id", "")
+                                if not acc_no or acc_no in seen:
+                                    continue
+                                seen.add(acc_no)
+                                item = adapter._parse_hit(acc_no, src)
+                                if item:
+                                    form_hits_total += 1
+                                    stats["fetched"] += 1
+                                    await self._screen_and_store(item, stats)
+                    except Exception as e:
+                        logger.warning("EDGAR %s chunk %s–%s failed: %s", form_type, cs, ce, e)
+                    await asyncio.sleep(0.1)
+                logger.info("  EDGAR %s: %d filings", form_type, form_hits_total)
+            edgar_total = stats["fetched"] - edgar_pre
             logger.info("EDGAR total: %d filings fetched", edgar_total)
 
             # ── ClinicalTrials.gov ──
@@ -185,7 +198,10 @@ class DataCollector:
             # ── FDA ──
             logger.info("Fetching FDA...")
             try:
-                fda = FdaFeedAdapter(http, max_age_days=total_days)
+                fda = FdaFeedAdapter(
+                    http, max_age_days=total_days,
+                    submission_types=["ORIG"],  # Original Applications only
+                )
                 for item in await fda.fetch():
                     if item.item_id not in seen:
                         seen.add(item.item_id)

@@ -101,6 +101,7 @@ class EdgarFeedAdapter(BaseFeedAdapter):
         forms: str = "8-K,6-K",
         page_size: int = 50,
         max_pages: int = 4,
+        query: str = "",
     ) -> None:
         super().__init__(http)
         self._user_agent = user_agent
@@ -108,6 +109,7 @@ class EdgarFeedAdapter(BaseFeedAdapter):
         self._forms = forms
         self._page_size = page_size
         self._max_pages = max_pages
+        self._query = query
 
     async def fetch(self) -> List[FeedResult]:
         await _ensure_cik_map(self._http, self._user_agent)
@@ -158,6 +160,8 @@ class EdgarFeedAdapter(BaseFeedAdapter):
             form = form.strip()
             if form:
                 params.append(("forms", form))
+        if self._query:
+            params.append(("q", self._query))
         headers = {"User-Agent": self._user_agent}
 
         resp = await self._http.get(_EFTS_SEARCH_URL, params=params, headers=headers)
