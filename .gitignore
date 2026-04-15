@@ -19,3 +19,11 @@ runs/
 
 # IB Gateway (if inside project)
 ibgateway/
+
+# Database files
+*.db
+*.db-shm
+*.db-wal
+
+# Archives / large binaries
+*.zip
