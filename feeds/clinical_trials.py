@@ -142,29 +142,42 @@ class ClinicalTrialsFeedAdapter(BaseFeedAdapter):
         cutoff = datetime.now(timezone.utc) - timedelta(days=self._max_age_days)
         cutoff_str = cutoff.strftime("%m/%d/%Y")
 
-        params = {
-            "format": "json",
-            "pageSize": str(self._page_size),
-            "countTotal": "true",
-            "fields": "NCTId,BriefTitle,OfficialTitle,OverallStatus,Phase,Condition,LeadSponsorName,ResultsFirstPostDate,LastUpdatePostDate",
-            "filter.overallStatus": "COMPLETED,TERMINATED",
-            "filter.advanced": f"AREA[ResultsFirstPostDate]RANGE[{cutoff_str},MAX]",
-            "sort": "ResultsFirstPostDate:desc",
-        }
-
-        try:
-            data = await self._get_json(_API_BASE, params=params)
-        except Exception as e:
-            logger.warning("ClinicalTrials.gov results fetch failed: %s", e)
-            return []
-
-        studies = data.get("studies", [])
         results: List[FeedResult] = []
+        page_token: Optional[str] = None
+        max_pages = 50  # safety cap
 
-        for study in studies:
-            item = self._parse_study(study, signal_type="results_posted")
-            if item:
-                results.append(item)
+        for page in range(max_pages):
+            params = {
+                "format": "json",
+                "pageSize": str(self._page_size),
+                "countTotal": "true",
+                "fields": "NCTId,BriefTitle,OfficialTitle,OverallStatus,Phase,Condition,LeadSponsorName,ResultsFirstPostDate,LastUpdatePostDate",
+                "filter.overallStatus": "COMPLETED,TERMINATED",
+                "filter.advanced": f"AREA[ResultsFirstPostDate]RANGE[{cutoff_str},MAX]",
+                "sort": "ResultsFirstPostDate:desc",
+            }
+            if page_token:
+                params["pageToken"] = page_token
+
+            try:
+                data = await self._get_json(_API_BASE, params=params)
+            except Exception as e:
+                logger.warning("ClinicalTrials.gov results page %d failed: %s", page, e)
+                break
+
+            studies = data.get("studies", [])
+            if not studies:
+                break
+
+            for study in studies:
+                item = self._parse_study(study, signal_type="results_posted")
+                if item:
+                    results.append(item)
+
+            # ClinicalTrials.gov API uses nextPageToken for pagination
+            page_token = data.get("nextPageToken")
+            if not page_token:
+                break
 
         return results
 
@@ -173,28 +186,40 @@ class ClinicalTrialsFeedAdapter(BaseFeedAdapter):
         cutoff = datetime.now(timezone.utc) - timedelta(days=self._max_age_days)
         cutoff_str = cutoff.strftime("%m/%d/%Y")
 
-        params = {
-            "format": "json",
-            "pageSize": str(self._page_size),
-            "fields": "NCTId,BriefTitle,OfficialTitle,OverallStatus,Phase,Condition,LeadSponsorName,ResultsFirstPostDate,LastUpdatePostDate",
-            "filter.advanced": f"AREA[LastUpdatePostDate]RANGE[{cutoff_str},MAX] AND AREA[Phase]PHASE3",
-            "filter.overallStatus": "COMPLETED,ACTIVE_NOT_RECRUITING",
-            "sort": "LastUpdatePostDate:desc",
-        }
-
-        try:
-            data = await self._get_json(_API_BASE, params=params)
-        except Exception as e:
-            logger.warning("ClinicalTrials.gov status fetch failed: %s", e)
-            return []
-
-        studies = data.get("studies", [])
         results: List[FeedResult] = []
+        page_token: Optional[str] = None
+        max_pages = 50  # safety cap
 
-        for study in studies:
-            item = self._parse_study(study, signal_type="status_change")
-            if item:
-                results.append(item)
+        for page in range(max_pages):
+            params = {
+                "format": "json",
+                "pageSize": str(self._page_size),
+                "fields": "NCTId,BriefTitle,OfficialTitle,OverallStatus,Phase,Condition,LeadSponsorName,ResultsFirstPostDate,LastUpdatePostDate",
+                "filter.advanced": f"AREA[LastUpdatePostDate]RANGE[{cutoff_str},MAX] AND AREA[Phase]PHASE3",
+                "filter.overallStatus": "COMPLETED,ACTIVE_NOT_RECRUITING",
+                "sort": "LastUpdatePostDate:desc",
+            }
+            if page_token:
+                params["pageToken"] = page_token
+
+            try:
+                data = await self._get_json(_API_BASE, params=params)
+            except Exception as e:
+                logger.warning("ClinicalTrials.gov status page %d failed: %s", page, e)
+                break
+
+            studies = data.get("studies", [])
+            if not studies:
+                break
+
+            for study in studies:
+                item = self._parse_study(study, signal_type="status_change")
+                if item:
+                    results.append(item)
+
+            page_token = data.get("nextPageToken")
+            if not page_token:
+                break
 
         return results
 

@@ -657,8 +657,8 @@ def _simulate_trade(
     if not buy_day_bars:
         return None
     buy_price = float(prices_df.loc[buy_day_bars[0], "open"])
-    if buy_price <= 0:
-        return None
+    if buy_price < 1.00:
+        return None  # Skip penny stocks — sub-$1 prices create extreme % swings
 
     # Check stop loss on every 5-min bar during the hold period
     if stop_loss_pct is not None:
@@ -673,14 +673,17 @@ def _simulate_trade(
                 break
             if float(prices_df.loc[dt, "low"]) <= stop_price:
                 # Stopped out at this bar
-                return ((stop_price - buy_price) / buy_price) * 100
+                ret = ((stop_price - buy_price) / buy_price) * 100
+                return max(-100.0, min(500.0, ret))
 
     # Hold to end — sell at close of last bar on exit day
     exit_day_bars = [dt for dt in all_datetimes if _date_of(dt) == exit_day]
     if not exit_day_bars:
         return None
     sell_price = float(prices_df.loc[exit_day_bars[-1], "close"])
-    return ((sell_price - buy_price) / buy_price) * 100
+    ret = ((sell_price - buy_price) / buy_price) * 100
+    # Cap extreme returns to prevent single outliers from distorting stats
+    return max(-100.0, min(500.0, ret))
 
 
 def _compute_strategy_stats(
@@ -871,6 +874,68 @@ class StrategyOptimizer:
             ]
             if kw_llm_agree:
                 filter_groups["kw_llm_agree"] = kw_llm_agree
+
+        # ── Fundamental-based filters (if ticker_fundamentals table exists) ─────
+        try:
+            fund_rows = await self._db._db.execute_fetchall(
+                "SELECT ticker, sector, industry, cap_bucket, avg_volume, beta "
+                "FROM ticker_fundamentals WHERE sector != ''"
+            )
+            fund_map: Dict[str, Dict[str, Any]] = {}
+            for r in fund_rows:
+                fund_map[r[0]] = {
+                    "sector": r[1], "industry": r[2],
+                    "cap_bucket": r[3], "avg_volume": r[4], "beta": r[5],
+                }
+
+            if fund_map:
+                logger.info("Loaded fundamentals for %d tickers", len(fund_map))
+
+                # By sector
+                for sig in signals:
+                    f = fund_map.get(sig["ticker"])
+                    if f and f["sector"]:
+                        key = f"sector={f['sector']}"
+                        filter_groups.setdefault(key, []).append(sig)
+
+                # By cap bucket
+                for sig in signals:
+                    f = fund_map.get(sig["ticker"])
+                    if f and f["cap_bucket"] and f["cap_bucket"] != "unknown":
+                        key = f"cap={f['cap_bucket']}"
+                        filter_groups.setdefault(key, []).append(sig)
+
+                # By volume bucket
+                for sig in signals:
+                    f = fund_map.get(sig["ticker"])
+                    if f and f["avg_volume"]:
+                        if f["avg_volume"] < 500_000:
+                            filter_groups.setdefault("volume=low", []).append(sig)
+                        elif f["avg_volume"] < 5_000_000:
+                            filter_groups.setdefault("volume=medium", []).append(sig)
+                        else:
+                            filter_groups.setdefault("volume=high", []).append(sig)
+
+                # Combined: M&A + small cap
+                ma_small = [
+                    s for s in signals
+                    if s.get("llm_event_type") == "M_A"
+                    and fund_map.get(s["ticker"], {}).get("cap_bucket") in ("micro", "small")
+                ]
+                if ma_small:
+                    filter_groups["M_A+small_cap"] = ma_small
+
+                # Combined: clinical trial + biotech sector
+                ct_biotech = [
+                    s for s in signals
+                    if s.get("llm_event_type") in ("CLINICAL_TRIAL", "REGULATORY_DECISION")
+                    and "biotech" in fund_map.get(s["ticker"], {}).get("industry", "").lower()
+                ]
+                if ct_biotech:
+                    filter_groups["pharma_event+biotech"] = ct_biotech
+
+        except Exception as e:
+            logger.info("No fundamentals data available: %s", e)
 
         # Run all combos
         results: List[StrategyResult] = []

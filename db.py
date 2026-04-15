@@ -97,6 +97,26 @@ CREATE TABLE IF NOT EXISTS backtest_prices (
     PRIMARY KEY (ticker, datetime)
 );
 CREATE INDEX IF NOT EXISTS idx_bt_prices_ticker ON backtest_prices(ticker);
+
+CREATE TABLE IF NOT EXISTS ticker_fundamentals (
+    ticker          TEXT PRIMARY KEY,
+    company_name    TEXT,
+    sector          TEXT,
+    industry        TEXT,
+    market_cap      REAL,
+    cap_bucket      TEXT,       -- micro/small/mid/large/mega
+    pe_ratio        REAL,
+    forward_pe      REAL,
+    shares_out      REAL,
+    float_shares    REAL,
+    avg_volume      REAL,
+    beta            REAL,
+    dividend_yield  REAL,
+    exchange        TEXT,
+    currency        TEXT,
+    country         TEXT,
+    fetched_at      TEXT NOT NULL
+);
 """
 
 # Columns added via _migrate_columns (idempotent ALTER TABLE)

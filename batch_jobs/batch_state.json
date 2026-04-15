@@ -1,6 +1,21 @@
 {
-  "sentry1_batch_id": "batch_69de5f497dec8190ac867fbca46ff522",
-  "sentry1_count": 36581,
-  "sentry1_submitted_at": "2026-04-14T15:37:46.062798+00:00",
-  "sentry1_status": "submitted"
+  "sentry1_batch_id": "batch_69df3e723ed481909ef455a433d75d7b",
+  "sentry1_count": 4591,
+  "sentry1_submitted_at": "2026-04-15T09:29:54.821132",
+  "sentry1_status": "completed",
+  "sentry1_stats": {
+    "total": 4591,
+    "passed": 1308,
+    "failed": 3271,
+    "parse_errors": 12
+  },
+  "ranker_batch_id": "batch_69de8fef5a6c819088dc4ec047a4f30c",
+  "ranker_count": 77,
+  "ranker_submitted_at": "2026-04-14T19:05:20.044652+00:00",
+  "ranker_status": "completed",
+  "ranker_stats": {
+    "total": 77,
+    "succeeded": 71,
+    "parse_errors": 6
+  }
 }
