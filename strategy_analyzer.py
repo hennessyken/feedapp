@@ -945,9 +945,11 @@ class StrategyOptimizer:
             total_combos, len(filter_groups), len(HOLD_DAYS), len(STOP_LOSSES),
         )
 
+        combo_num = 0
         for filter_name, filter_signals in filter_groups.items():
             for hold_days in HOLD_DAYS:
                 for stop_loss in STOP_LOSSES:
+                    combo_num += 1
                     trade_returns = []
                     for sig in filter_signals:
                         ticker = sig["ticker"]
@@ -967,6 +969,12 @@ class StrategyOptimizer:
                             trade_returns, hold_days, stop_loss, filter_name,
                         )
                         results.append(result)
+
+                    if combo_num % 100 == 0:
+                        logger.info(
+                            "Optimizer progress: %d/%d combos (%.0f%%)",
+                            combo_num, total_combos, combo_num / total_combos * 100,
+                        )
 
         results.sort(key=lambda r: r.sharpe, reverse=True)
         logger.info("Optimization complete: %d viable strategies tested", len(results))
