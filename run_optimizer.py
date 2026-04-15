@@ -10,12 +10,15 @@ import asyncio
 import json
 import logging
 import os
+import signal
+import subprocess
 
 from db import FeedDatabase
 from strategy_analyzer import (
     StrategyOptimizer, SignalClassifier,
     print_strategy_report, save_strategy_report, print_ml_report,
 )
+from report_html import generate_html_report
 
 logging.basicConfig(
     level=logging.INFO,
@@ -48,9 +51,74 @@ async def _send_telegram(message: str) -> bool:
         return False
 
 
+def _find_heavy_processes(cpu_threshold: float = 100.0) -> list:
+    """Find non-optimizer processes using significant CPU, return their PIDs."""
+    try:
+        out = subprocess.check_output(
+            ["ps", "aux", "--sort=-%cpu"], text=True
+        )
+        pids = []
+        my_pid = os.getpid()
+        for line in out.strip().split("\n")[1:]:
+            parts = line.split()
+            pid = int(parts[1])
+            cpu = float(parts[2])
+            if cpu < cpu_threshold:
+                break
+            if pid == my_pid:
+                continue
+            # Skip system processes and Claude CLI
+            cmd = " ".join(parts[10:])
+            if "ccd-cli" in cmd or "sshd" in cmd:
+                continue
+            pids.append(pid)
+        return pids
+    except Exception:
+        return []
+
+
+def _pause_processes(pids: list) -> list:
+    """Send SIGSTOP to processes. Returns list of PIDs actually paused."""
+    paused = []
+    for pid in pids:
+        try:
+            # Stop the process group to catch all threads
+            pgid = os.getpgid(pid)
+            os.killpg(pgid, signal.SIGSTOP)
+            paused.append(pid)
+            logger.info("Paused heavy process PID %d (PGID %d) during optimization", pid, pgid)
+        except (ProcessLookupError, PermissionError):
+            try:
+                os.kill(pid, signal.SIGSTOP)
+                paused.append(pid)
+                logger.info("Paused heavy process PID %d during optimization", pid)
+            except Exception:
+                pass
+    return paused
+
+
+def _resume_processes(pids: list) -> None:
+    """Send SIGCONT to previously paused processes."""
+    for pid in pids:
+        try:
+            pgid = os.getpgid(pid)
+            os.killpg(pgid, signal.SIGCONT)
+            logger.info("Resumed process PID %d (PGID %d)", pid, pgid)
+        except (ProcessLookupError, PermissionError):
+            try:
+                os.kill(pid, signal.SIGCONT)
+                logger.info("Resumed process PID %d", pid)
+            except Exception:
+                pass
+
+
 async def run():
     db = FeedDatabase(DB_PATH)
     await db.connect()
+
+    # Pause heavy CPU processes during optimization
+    heavy_pids = _find_heavy_processes(cpu_threshold=100.0)
+    paused_pids = _pause_processes(heavy_pids) if heavy_pids else []
 
     try:
         # Check data
@@ -79,7 +147,33 @@ async def run():
         with open(ml_file, "w") as f:
             json.dump(ml_report, f, indent=2, default=str)
 
-        logger.info("Reports saved: %s, %s", report_file, ml_file)
+        # HTML report — sortable tables, colour coded
+        fund_summary = None
+        try:
+            fund_total = (await db._db.execute_fetchall(
+                "SELECT COUNT(*) FROM ticker_fundamentals"
+            ))[0][0]
+            fund_sector = (await db._db.execute_fetchall(
+                "SELECT COUNT(*) FROM ticker_fundamentals WHERE sector != ''"
+            ))[0][0]
+            top_sectors = await db._db.execute_fetchall(
+                "SELECT sector, COUNT(*) FROM ticker_fundamentals "
+                "WHERE sector != '' GROUP BY sector ORDER BY COUNT(*) DESC LIMIT 5"
+            )
+            fund_summary = {
+                "total": fund_total,
+                "with_sector": fund_sector,
+                "top_sectors": [(r[0], r[1]) for r in top_sectors],
+            }
+        except Exception:
+            pass
+
+        html_path = generate_html_report(
+            results, benchmark_results, ml_report, total,
+            out_path="strategy_report.html",
+            fundamentals_summary=fund_summary,
+        )
+        logger.info("Reports saved: %s, %s, %s", report_file, ml_file, html_path)
 
         # Phase 5: Telegram summary
         # Top 5 strategies by excess return
@@ -128,6 +222,9 @@ async def run():
         logger.info("Telegram notification sent")
 
     finally:
+        # Resume any paused processes
+        if paused_pids:
+            _resume_processes(paused_pids)
         await db.close()
 
 

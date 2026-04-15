@@ -614,76 +614,146 @@ class LLMScorer:
 # Phase 3: Strategy Optimization
 # =====================================================================
 
+@dataclass
+class _PreparedTicker:
+    """Pre-processed price data for fast trade simulation."""
+    trading_days: List[str]          # sorted unique dates
+    day_index: Dict[str, int]        # date -> index in trading_days
+    open_by_day: Dict[str, float]    # date -> open (first bar)
+    close_by_day: Dict[str, float]   # date -> close (last bar)
+    low_by_day: Dict[str, float]     # date -> min low across all bars
+
+
+def _prepare_ticker(prices_df: pd.DataFrame) -> Optional[_PreparedTicker]:
+    """Pre-process a ticker's price data for fast lookups."""
+    all_datetimes = sorted(prices_df.index.tolist())
+    if not all_datetimes:
+        return None
+
+    # Group bars by date
+    day_bars: Dict[str, List[str]] = {}
+    for dt in all_datetimes:
+        d = dt[:10]
+        day_bars.setdefault(d, []).append(dt)
+
+    trading_days = sorted(day_bars.keys())
+    day_index = {d: i for i, d in enumerate(trading_days)}
+
+    open_by_day: Dict[str, float] = {}
+    close_by_day: Dict[str, float] = {}
+    low_by_day: Dict[str, float] = {}
+
+    for d, bars in day_bars.items():
+        bars_sorted = sorted(bars)
+        open_by_day[d] = float(prices_df.loc[bars_sorted[0], "open"])
+        close_by_day[d] = float(prices_df.loc[bars_sorted[-1], "close"])
+        low_by_day[d] = min(float(prices_df.loc[b, "low"]) for b in bars_sorted)
+
+    return _PreparedTicker(
+        trading_days=trading_days,
+        day_index=day_index,
+        open_by_day=open_by_day,
+        close_by_day=close_by_day,
+        low_by_day=low_by_day,
+    )
+
+
+def _simulate_trade_fast(
+    prep: _PreparedTicker,
+    signal_date: str,
+    hold_days: int,
+    stop_loss_pct: Optional[float],
+) -> Optional[float]:
+    """Fast trade simulation using pre-processed ticker data."""
+    trading_days = prep.trading_days
+
+    # Binary search for first trading day >= signal_date
+    lo, hi = 0, len(trading_days)
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if trading_days[mid] < signal_date:
+            lo = mid + 1
+        else:
+            hi = mid
+    if lo >= len(trading_days):
+        return None
+    buy_day = trading_days[lo]
+
+    buy_price = prep.open_by_day[buy_day]
+    if buy_price < 1.00:
+        return None  # Skip penny stocks
+
+    buy_idx = lo
+    exit_idx = min(buy_idx + hold_days, len(trading_days) - 1)
+    if exit_idx <= buy_idx and hold_days > 0:
+        return None
+    exit_day = trading_days[exit_idx]
+
+    # Check stop loss — just check daily lows (fast)
+    if stop_loss_pct is not None:
+        stop_price = buy_price * (1.0 - stop_loss_pct)
+        for day_idx in range(buy_idx, exit_idx + 1):
+            d = trading_days[day_idx]
+            if prep.low_by_day[d] <= stop_price:
+                ret = ((stop_price - buy_price) / buy_price) * 100
+                return max(-100.0, min(500.0, ret))
+
+    # Sell at close on exit day
+    sell_price = prep.close_by_day[exit_day]
+    ret = ((sell_price - buy_price) / buy_price) * 100
+    return max(-100.0, min(500.0, ret))
+
+
 def _simulate_trade(
     prices_df: pd.DataFrame,
     signal_date: str,
     hold_days: int,
     stop_loss_pct: Optional[float],
 ) -> Optional[float]:
-    """Simulate a trade using daily OHLCV bars.
+    """Simulate a trade (legacy wrapper — use _simulate_trade_fast for bulk)."""
+    prep = _prepare_ticker(prices_df)
+    if prep is None:
+        return None
+    return _simulate_trade_fast(prep, signal_date, hold_days, stop_loss_pct)
 
-    Buy: open of signal_date (or next trading day).
-    Stop loss: checked against each day's low during hold.
-    Sell: close on the final hold day.
 
-    Returns percentage return or None if no data.
+def _precompute_all_trades(
+    signals: List[Dict],
+    prices_cache: Dict[str, pd.DataFrame],
+) -> Dict[tuple, Optional[float]]:
+    """Pre-compute trade results for every (signal_idx, hold, stop) combo.
+
+    Returns dict keyed by (signal_index, hold_days, stop_loss_pct) -> return%.
+    This avoids re-simulating the same signal across overlapping filter groups.
     """
-    all_datetimes = sorted(prices_df.index.tolist())
-    if not all_datetimes:
-        return None
+    # Pre-process all tickers once
+    prepared: Dict[str, _PreparedTicker] = {}
+    for ticker, df in prices_cache.items():
+        p = _prepare_ticker(df)
+        if p is not None:
+            prepared[ticker] = p
 
-    # Extract date portion from datetime strings (YYYY-MM-DD from YYYY-MM-DD HH:MM:SS)
-    def _date_of(dt_str: str) -> str:
-        return dt_str[:10]
+    logger.info("Pre-computing trades: %d signals × %d holds × %d stops",
+                len(signals), len(HOLD_DAYS), len(STOP_LOSSES))
 
-    # Find unique trading days
-    trading_days = sorted(set(_date_of(dt) for dt in all_datetimes))
+    results: Dict[tuple, Optional[float]] = {}
+    for sig_idx, sig in enumerate(signals):
+        ticker = sig["ticker"]
+        prep = prepared.get(ticker)
+        if prep is None:
+            continue
+        signal_date = sig["signal_date"]
 
-    # Find first trading day on or after signal_date
-    buy_days = [d for d in trading_days if d >= signal_date]
-    if not buy_days:
-        return None
-    buy_day = buy_days[0]
+        for hold_days in HOLD_DAYS:
+            for stop_loss in STOP_LOSSES:
+                ret = _simulate_trade_fast(prep, signal_date, hold_days, stop_loss)
+                results[(sig_idx, hold_days, stop_loss)] = ret
 
-    # Find exit day
-    buy_day_idx = trading_days.index(buy_day)
-    exit_day_idx = min(buy_day_idx + hold_days, len(trading_days) - 1)
-    if exit_day_idx <= buy_day_idx and hold_days > 0:
-        return None
-    exit_day = trading_days[exit_day_idx]
+        if (sig_idx + 1) % 5000 == 0:
+            logger.info("Pre-computed: %d/%d signals", sig_idx + 1, len(signals))
 
-    # Get bars for buy day — buy at open of first bar
-    buy_day_bars = [dt for dt in all_datetimes if _date_of(dt) == buy_day]
-    if not buy_day_bars:
-        return None
-    buy_price = float(prices_df.loc[buy_day_bars[0], "open"])
-    if buy_price < 1.00:
-        return None  # Skip penny stocks — sub-$1 prices create extreme % swings
-
-    # Check stop loss on every 5-min bar during the hold period
-    if stop_loss_pct is not None:
-        stop_price = buy_price * (1.0 - stop_loss_pct)
-        hold_start = buy_day
-        hold_end = exit_day
-        for dt in all_datetimes:
-            d = _date_of(dt)
-            if d < hold_start:
-                continue
-            if d > hold_end:
-                break
-            if float(prices_df.loc[dt, "low"]) <= stop_price:
-                # Stopped out at this bar
-                ret = ((stop_price - buy_price) / buy_price) * 100
-                return max(-100.0, min(500.0, ret))
-
-    # Hold to end — sell at close of last bar on exit day
-    exit_day_bars = [dt for dt in all_datetimes if _date_of(dt) == exit_day]
-    if not exit_day_bars:
-        return None
-    sell_price = float(prices_df.loc[exit_day_bars[-1], "close"])
-    ret = ((sell_price - buy_price) / buy_price) * 100
-    # Cap extreme returns to prevent single outliers from distorting stats
-    return max(-100.0, min(500.0, ret))
+    logger.info("Pre-computation complete: %d trade results cached", len(results))
+    return results
 
 
 def _compute_strategy_stats(
@@ -937,7 +1007,15 @@ class StrategyOptimizer:
         except Exception as e:
             logger.info("No fundamentals data available: %s", e)
 
-        # Run all combos
+        # Pre-compute all trade results once (biggest speedup)
+        # Build signal index map: each signal gets a stable index
+        sig_index: Dict[str, int] = {}  # item_id -> index
+        for idx, sig in enumerate(signals):
+            sig_index[sig["item_id"]] = idx
+
+        trade_cache = _precompute_all_trades(signals, prices_cache)
+
+        # Run all combos — now just lookups into the cache
         results: List[StrategyResult] = []
         total_combos = len(filter_groups) * len(HOLD_DAYS) * len(STOP_LOSSES)
         logger.info(
@@ -952,15 +1030,10 @@ class StrategyOptimizer:
                     combo_num += 1
                     trade_returns = []
                     for sig in filter_signals:
-                        ticker = sig["ticker"]
-                        if ticker not in prices_cache:
+                        idx = sig_index.get(sig["item_id"])
+                        if idx is None:
                             continue
-                        ret = _simulate_trade(
-                            prices_cache[ticker],
-                            sig["signal_date"],
-                            hold_days,
-                            stop_loss,
-                        )
+                        ret = trade_cache.get((idx, hold_days, stop_loss))
                         if ret is not None:
                             trade_returns.append(ret)
 
@@ -970,7 +1043,7 @@ class StrategyOptimizer:
                         )
                         results.append(result)
 
-                    if combo_num % 100 == 0:
+                    if combo_num % 500 == 0:
                         logger.info(
                             "Optimizer progress: %d/%d combos (%.0f%%)",
                             combo_num, total_combos, combo_num / total_combos * 100,
@@ -980,7 +1053,9 @@ class StrategyOptimizer:
         logger.info("Optimization complete: %d viable strategies tested", len(results))
 
         # ── Benchmark: signal returns vs SPY ────────────────────────
-        benchmark_results = self._compute_benchmark(signals, prices_cache)
+        benchmark_results = self._compute_benchmark(
+            signals, prices_cache, sig_index, trade_cache,
+        )
 
         return results, benchmark_results
 
@@ -988,6 +1063,8 @@ class StrategyOptimizer:
         self,
         signals: List[Dict],
         prices_cache: Dict[str, pd.DataFrame],
+        sig_index: Dict[str, int],
+        trade_cache: Dict[tuple, Optional[float]],
     ) -> List[BenchmarkResult]:
         """Compare signal returns vs SPY over the same trade windows.
 
@@ -1000,6 +1077,11 @@ class StrategyOptimizer:
             logger.warning("No SPY price data — benchmark skipped")
             return []
 
+        spy_prep = _prepare_ticker(spy_df)
+        if spy_prep is None:
+            logger.warning("No SPY price data — benchmark skipped")
+            return []
+
         benchmarks: List[BenchmarkResult] = []
 
         for hold_days in HOLD_DAYS:
@@ -1007,17 +1089,14 @@ class StrategyOptimizer:
             spy_returns: List[float] = []
 
             for sig in signals:
-                ticker = sig["ticker"]
-                if ticker not in prices_cache:
+                idx = sig_index.get(sig["item_id"])
+                if idx is None:
                     continue
-                ret = _simulate_trade(
-                    prices_cache[ticker], sig["signal_date"],
-                    hold_days, None,
-                )
+                ret = trade_cache.get((idx, hold_days, None))
                 if ret is not None:
                     sig_returns.append(ret)
-                    spy_ret = _simulate_trade(
-                        spy_df, sig["signal_date"], hold_days, None,
+                    spy_ret = _simulate_trade_fast(
+                        spy_prep, sig["signal_date"], hold_days, None,
                     )
                     if spy_ret is not None:
                         spy_returns.append(spy_ret)
