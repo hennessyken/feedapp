@@ -11,15 +11,15 @@
     "tickers_resolved": 467,
     "tickers_private": 370
   },
-  "ranker_batch_id": "batch_69e0e22d5c1881908b68a1c7a8e58d30",
+  "ranker_batch_id": "batch_69e140a837988190ac765bacd7242a03",
   "ranker_count": 3887,
-  "ranker_submitted_at": "2026-04-16T13:20:50.988617+00:00",
-  "ranker_status": "submitted",
+  "ranker_submitted_at": "2026-04-16T20:04:04.632483+00:00",
+  "ranker_status": "completed",
   "ranker_stats": {
-    "total": 14223,
-    "succeeded": 5985,
-    "parse_errors": 8238
+    "total": 1194,
+    "succeeded": 1190,
+    "parse_errors": 4
   },
-  "ranker_2_batch_id": "batch_69e0e232daf481908a1108c0cd09bfe6",
+  "ranker_2_batch_id": "batch_69e140b4099881909c328ac810f65c19",
   "ranker_2_status": "submitted"
 }

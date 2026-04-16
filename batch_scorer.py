@@ -414,20 +414,31 @@ def _build_conviction_request_line(sig: Dict[str, Any], market_ctx: Dict[str, An
         except Exception:
             pass
 
-    # ── Timestamp context ──
+    # ── Timestamp context (DST-aware tz conversion) ──
     signal_ts = sig.get("signal_timestamp") or sig.get("signal_date")
     timing: Dict[str, Any] = {"published": signal_ts}
     if signal_ts and "T" in str(signal_ts):
-        # Parse hour to determine market session
         try:
-            hour = int(signal_ts.split("T")[1][:2])
-            if source == "ema":
-                # CET times: convert to ET rough estimate (CET - 6)
-                et_hour = hour - 6
-                if et_hour < 0:
-                    et_hour += 24
-            else:
-                et_hour = hour  # Edgar timestamps are already ET
+            from datetime import datetime
+            from zoneinfo import ZoneInfo
+
+            # Parse ISO-ish timestamp; strip trailing Z
+            ts_str = str(signal_ts).replace("Z", "+00:00")
+            dt = datetime.fromisoformat(ts_str)
+
+            # Source-specific source timezone. EMA publishes from Amsterdam
+            # (Europe/Amsterdam = CET/CEST with DST). Edgar publishes from
+            # Washington DC (America/New_York = ET with DST). If the
+            # timestamp is naive, attach the source zone; if it is already
+            # tz-aware (e.g. UTC), let the conversion handle it.
+            if dt.tzinfo is None:
+                if source == "ema":
+                    dt = dt.replace(tzinfo=ZoneInfo("Europe/Amsterdam"))
+                else:
+                    dt = dt.replace(tzinfo=ZoneInfo("America/New_York"))
+
+            et = dt.astimezone(ZoneInfo("America/New_York"))
+            et_hour = et.hour + et.minute / 60.0
 
             if et_hour < 4:
                 timing["market_session"] = "overnight"
@@ -437,7 +448,8 @@ def _build_conviction_request_line(sig: Dict[str, Any], market_ctx: Dict[str, An
                 timing["market_session"] = "market_hours"
             else:
                 timing["market_session"] = "after_hours"
-            timing["approximate_et_hour"] = et_hour
+            timing["et_hour"] = round(et_hour, 2)
+            timing["et_timestamp"] = et.isoformat()
         except Exception:
             pass
 
@@ -575,6 +587,7 @@ async def cmd_submit_conviction():
         """SELECT * FROM backtest_signals
            WHERE llm_action = 'trade' AND sentry1_pass = 1
            AND llm_confidence IS NOT NULL
+           AND llm_confidence >= 80
            AND conviction_score IS NULL
            AND ticker NOT LIKE 'UNKNOWN_%'"""
     )

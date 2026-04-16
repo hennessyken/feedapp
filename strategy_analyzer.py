@@ -908,7 +908,23 @@ class StrategyOptimizer:
             and s.get("llm_action") == "trade"
             and (s.get("llm_impact_score") or 0) >= 60
             and s.get("llm_polarity") in ("positive", None)  # positive or unset
+            # Long-only simulator: exclude bearish conviction to avoid flipping
+            # a "down" signal into a losing long. NULL/up/neutral are kept.
+            and s.get("conviction_direction") != "down"
         ]
+        _dropped_down = sum(
+            1 for s in llm_scored
+            if s.get("sentry1_pass")
+            and s.get("llm_action") == "trade"
+            and (s.get("llm_impact_score") or 0) >= 60
+            and s.get("llm_polarity") in ("positive", None)
+            and s.get("conviction_direction") == "down"
+        )
+        if _dropped_down:
+            logger.info(
+                "Excluded %d bearish-conviction signals (long-only simulator)",
+                _dropped_down,
+            )
 
         if not base_signals:
             # Fallback: use all sentry1-pass signals if no LLM trade signals
@@ -1567,17 +1583,13 @@ class SignalClassifier:
                 "n_signals": len(records),
             }
 
-        X_num = df[num_feats].fillna(0).values
-        cat_data = df[cat_feats].fillna("UNKNOWN").astype(str)
-        encoder = OneHotEncoder(sparse_output=False, handle_unknown="ignore")
-        X_cat = encoder.fit_transform(cat_data)
-        X = np.hstack([X_num, X_cat])
-
-        cat_names = []
-        for feat, cats in zip(cat_feats, encoder.categories_):
-            for c in cats:
-                cat_names.append(f"{feat}={c}")
-        feature_names = num_feats + cat_names
+        # Note: we deliberately DO NOT fit the OneHotEncoder on the full dataset
+        # here — doing so leaks test-fold category information (and column
+        # layout) into training folds. The encoder is fit per-walk-forward
+        # fold below, and a separate encoder is fit on all data at the very
+        # end solely for the deployed model.
+        X_num_all = df[num_feats].fillna(0).values
+        cat_data_all = df[cat_feats].fillna("UNKNOWN").astype(str)
 
         n = len(records)
         min_train = max(int(n * 0.4), self._min_segment_samples)
@@ -1628,7 +1640,17 @@ class SignalClassifier:
             train_idx = np.arange(0, test_start)
             test_idx = np.arange(test_start, test_end)
 
-            X_train, X_test = X[train_idx], X[test_idx]
+            # Fit encoder ONLY on this fold's training rows to prevent
+            # leakage of test-fold categories into training features.
+            fold_encoder = OneHotEncoder(
+                sparse_output=False, handle_unknown="ignore",
+            )
+            fold_encoder.fit(cat_data_all.iloc[train_idx])
+            X_cat_train = fold_encoder.transform(cat_data_all.iloc[train_idx])
+            X_cat_test = fold_encoder.transform(cat_data_all.iloc[test_idx])
+            X_train = np.hstack([X_num_all[train_idx], X_cat_train])
+            X_test = np.hstack([X_num_all[test_idx], X_cat_test])
+
             y_train_cls = labels[train_idx]
             y_train_reg = returns_arr[train_idx]
             y_test_cls = labels[test_idx]
@@ -1744,6 +1766,19 @@ class SignalClassifier:
         reg_r2 = float(r2_score(oos_returns, oos_ret_preds))
 
         # ── Train final models on ALL data for live scoring ──
+        # A fresh encoder is fit on the full dataset here (deployment only).
+        # This is not used to compute any OOS metric above — those used
+        # per-fold encoders to avoid leakage.
+        encoder = OneHotEncoder(sparse_output=False, handle_unknown="ignore")
+        X_cat_full = encoder.fit_transform(cat_data_all)
+        X = np.hstack([X_num_all, X_cat_full])
+
+        cat_names = []
+        for feat, cats in zip(cat_feats, encoder.categories_):
+            for c in cats:
+                cat_names.append(f"{feat}={c}")
+        feature_names = num_feats + cat_names
+
         sample_weights = np.abs(returns_arr) + 0.1
         sample_weights = sample_weights / sample_weights.mean()
 
