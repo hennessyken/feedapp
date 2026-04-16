@@ -97,8 +97,8 @@ class DataCollector:
             ("S-4",     ""),
             ("SC TO-T", ""),
             ("CB",      ""),
-            ("6-K",     '"definitive agreement" OR "tender offer"'),
-            ("8-K",     '"Item 1.01" OR "Item 2.01" OR "Item 2.05" OR "Item 4.02" OR "Item 5.01"'),
+            # 6-K removed: duplicates EMA coverage with worse data quality
+            # 8-K removed: titles too generic for LLM scoring without full text
         ]
         self._screener = KeywordScreener()
         self._scorer = DeterministicEventScorer()
@@ -143,6 +143,7 @@ class DataCollector:
             edgar_pre = stats["fetched"]
             for form_type, efts_query in self._edgar_forms:
                 form_hits_total = 0
+                pending_enrich: List[FeedResult] = []  # M&A forms needing text
                 q_label = f' q="{efts_query}"' if efts_query else ""
                 logger.info("  EDGAR scanning %s%s ...", form_type, q_label)
                 for i, (cs, ce) in enumerate(chunks):
@@ -175,10 +176,22 @@ class DataCollector:
                                 if item:
                                     form_hits_total += 1
                                     stats["fetched"] += 1
-                                    await self._screen_and_store(item, stats)
+                                    meta = item.metadata or {}
+                                    if meta.get("needs_full_text"):
+                                        pending_enrich.append(item)
+                                    else:
+                                        await self._screen_and_store(item, stats)
                     except Exception as e:
                         logger.warning("EDGAR %s chunk %s–%s failed: %s", form_type, cs, ce, e)
                     await asyncio.sleep(0.1)
+
+                # Enrich M&A forms with full filing text, then store
+                if pending_enrich:
+                    logger.info("  Downloading full text for %d %s filings...", len(pending_enrich), form_type)
+                    enriched = await adapter.enrich_with_filing_text(pending_enrich)
+                    for item in enriched:
+                        await self._screen_and_store(item, stats)
+
                 logger.info("  EDGAR %s: %d filings", form_type, form_hits_total)
             edgar_total = stats["fetched"] - edgar_pre
             logger.info("EDGAR total: %d filings fetched", edgar_total)
@@ -232,6 +245,27 @@ class DataCollector:
         )
         return stats
 
+    # Pharma title keywords — only store documents containing material signals.
+    # This gates storage for ema/fda/clinical_trials to keep volume manageable
+    # when fetching all companies (not just watchlist).
+    _PHARMA_MATERIAL_KW = {
+        "approv", "authoris", "authoriz", "granted", "clearance",
+        "reject", "refus", "withdraw", "revok", "suspend", "denied",
+        "complete response", "not approved",
+        "results", "endpoint", "efficacy", "topline",
+        "phase 3", "phase 2", "phase ii", "phase iii", "pivotal",
+        "primary endpoint", "met its", "overall survival",
+        "progression-free", "response rate",
+        "positive", "negative", "failed", "success",
+        "safety", "black box", "warning", "recall", "adverse",
+        "breakthrough", "fast track", "priority review", "orphan",
+        "accelerated", "conditional approval",
+        "acquisition", "merger", "collaboration", "license agree",
+        "biosimilar", "patent", "first-in-class", "new indication",
+        "label expan", "supplemental", "designation",
+    }
+    _PHARMA_SOURCES_SET = {"ema", "fda", "clinical_trials"}
+
     async def _screen_and_store(
         self, item: FeedResult, stats: Dict[str, int],
     ) -> None:
@@ -240,11 +274,22 @@ class DataCollector:
         All sources accept every doc with a resolvable ticker — the form type
         itself is the filter (high-signal EDGAR forms, pharma-only feeds).
         Keyword screening still runs for metadata but does not gate storage.
+        Pharma sources are also gated by title keywords to control volume.
         """
         # Skip if already in DB
         if await self._db.backtest_signal_exists(item.item_id):
             stats["skipped_cached"] += 1
             return
+
+        # Pharma title keyword gate — drop routine/admin docs early
+        if item.feed_source in self._PHARMA_SOURCES_SET:
+            title_lower = (item.title or "").lower()
+            snippet_lower = (item.content_snippet or "").lower()
+            text = title_lower + " " + snippet_lower
+            if not any(kw in text for kw in self._PHARMA_MATERIAL_KW):
+                stats.setdefault("skipped_pharma_keyword", 0)
+                stats["skipped_pharma_keyword"] = stats.get("skipped_pharma_keyword", 0) + 1
+                return
 
         screen = self._screener.screen(item.title, item.content_snippet or "")
         stats["screened"] += 1
@@ -291,6 +336,13 @@ class DataCollector:
         polarity = _classify_polarity(event_type)
         impact_class = _classify_impact(scoring.impact_score)
 
+        # For enriched EDGAR filings (DEFM14A, S-4, SC TO-T), store the
+        # filing text in the title field so the batch scorer sends it to
+        # the LLM. Title is used as the excerpt for Sentry-1 and Ranker.
+        store_title = item.title
+        if item.content_snippet and len(item.content_snippet) > len(item.title) + 50:
+            store_title = f"{item.title}\n\n{item.content_snippet}"
+
         await self._db.upsert_backtest_signal(
             item_id=item.item_id,
             ticker=ticker,
@@ -304,7 +356,7 @@ class DataCollector:
             confidence=scoring.confidence,
             impact_score=scoring.impact_score,
             action=str(scoring.action),
-            title=item.title,
+            title=store_title,
             url=item.url,
             matched_keywords=screen.matched_keywords,
         )
@@ -580,6 +632,9 @@ class LLMScorer:
                     "numeric_terms": extraction.numeric_terms,
                     "risk_flags": extraction.risk_flags,
                     "evidence_spans": extraction.evidence_spans,
+                    "magnitude": getattr(extraction, "magnitude", "moderate"),
+                    "novelty": getattr(extraction, "novelty", "first_disclosure"),
+                    "certainty": getattr(extraction, "certainty", "confirmed"),
                 },
                 doc_source=source,
                 freshness_mult=1.0,
@@ -843,169 +898,231 @@ class StrategyOptimizer:
 
         logger.info("Loaded prices for %d tickers", len(prices_cache))
 
-        # Build filter subsets
-        filter_groups: Dict[str, List[Dict]] = {"all": signals}
-
-        # By source
-        for sig in signals:
-            key = f"source={sig['source']}"
-            filter_groups.setdefault(key, []).append(sig)
-
-        # By event_type
-        for sig in signals:
-            key = f"event_type={sig['event_type']}"
-            filter_groups.setdefault(key, []).append(sig)
-
-        # By polarity
-        for sig in signals:
-            key = f"polarity={sig['polarity']}"
-            filter_groups.setdefault(key, []).append(sig)
-
-        # By impact_class
-        for sig in signals:
-            if sig.get("impact_class"):
-                key = f"impact={sig['impact_class']}"
-                filter_groups.setdefault(key, []).append(sig)
-
-        # By min keyword score thresholds
-        for threshold in MIN_KEYWORD_SCORES:
-            filtered = [s for s in signals if (s.get("keyword_score") or 0) >= threshold]
-            if filtered:
-                filter_groups[f"kw_score>={threshold}"] = filtered
-
-        # ── LLM-based filters (only if LLM scoring has been run) ─────
+        # ── Build BASE signal set: LLM high-quality signals ─────────
+        # Start from LLM-vetted signals (high impact, positive, trade action)
+        # as the base, then vary metadata dimensions on top.
         llm_scored = [s for s in signals if s.get("llm_scored")]
-        if llm_scored:
-            filter_groups["llm_scored"] = llm_scored
+        base_signals = [
+            s for s in llm_scored
+            if s.get("sentry1_pass")
+            and s.get("llm_action") == "trade"
+            and (s.get("llm_impact_score") or 0) >= 60
+            and s.get("llm_polarity") in ("positive", None)  # positive or unset
+        ]
 
-            # Sentry-1 passed vs rejected
-            s1_pass = [s for s in llm_scored if s.get("sentry1_pass")]
-            s1_fail = [s for s in llm_scored if not s.get("sentry1_pass")]
-            if s1_pass:
-                filter_groups["sentry1=pass"] = s1_pass
-            if s1_fail:
-                filter_groups["sentry1=fail"] = s1_fail
+        if not base_signals:
+            # Fallback: use all sentry1-pass signals if no LLM trade signals
+            base_signals = [s for s in llm_scored if s.get("sentry1_pass")]
+        if not base_signals:
+            base_signals = signals  # ultimate fallback
 
-            # By LLM event type
-            for sig in llm_scored:
-                et = sig.get("llm_event_type")
-                if et:
-                    key = f"llm_event={et}"
-                    filter_groups.setdefault(key, []).append(sig)
+        logger.info(
+            "Base signal set: %d signals (from %d total, %d LLM-scored)",
+            len(base_signals), len(signals), len(llm_scored),
+        )
 
-            # By LLM polarity
-            for sig in llm_scored:
-                pol = sig.get("llm_polarity")
-                if pol:
-                    key = f"llm_polarity={pol}"
-                    filter_groups.setdefault(key, []).append(sig)
+        # Build filter subsets — all built on top of the LLM base
+        filter_groups: Dict[str, List[Dict]] = {"base_all": base_signals}
 
-            # By LLM action
-            for sig in llm_scored:
-                act = sig.get("llm_action")
-                if act:
-                    key = f"llm_action={act}"
-                    filter_groups.setdefault(key, []).append(sig)
+        # Also keep the unfiltered "all" for benchmark comparison
+        filter_groups["all_unfiltered"] = signals
 
-            # By LLM confidence buckets
-            for sig in llm_scored:
-                conf = sig.get("llm_confidence")
-                if conf is not None:
-                    if conf >= 80:
-                        filter_groups.setdefault("llm_conf>=80", []).append(sig)
-                    if conf >= 70:
-                        filter_groups.setdefault("llm_conf>=70", []).append(sig)
-                    if conf >= 60:
-                        filter_groups.setdefault("llm_conf>=60", []).append(sig)
-
-            # By LLM impact score buckets
-            for sig in llm_scored:
-                imp = sig.get("llm_impact_score")
-                if imp is not None:
-                    if imp >= 80:
-                        filter_groups.setdefault("llm_impact>=80", []).append(sig)
-                    if imp >= 60:
-                        filter_groups.setdefault("llm_impact>=60", []).append(sig)
-
-            # Combined: sentry1 pass + high confidence
-            high_conv = [
-                s for s in s1_pass
-                if (s.get("llm_confidence") or 0) >= 70
-                and (s.get("llm_impact_score") or 0) >= 60
-            ]
-            if high_conv:
-                filter_groups["llm_high_conviction"] = high_conv
-
-            # Keyword agrees with LLM
-            kw_llm_agree = [
-                s for s in llm_scored
-                if s.get("llm_polarity") and s.get("polarity")
-                and s["llm_polarity"] == s["polarity"]
-            ]
-            if kw_llm_agree:
-                filter_groups["kw_llm_agree"] = kw_llm_agree
-
-        # ── Fundamental-based filters (if ticker_fundamentals table exists) ─────
+        # ── Load fundamentals early (needed for multiple filters below) ──
+        fund_map: Dict[str, Dict[str, Any]] = {}
         try:
             fund_rows = await self._db._db.execute_fetchall(
                 "SELECT ticker, sector, industry, cap_bucket, avg_volume, beta "
                 "FROM ticker_fundamentals WHERE sector != ''"
             )
-            fund_map: Dict[str, Dict[str, Any]] = {}
             for r in fund_rows:
                 fund_map[r[0]] = {
                     "sector": r[1], "industry": r[2],
                     "cap_bucket": r[3], "avg_volume": r[4], "beta": r[5],
                 }
-
             if fund_map:
                 logger.info("Loaded fundamentals for %d tickers", len(fund_map))
-
-                # By sector
-                for sig in signals:
-                    f = fund_map.get(sig["ticker"])
-                    if f and f["sector"]:
-                        key = f"sector={f['sector']}"
-                        filter_groups.setdefault(key, []).append(sig)
-
-                # By cap bucket
-                for sig in signals:
-                    f = fund_map.get(sig["ticker"])
-                    if f and f["cap_bucket"] and f["cap_bucket"] != "unknown":
-                        key = f"cap={f['cap_bucket']}"
-                        filter_groups.setdefault(key, []).append(sig)
-
-                # By volume bucket
-                for sig in signals:
-                    f = fund_map.get(sig["ticker"])
-                    if f and f["avg_volume"]:
-                        if f["avg_volume"] < 500_000:
-                            filter_groups.setdefault("volume=low", []).append(sig)
-                        elif f["avg_volume"] < 5_000_000:
-                            filter_groups.setdefault("volume=medium", []).append(sig)
-                        else:
-                            filter_groups.setdefault("volume=high", []).append(sig)
-
-                # Combined: M&A + small cap
-                ma_small = [
-                    s for s in signals
-                    if s.get("llm_event_type") == "M_A"
-                    and fund_map.get(s["ticker"], {}).get("cap_bucket") in ("micro", "small")
-                ]
-                if ma_small:
-                    filter_groups["M_A+small_cap"] = ma_small
-
-                # Combined: clinical trial + biotech sector
-                ct_biotech = [
-                    s for s in signals
-                    if s.get("llm_event_type") in ("CLINICAL_TRIAL", "REGULATORY_DECISION")
-                    and "biotech" in fund_map.get(s["ticker"], {}).get("industry", "").lower()
-                ]
-                if ct_biotech:
-                    filter_groups["pharma_event+biotech"] = ct_biotech
-
         except Exception as e:
             logger.info("No fundamentals data available: %s", e)
+
+        # ── Metadata filters on the base set ─────────────────────────
+
+        # By source
+        for sig in base_signals:
+            key = f"source={sig['source']}"
+            filter_groups.setdefault(key, []).append(sig)
+
+        # By event_type (keyword-based)
+        for sig in base_signals:
+            key = f"event_type={sig['event_type']}"
+            filter_groups.setdefault(key, []).append(sig)
+
+        # By LLM event type
+        for sig in base_signals:
+            et = sig.get("llm_event_type")
+            if et:
+                key = f"llm_event={et}"
+                filter_groups.setdefault(key, []).append(sig)
+
+        # By polarity
+        for sig in base_signals:
+            key = f"polarity={sig['polarity']}"
+            filter_groups.setdefault(key, []).append(sig)
+
+        # By impact_class
+        for sig in base_signals:
+            if sig.get("impact_class"):
+                key = f"impact={sig['impact_class']}"
+                filter_groups.setdefault(key, []).append(sig)
+
+        # By LLM confidence buckets
+        for sig in base_signals:
+            conf = sig.get("llm_confidence")
+            if conf is not None:
+                if conf >= 80:
+                    filter_groups.setdefault("llm_conf>=80", []).append(sig)
+                if conf >= 75:
+                    filter_groups.setdefault("llm_conf>=75", []).append(sig)
+                if conf >= 70:
+                    filter_groups.setdefault("llm_conf>=70", []).append(sig)
+                if conf >= 60:
+                    filter_groups.setdefault("llm_conf>=60", []).append(sig)
+
+        # By LLM impact score buckets
+        for sig in base_signals:
+            imp = sig.get("llm_impact_score")
+            if imp is not None:
+                if imp >= 80:
+                    filter_groups.setdefault("llm_impact>=80", []).append(sig)
+                if imp >= 70:
+                    filter_groups.setdefault("llm_impact>=70", []).append(sig)
+                if imp >= 60:
+                    filter_groups.setdefault("llm_impact>=60", []).append(sig)
+
+        # By sector
+        for sig in base_signals:
+            f = fund_map.get(sig["ticker"])
+            if f and f["sector"]:
+                key = f"sector={f['sector']}"
+                filter_groups.setdefault(key, []).append(sig)
+
+        # By cap bucket
+        for sig in base_signals:
+            f = fund_map.get(sig["ticker"])
+            if f and f["cap_bucket"] and f["cap_bucket"] != "unknown":
+                key = f"cap={f['cap_bucket']}"
+                filter_groups.setdefault(key, []).append(sig)
+
+        # By volume bucket
+        for sig in base_signals:
+            f = fund_map.get(sig["ticker"])
+            if f and f["avg_volume"]:
+                if f["avg_volume"] < 500_000:
+                    filter_groups.setdefault("volume=low", []).append(sig)
+                elif f["avg_volume"] < 5_000_000:
+                    filter_groups.setdefault("volume=medium", []).append(sig)
+                else:
+                    filter_groups.setdefault("volume=high", []).append(sig)
+
+        # ── Combined filters on base ─────────────────────────────────
+
+        # Pharma event + biotech
+        ct_biotech = [
+            s for s in base_signals
+            if s.get("llm_event_type") in ("CLINICAL_TRIAL", "REGULATORY_DECISION")
+            and "biotech" in fund_map.get(s["ticker"], {}).get("industry", "").lower()
+        ]
+        if ct_biotech:
+            filter_groups["pharma_event+biotech"] = ct_biotech
+
+        # M&A + small/micro cap
+        ma_small = [
+            s for s in base_signals
+            if s.get("llm_event_type") == "M_A"
+            and fund_map.get(s["ticker"], {}).get("cap_bucket") in ("micro", "small")
+        ]
+        if ma_small:
+            filter_groups["M_A+small_cap"] = ma_small
+
+        # Mega cap only
+        mega = [
+            s for s in base_signals
+            if fund_map.get(s["ticker"], {}).get("cap_bucket") == "mega"
+        ]
+        if mega:
+            filter_groups["cap=mega"] = mega
+
+        # Large + mega
+        large_mega = [
+            s for s in base_signals
+            if fund_map.get(s["ticker"], {}).get("cap_bucket") in ("large", "mega")
+        ]
+        if large_mega:
+            filter_groups["cap=large+mega"] = large_mega
+
+        # EMA regulatory decisions
+        ema_reg = [
+            s for s in base_signals
+            if s.get("source") == "ema"
+            and s.get("llm_event_type") == "REGULATORY_DECISION"
+        ]
+        if ema_reg:
+            filter_groups["ema+regulatory"] = ema_reg
+
+        # Clinical trials with results
+        ct_results = [
+            s for s in base_signals
+            if s.get("source") == "clinical_trials"
+            and s.get("llm_event_type") == "CLINICAL_TRIAL"
+        ]
+        if ct_results:
+            filter_groups["clinical_trial_results"] = ct_results
+
+        # High conviction: conf>=75 AND impact>=75
+        high_conv = [
+            s for s in base_signals
+            if (s.get("llm_confidence") or 0) >= 75
+            and (s.get("llm_impact_score") or 0) >= 75
+        ]
+        if high_conv:
+            filter_groups["llm_high_conviction"] = high_conv
+
+        # Keyword agrees with LLM
+        kw_llm_agree = [
+            s for s in base_signals
+            if s.get("llm_polarity") and s.get("polarity")
+            and s["llm_polarity"] == s["polarity"]
+        ]
+        if kw_llm_agree:
+            filter_groups["kw_llm_agree"] = kw_llm_agree
+
+        # ── Cross every filter with confidence/impact thresholds ─────
+        # Each filter group is tested at multiple LLM score thresholds
+        # so we can find the optimal quality gate for each strategy.
+        CONF_THRESHOLDS = [0, 60, 65, 70, 75, 80]   # 0 = no filter
+        IMPACT_THRESHOLDS = [0, 60, 65, 70, 75, 80]  # 0 = no filter
+
+        expanded_groups: Dict[str, List[Dict]] = {}
+        for filter_name, filter_signals in filter_groups.items():
+            for conf_t in CONF_THRESHOLDS:
+                for imp_t in IMPACT_THRESHOLDS:
+                    if conf_t == 0 and imp_t == 0:
+                        # No threshold — use the raw filter group
+                        expanded_groups[filter_name] = filter_signals
+                    else:
+                        subset = [
+                            s for s in filter_signals
+                            if (conf_t == 0 or (s.get("llm_confidence") or 0) >= conf_t)
+                            and (imp_t == 0 or (s.get("llm_impact_score") or 0) >= imp_t)
+                        ]
+                        if subset:
+                            parts = [filter_name]
+                            if conf_t > 0:
+                                parts.append(f"conf>={conf_t}")
+                            if imp_t > 0:
+                                parts.append(f"imp>={imp_t}")
+                            expanded_groups["+".join(parts)] = subset
+
+        filter_groups = expanded_groups
 
         # Pre-compute all trade results once (biggest speedup)
         # Build signal index map: each signal gets a stable index
@@ -1424,7 +1541,7 @@ class SignalClassifier:
             roc_auc_score, mean_absolute_error, mean_squared_error, r2_score,
         )
         from sklearn.preprocessing import OneHotEncoder
-        import xgboost as xgb
+        import lightgbm as lgb
 
         num_feats = list(self.NUMERIC_FEATURES)
         cat_feats = list(self.CATEGORICAL_FEATURES)
@@ -1496,7 +1613,11 @@ class SignalClassifier:
             }
 
         # ── Walk-forward evaluation ──
+        from sklearn.linear_model import LogisticRegression
+        from sklearn.preprocessing import StandardScaler
+
         oos_clf_probs = np.full(n, np.nan)
+        oos_lr_probs = np.full(n, np.nan)       # logistic regression
         oos_reg_preds = np.full(n, np.nan)
         window_reports = []
 
@@ -1520,19 +1641,32 @@ class SignalClassifier:
             max_depth = 3 if len(train_idx) < 100 else 4
             mcw = max(2, len(train_idx) // 50)
 
-            clf = xgb.XGBClassifier(
+            # LightGBM classifier
+            clf = lgb.LGBMClassifier(
                 n_estimators=150, max_depth=max_depth,
                 learning_rate=0.05, subsample=0.8, colsample_bytree=0.8,
-                min_child_weight=mcw, eval_metric="logloss", random_state=42,
+                min_child_samples=mcw, random_state=42, verbose=-1,
             )
             clf.fit(X_train, y_train_cls, sample_weight=sw_train)
             test_probs = clf.predict_proba(X_test)[:, 1]
             oos_clf_probs[test_idx] = test_probs
 
-            reg = xgb.XGBRegressor(
+            # Logistic regression (scaled features)
+            scaler = StandardScaler()
+            X_train_scaled = scaler.fit_transform(X_train)
+            X_test_scaled = scaler.transform(X_test)
+            lr = LogisticRegression(
+                max_iter=1000, C=1.0, class_weight="balanced", random_state=42,
+            )
+            lr.fit(X_train_scaled, y_train_cls, sample_weight=sw_train)
+            lr_test_probs = lr.predict_proba(X_test_scaled)[:, 1]
+            oos_lr_probs[test_idx] = lr_test_probs
+
+            # LightGBM regressor
+            reg = lgb.LGBMRegressor(
                 n_estimators=150, max_depth=max_depth,
                 learning_rate=0.05, subsample=0.8, colsample_bytree=0.8,
-                min_child_weight=mcw, eval_metric="rmse", random_state=42,
+                min_child_samples=mcw, random_state=42, verbose=-1,
             )
             reg.fit(X_train, y_train_reg, sample_weight=sw_train)
             test_ret_preds = reg.predict(X_test)
@@ -1544,6 +1678,10 @@ class SignalClassifier:
                 w_auc = roc_auc_score(y_test_cls, test_probs)
             except ValueError:
                 w_auc = 0.0
+            try:
+                w_lr_auc = roc_auc_score(y_test_cls, lr_test_probs)
+            except ValueError:
+                w_lr_auc = 0.0
             w_mae = float(mean_absolute_error(y_test_ret, test_ret_preds))
 
             window_reports.append({
@@ -1552,8 +1690,9 @@ class SignalClassifier:
                 "test_size": len(test_idx),
                 "train_dates": f"{dates_arr[train_idx[0]]} to {dates_arr[train_idx[-1]]}",
                 "test_dates": f"{dates_arr[test_idx[0]]} to {dates_arr[test_idx[-1]]}",
-                "accuracy": round(w_acc, 4),
-                "auc_roc": round(w_auc, 4),
+                "xgb_accuracy": round(w_acc, 4),
+                "xgb_auc_roc": round(w_auc, 4),
+                "lr_auc_roc": round(w_lr_auc, 4),
                 "reg_mae": round(w_mae, 4),
             })
 
@@ -1584,6 +1723,22 @@ class SignalClassifier:
         except ValueError:
             auc = 0.0
 
+        # Logistic regression aggregate metrics
+        lr_scored_mask = ~np.isnan(oos_lr_probs)
+        lr_auc = 0.0
+        lr_acc = 0.0
+        lr_f1_val = 0.0
+        if lr_scored_mask.sum() >= 5:
+            lr_oos_probs = oos_lr_probs[lr_scored_mask]
+            lr_oos_labels = labels[lr_scored_mask]
+            lr_oos_preds = (lr_oos_probs >= 0.5).astype(int)
+            lr_acc = accuracy_score(lr_oos_labels, lr_oos_preds)
+            lr_f1_val = f1_score(lr_oos_labels, lr_oos_preds, zero_division=0)
+            try:
+                lr_auc = roc_auc_score(lr_oos_labels, lr_oos_probs)
+            except ValueError:
+                lr_auc = 0.0
+
         reg_mae = float(mean_absolute_error(oos_returns, oos_ret_preds))
         reg_rmse = float(mean_squared_error(oos_returns, oos_ret_preds) ** 0.5)
         reg_r2 = float(r2_score(oos_returns, oos_ret_preds))
@@ -1592,19 +1747,19 @@ class SignalClassifier:
         sample_weights = np.abs(returns_arr) + 0.1
         sample_weights = sample_weights / sample_weights.mean()
 
-        clf_model = xgb.XGBClassifier(
+        clf_model = lgb.LGBMClassifier(
             n_estimators=150, max_depth=3 if n < 100 else 4,
             learning_rate=0.05, subsample=0.8, colsample_bytree=0.8,
-            min_child_weight=max(2, n // 50),
-            eval_metric="logloss", random_state=42,
+            min_child_samples=max(2, n // 50),
+            random_state=42, verbose=-1,
         )
         clf_model.fit(X, labels, sample_weight=sample_weights)
 
-        reg_model = xgb.XGBRegressor(
+        reg_model = lgb.LGBMRegressor(
             n_estimators=150, max_depth=3 if n < 100 else 4,
             learning_rate=0.05, subsample=0.8, colsample_bytree=0.8,
-            min_child_weight=max(2, n // 50),
-            eval_metric="rmse", random_state=42,
+            min_child_samples=max(2, n // 50),
+            random_state=42, verbose=-1,
         )
         reg_model.fit(X, returns_arr, sample_weight=sample_weights)
 
@@ -1712,6 +1867,10 @@ class SignalClassifier:
             "cv_recall": round(rec, 4),
             "cv_f1": round(f1, 4),
             "cv_auc_roc": round(auc, 4),
+            # Logistic regression metrics (out-of-sample)
+            "lr_accuracy": round(lr_acc, 4),
+            "lr_f1": round(lr_f1_val, 4),
+            "lr_auc_roc": round(lr_auc, 4),
             "clf_feature_importance": [
                 {"feature": f, "importance": round(float(imp), 4)}
                 for f, imp in clf_feat_imp[:15]

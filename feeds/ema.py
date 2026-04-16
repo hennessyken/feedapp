@@ -73,14 +73,22 @@ _MAH_TICKERS: Dict[str, str] = {
 
 
 def _lookup_mah_ticker(mah: str) -> str:
-    """Best-effort MAH → US ticker lookup."""
+    """Best-effort MAH → US ticker lookup.
+
+    Returns known ticker if in the dictionary, otherwise returns the MAH
+    name uppercased as a placeholder so the signal is not dropped.
+    Signals with placeholder tickers won't have price data for backtesting
+    but will still flow through Sentry-1 and Ranker scoring.
+    """
     if not mah:
         return ""
     m = mah.lower().strip()
     for key, ticker in _MAH_TICKERS.items():
         if key in m:
             return ticker if ticker != "PRIVATE" else ""
-    return ""
+    # Return MAH name as placeholder — don't drop unknown companies
+    placeholder = m.replace(" ", "_").upper()[:20]
+    return f"UNKNOWN_{placeholder}" if placeholder else ""
 
 
 class EmaFeedAdapter(BaseFeedAdapter):

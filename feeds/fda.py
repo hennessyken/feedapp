@@ -81,7 +81,11 @@ _PHARMA_TICKERS: Dict[str, str] = {
 
 
 def _lookup_ticker(manufacturer: str) -> str:
-    """Best-effort manufacturer → ticker lookup."""
+    """Best-effort manufacturer → ticker lookup.
+
+    Returns known ticker if in the dictionary, otherwise returns the
+    manufacturer name as a placeholder so the signal is not dropped.
+    """
     if not manufacturer:
         return ""
     m = manufacturer.lower().strip()
@@ -92,7 +96,9 @@ def _lookup_ticker(manufacturer: str) -> str:
     for key, ticker in _PHARMA_TICKERS.items():
         if m.startswith(key) or key.startswith(m):
             return ticker
-    return ""
+    # Return manufacturer name as placeholder — don't drop unknown companies
+    placeholder = m.replace(" ", "_").upper()[:20]
+    return f"UNKNOWN_{placeholder}" if placeholder else ""
 
 
 class FdaFeedAdapter(BaseFeedAdapter):

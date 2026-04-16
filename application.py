@@ -118,6 +118,9 @@ class RankerResult:
     evidence_spans: List[Dict[str, str]]
     raw: str
     decision_id: str
+    magnitude: str = "moderate"       # major | moderate | minor
+    novelty: str = "first_disclosure" # first_disclosure | update | routine
+    certainty: str = "confirmed"      # confirmed | expected | speculative
 
 
 @dataclass(frozen=True)
@@ -878,6 +881,9 @@ class RunRegulatorySignalScanUseCase:
                                 "risk_flags": extraction.risk_flags,
                                 "label_analysis": getattr(extraction, "label_analysis", {}),
                                 "evidence_spans": extraction.evidence_spans,
+                                "magnitude": getattr(extraction, "magnitude", "moderate"),
+                                "novelty": getattr(extraction, "novelty", "first_disclosure"),
+                                "certainty": getattr(extraction, "certainty", "confirmed"),
                             },
                             doc_source=doc.source,
                             freshness_mult=freshness_mult,

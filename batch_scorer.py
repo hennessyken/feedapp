@@ -46,6 +46,7 @@ DB_PATH = os.getenv("DB_PATH", "feedapp.db")
 OPENAI_API_KEY = (os.getenv("OPENAI_API_KEY") or "").strip()
 SENTRY1_MODEL = (os.getenv("SENTRY1_MODEL") or "gpt-5-nano").strip()
 RANKER_MODEL = (os.getenv("RANKER_MODEL") or "gpt-5-mini").strip()
+CONVICTION_MODEL = (os.getenv("CONVICTION_MODEL") or "gpt-5.4").strip()
 BATCH_DIR = Path("batch_jobs")
 BATCH_DIR.mkdir(exist_ok=True)
 
@@ -95,14 +96,55 @@ async def _send_telegram(message: str) -> bool:
 # ── Build JSONL for Sentry-1 batch ──
 
 def _build_sentry1_request_line(sig: Dict[str, Any]) -> Dict[str, Any]:
-    """Build one Batch API request line for Sentry-1."""
+    """Build one Batch API request line for Sentry-1.
+
+    For EMA unknown tickers: repurposed as ticker resolver.
+    Edgar signals skip Sentry-1 entirely (handled in cmd_submit_sentry1).
+    """
     ticker = sig["ticker"]
     company_name = sig.get("company_name") or ticker
     title = sig.get("title") or ""
     source = sig.get("source") or ""
-    excerpt = title[:3_000].strip()
+    excerpt = title[:6_000].strip()
 
+    # EMA with unknown ticker: resolve to US-traded ticker
+    if source == "ema" and ticker.startswith("UNKNOWN_"):
+        system_prompt = (
+            "You are a pharma company → US stock ticker resolver.\n\n"
+            "Given a European pharmaceutical company name from an EMA regulatory decision, "
+            "return the most liquid US-traded ticker symbol for the parent company.\n\n"
+            "Rules:\n"
+            "- Return the US-listed ADR or primary US ticker (NYSE/NASDAQ preferred over OTC)\n"
+            "- For subsidiaries, return the PARENT company ticker (e.g. Janssen → JNJ)\n"
+            "- If the company is private or has no US-traded stock, return null\n"
+            "- If unsure, return null\n"
+            "- Do NOT guess — only return tickers you are confident about"
+        )
+        user_prompt = (
+            f"Company: {company_name}\n"
+            f"Document: {title[:200]}\n\n"
+            "Return exactly this JSON:\n"
+            '{"us_ticker": "SYMBOL" or null, "parent_company": "name" or null, "exchange": "NYSE|NASDAQ|OTC" or null}'
+        )
+        body: Dict[str, Any] = {
+            "model": SENTRY1_MODEL,
+            "instructions": system_prompt,
+            "input": user_prompt,
+            "max_output_tokens": 60,
+        }
+        if SENTRY1_MODEL.startswith("gpt-5"):
+            body["reasoning"] = {"effort": "minimal"}
+
+        return {
+            "custom_id": sig["item_id"],
+            "method": "POST",
+            "url": "/v1/responses",
+            "body": body,
+        }
+
+    # Standard Sentry-1 gate (fallback for any other sources)
     system_prompt = _build_sentry1_prompt(doc_source=source, base_form_type="")
+    system_prompt += "\n\nIMPORTANT: Do NOT include a rationale field. Return only the 4 numeric/boolean fields."
 
     user_prompt = (
         f"Company: {company_name}\n"
@@ -112,38 +154,20 @@ def _build_sentry1_request_line(sig: Dict[str, Any]) -> Dict[str, Any]:
         f"Feed: {source}\n"
         f"Title: {title}\n"
         f"\nExcerpt:\n{excerpt}\n\n"
-        "Return exactly this JSON:\n"
+        "Return exactly this JSON (no rationale — batch mode):\n"
         '{\n'
         '  "company_match": true or false,\n'
         '  "company_probability": <integer 0-100>,\n'
         '  "price_moving": true or false,\n'
-        '  "price_probability": <integer 0-100>,\n'
-        '  "rationale": "<one sentence>"\n'
-        '}\n\n'
-        "company_probability guidance:\n"
-        f"- 90-100: {company_name} is the named filing entity\n"
-        f"- 70-89: Strong contextual link — subsidiary, brand, or product "
-        f"clearly tied to {company_name}\n"
-        "- 50-69: Plausible but ambiguous — name appears but could be a related entity\n"
-        "- <50: Primarily about a different company\n\n"
-        "price_probability guidance:\n"
-        "- 70-100: Explicit binary event — M&A, earnings surprise, profit warning, "
-        "guidance change, regulatory decision, CEO/CFO change, capital raise with "
-        "priced terms, going concern, restatement, dividend suspension/cut/initiation\n"
-        "- 40-69: Material but directionally uncertain — contract update, production "
-        "result, strategic review, ordinary dividend change\n"
-        "- <40: Routine operational update, scheduled filing, or administrative notice\n"
-        "- 0: company_match is false\n\n"
-        "If company_match is false, set price_probability to 0.\n"
-        "Non-English text: extract the trigger event if you can identify it; "
-        "otherwise be conservative."
+        '  "price_probability": <integer 0-100>\n'
+        '}\n'
     )
 
-    body: Dict[str, Any] = {
+    body = {
         "model": SENTRY1_MODEL,
         "instructions": system_prompt,
         "input": user_prompt,
-        "max_output_tokens": 120,
+        "max_output_tokens": 80,
     }
     if SENTRY1_MODEL.startswith("gpt-5"):
         body["reasoning"] = {"effort": "minimal"}
@@ -166,7 +190,12 @@ def _build_ranker_request_line(sig: Dict[str, Any]) -> Dict[str, Any]:
     source = sig.get("source") or ""
     url_val = sig.get("url") or ""
     excerpt = title[:12_000]
+    # Extract form type from title (e.g. "Company — DEFM14A" or "Company — S-4")
     form_type = ""
+    import re as _re
+    _ft_match = _re.search(r'—\s*(DEFM14A|S-4|SC TO-T|SC TO-T/A|CB|CB/A|8-K|6-K|10-K|10-Q)\b', title)
+    if _ft_match:
+        form_type = _ft_match.group(1)
     base_form_type = _normalize_form_type(form_type)
     form_family = _prompt_form_family(base_form_type)
 
@@ -204,15 +233,24 @@ def _build_ranker_request_line(sig: Dict[str, Any]) -> Dict[str, Any]:
         user_json = json.dumps(user_obj, ensure_ascii=False)
 
     system_prompt = _build_ranker_prompt(doc_source=source, base_form_type=base_form_type)
+    # Batch mode: skip evidence_spans to save tokens
+    system_prompt += "\n\nIMPORTANT: Do NOT include evidence_spans. Return only the core extraction fields and signal_assessment."
+
+    # EMA/pharma: nano + minimal (simple structured titles)
+    # Edgar M&A: mini + medium (dense legal text needs more reasoning)
+    is_pharma = _is_pharma_source(source)
+    model = SENTRY1_MODEL if is_pharma else RANKER_MODEL  # nano for pharma, mini for edgar
+    reasoning = "minimal" if is_pharma else "medium"
+    max_tokens = 300 if is_pharma else 500
 
     body: Dict[str, Any] = {
-        "model": RANKER_MODEL,
+        "model": model,
         "instructions": system_prompt,
         "input": user_json,
-        "max_output_tokens": 350,
+        "max_output_tokens": max_tokens,
     }
-    if RANKER_MODEL.startswith("gpt-5"):
-        body["reasoning"] = {"effort": "minimal"}
+    if model.startswith("gpt-5"):
+        body["reasoning"] = {"effort": reasoning}
 
     return {
         "custom_id": sig["item_id"],
@@ -220,6 +258,386 @@ def _build_ranker_request_line(sig: Dict[str, Any]) -> Dict[str, Any]:
         "url": "/v1/responses",
         "body": body,
     }
+
+
+# ── Conviction model: post-Ranker trade quality assessment ──
+
+CONVICTION_PROMPT = """You are a quantitative analyst assessing whether a specific corporate event will move a stock price >1% within 5 trading days.
+
+You will receive:
+1. Extracted event details from a regulatory filing or pharma decision
+2. Current market context for the company (price, volume, market cap, recent performance)
+
+Your task: estimate the probability (0-100) that this stock moves UP >1% within 5 trading days of this event.
+
+Scoring guidance:
+- 80-100: Very high conviction. Transformative event + stock hasn't fully reacted yet. Examples: major M&A target at significant premium, blockbuster first-in-class drug approval, hostile bid.
+- 60-79: High conviction. Material event with clear directional impact. Examples: important drug approval for meaningful revenue drug, acquisition with good premium, positive regulatory milestone.
+- 40-59: Moderate conviction. Material event but uncertain impact. Examples: expected approval already partially priced in, acquisition with unclear synergies, biosimilar/generic approval in competitive space.
+- 20-39: Low conviction. Minor event or already priced in. Examples: routine label update, expected deal completion, amendment to known transaction, generic approval for crowded market.
+- 0-19: Very low conviction. Non-event or negative signal. Examples: administrative update, routine renewal, event already reflected in recent price movement.
+
+Key factors to consider:
+- HAS THE STOCK ALREADY MOVED? If the price gapped up recently on this news, the opportunity is gone.
+- Is this event expected or a surprise? Expected events are priced in.
+- What's the event magnitude relative to company market cap?
+- Is the stock near highs (less upside) or beaten down (more room)?
+- Volume: is there unusual activity suggesting the market already knows?
+
+Output JSON only:
+{
+  "conviction": <integer 0-100>,
+  "direction": "up" | "down" | "neutral",
+  "expected_move_pct": <number — your best estimate of the % move>,
+  "time_horizon_days": <integer 1-20 — how many trading days for the move to play out>,
+  "already_priced_in": true | false,
+  "tradeable_window": "pre-market" | "open" | "missed"
+}
+
+tradeable_window guidance:
+- "pre-market": news published before US market open, stock hasn't reacted yet — can enter at open
+- "open": news published during market hours, stock may be moving but opportunity still exists
+- "missed": stock already gapped or moved significantly on this news — too late
+
+Rules:
+- Be skeptical. Most events don't move stocks >1%.
+- Recent price movement is the strongest signal of whether news is priced in.
+- If the stock already moved >1% in the same direction on the signal date, set already_priced_in=true and tradeable_window="missed".
+- expected_move_pct should be your honest estimate, not the best case. Negative for down moves.
+- No explanatory text — only the JSON fields above."""
+
+
+def _fetch_market_context(ticker: str, signal_date: str) -> Dict[str, Any]:
+    """Fetch market context for a ticker around a signal date using yfinance."""
+    import yfinance as yf
+
+    try:
+        stock = yf.Ticker(ticker)
+        info = stock.info or {}
+
+        # Get price history around signal date
+        from datetime import datetime, timedelta
+        sig_dt = datetime.strptime(signal_date[:10], "%Y-%m-%d")
+        start = (sig_dt - timedelta(days=60)).strftime("%Y-%m-%d")
+        end = (sig_dt + timedelta(days=5)).strftime("%Y-%m-%d")
+
+        hist = stock.history(start=start, end=end)
+        if hist.empty:
+            return {"error": "no_price_data"}
+
+        # Price on signal date (or closest prior)
+        hist.index = hist.index.tz_localize(None)
+        prior = hist[hist.index <= sig_dt.strftime("%Y-%m-%d")]
+        if prior.empty:
+            return {"error": "no_prior_prices"}
+
+        current_price = float(prior.iloc[-1]["Close"])
+
+        # Price changes
+        def pct_change(days_back):
+            target = sig_dt - timedelta(days=days_back)
+            older = hist[hist.index <= target.strftime("%Y-%m-%d")]
+            if older.empty:
+                return None
+            return round((current_price - float(older.iloc[-1]["Close"])) / float(older.iloc[-1]["Close"]) * 100, 2)
+
+        # 52-week range from history
+        year_hist = hist.tail(252) if len(hist) >= 252 else hist
+        high_52w = float(year_hist["High"].max()) if not year_hist.empty else None
+        low_52w = float(year_hist["Low"].min()) if not year_hist.empty else None
+
+        # Recent volume vs average
+        recent_vol = float(prior.tail(5)["Volume"].mean()) if len(prior) >= 5 else None
+        avg_vol = float(prior.tail(20)["Volume"].mean()) if len(prior) >= 20 else None
+
+        return {
+            "ticker": ticker,
+            "price": round(current_price, 2),
+            "market_cap_b": round(info.get("marketCap", 0) / 1e9, 1) if info.get("marketCap") else None,
+            "change_1d": pct_change(1),
+            "change_5d": pct_change(5),
+            "change_20d": pct_change(20),
+            "high_52w": round(high_52w, 2) if high_52w else None,
+            "low_52w": round(low_52w, 2) if low_52w else None,
+            "pct_from_52w_high": round((current_price - high_52w) / high_52w * 100, 1) if high_52w else None,
+            "recent_avg_volume": int(recent_vol) if recent_vol else None,
+            "avg_volume_20d": int(avg_vol) if avg_vol else None,
+            "volume_ratio": round(recent_vol / avg_vol, 2) if recent_vol and avg_vol and avg_vol > 0 else None,
+            "sector": info.get("sector"),
+            "industry": info.get("industry"),
+        }
+    except Exception as e:
+        return {"error": str(e)[:200]}
+
+
+def _build_conviction_request_line(sig: Dict[str, Any], market_ctx: Dict[str, Any]) -> Dict[str, Any]:
+    """Build one Batch API request line for conviction model.
+
+    Sends document text + factual extraction + market context.
+    Does NOT send Ranker's judgment scores (confidence, impact, action,
+    magnitude, novelty, certainty) — conviction model forms its own view.
+    """
+    ticker = sig["ticker"]
+    title = sig.get("title") or ""
+    source = sig.get("source") or ""
+
+    # ── Document text (what actually happened) ──
+    # Title contains enriched text for Edgar M&A and EMA metadata
+    doc_text = title[:4000]
+
+    # ── Factual extraction from Ranker (no opinions) ──
+    facts: Dict[str, Any] = {
+        "source": source,
+        "event_type": sig.get("llm_event_type") or sig.get("event_type"),
+    }
+
+    # Add pharma-specific facts
+    llm_risk_flags = sig.get("llm_risk_flags")
+    if llm_risk_flags:
+        try:
+            rf = json.loads(llm_risk_flags) if isinstance(llm_risk_flags, str) else llm_risk_flags
+            if isinstance(rf, dict):
+                facts["risk_flags"] = {k: v for k, v in rf.items() if v}
+        except Exception:
+            pass
+
+    # Add M&A deal terms if available
+    llm_numeric = sig.get("llm_numeric_terms")
+    if llm_numeric:
+        try:
+            nt = json.loads(llm_numeric) if isinstance(llm_numeric, str) else llm_numeric
+            if isinstance(nt, dict):
+                # Include non-null values only
+                non_null = {k: v for k, v in nt.items() if v is not None}
+                if non_null:
+                    facts["extracted_terms"] = non_null
+        except Exception:
+            pass
+
+    # ── Timestamp context ──
+    signal_ts = sig.get("signal_timestamp") or sig.get("signal_date")
+    timing: Dict[str, Any] = {"published": signal_ts}
+    if signal_ts and "T" in str(signal_ts):
+        # Parse hour to determine market session
+        try:
+            hour = int(signal_ts.split("T")[1][:2])
+            if source == "ema":
+                # CET times: convert to ET rough estimate (CET - 6)
+                et_hour = hour - 6
+                if et_hour < 0:
+                    et_hour += 24
+            else:
+                et_hour = hour  # Edgar timestamps are already ET
+
+            if et_hour < 4:
+                timing["market_session"] = "overnight"
+            elif et_hour < 9.5:
+                timing["market_session"] = "pre-market"
+            elif et_hour < 16:
+                timing["market_session"] = "market_hours"
+            else:
+                timing["market_session"] = "after_hours"
+            timing["approximate_et_hour"] = et_hour
+        except Exception:
+            pass
+
+    user_prompt = (
+        f"Company: {ticker}\n"
+        f"Source: {source}\n\n"
+        f"── Document text ──\n{doc_text}\n\n"
+        f"── Extracted facts ──\n{json.dumps(facts, indent=2)}\n\n"
+        f"── Timing ──\n{json.dumps(timing, indent=2)}\n\n"
+        f"── Market context on signal date ──\n{json.dumps(market_ctx, indent=2)}\n\n"
+        "Based on the document, facts, timing, and market context above, "
+        "assess the probability this stock moves UP >1% within 5 trading days."
+    )
+
+    body: Dict[str, Any] = {
+        "model": CONVICTION_MODEL,
+        "instructions": CONVICTION_PROMPT,
+        "input": user_prompt,
+        "max_output_tokens": 150,
+    }
+    if CONVICTION_MODEL.startswith("gpt-5"):
+        body["reasoning"] = {"effort": "high"}
+
+    return {
+        "custom_id": sig["item_id"],
+        "method": "POST",
+        "url": "/v1/responses",
+        "body": body,
+    }
+
+
+async def _process_conviction_results(results: List[Dict[str, Any]]) -> Dict[str, int]:
+    """Parse conviction model batch results, store in DB."""
+    db = FeedDatabase(DB_PATH)
+    await db.connect()
+
+    stats = {"total": 0, "scored": 0, "parse_errors": 0}
+
+    for item in results:
+        stats["total"] += 1
+        item_id = item["custom_id"]
+        response = item.get("response", {})
+
+        if response.get("status_code") != 200:
+            stats["parse_errors"] += 1
+            continue
+
+        body = response.get("body", {})
+        raw_text = ""
+        for out in body.get("output", []):
+            if out.get("type") == "message":
+                for content in out.get("content", []):
+                    if content.get("type") == "output_text":
+                        raw_text = content.get("text", "")
+
+        raw_text = _strip_fences(raw_text)
+
+        try:
+            parsed = json.loads(raw_text)
+        except Exception:
+            import re
+            cv_m = re.search(r'"conviction"\s*:\s*(\d+)', raw_text)
+            dir_m = re.search(r'"direction"\s*:\s*"(up|down|neutral)"', raw_text)
+            if cv_m:
+                parsed = {
+                    "conviction": int(cv_m.group(1)),
+                    "direction": dir_m.group(1) if dir_m else "neutral",
+                }
+            else:
+                stats["parse_errors"] += 1
+                continue
+
+        conviction = max(0, min(100, int(parsed.get("conviction", 0))))
+        direction = parsed.get("direction", "neutral")
+        if direction not in ("up", "down", "neutral"):
+            direction = "neutral"
+        expected_move = parsed.get("expected_move_pct")
+        if isinstance(expected_move, (int, float)):
+            expected_move = round(float(expected_move), 2)
+        else:
+            expected_move = None
+        time_horizon = parsed.get("time_horizon_days")
+        if isinstance(time_horizon, (int, float)):
+            time_horizon = int(time_horizon)
+        else:
+            time_horizon = None
+        priced_in = parsed.get("already_priced_in")
+        if isinstance(priced_in, bool):
+            priced_in = 1 if priced_in else 0
+        else:
+            priced_in = None
+        window = parsed.get("tradeable_window", "")
+        if window not in ("pre-market", "open", "missed"):
+            window = None
+
+        await db._db.execute(
+            """UPDATE backtest_signals SET
+                conviction_score = ?, conviction_direction = ?,
+                conviction_expected_move = ?, conviction_time_horizon = ?,
+                conviction_priced_in = ?, conviction_window = ?
+            WHERE item_id = ?""",
+            (conviction, direction, expected_move, time_horizon, priced_in, window, item_id),
+        )
+        stats["scored"] += 1
+
+    await db._db.commit()
+    await db.close()
+    return stats
+
+
+async def cmd_submit_conviction():
+    """Build and submit conviction model batch for Ranker-passed trade signals."""
+    db = FeedDatabase(DB_PATH)
+    await db.connect()
+
+    # Ensure conviction columns exist
+    for col, typ in [
+        ("conviction_score", "INTEGER"),
+        ("conviction_direction", "TEXT"),
+        ("conviction_expected_move", "REAL"),
+        ("conviction_time_horizon", "INTEGER"),
+        ("conviction_priced_in", "INTEGER"),
+        ("conviction_window", "TEXT"),
+        ("conviction_market_context", "TEXT"),
+        ("signal_timestamp", "TEXT"),
+    ]:
+        try:
+            await db._db.execute(f"ALTER TABLE backtest_signals ADD COLUMN {col} {typ}")
+        except Exception:
+            pass  # already exists
+    await db._db.commit()
+
+    # Get trade signals that passed Ranker but haven't been conviction-scored
+    rows = await db._db.execute_fetchall(
+        """SELECT * FROM backtest_signals
+           WHERE llm_action = 'trade' AND sentry1_pass = 1
+           AND llm_confidence IS NOT NULL
+           AND conviction_score IS NULL
+           AND ticker NOT LIKE 'UNKNOWN_%'"""
+    )
+    columns = [desc[0] for desc in (await db._db.execute("SELECT * FROM backtest_signals LIMIT 0")).description]
+    signals = [dict(zip(columns, row)) for row in rows]
+    await db.close()
+
+    if not signals:
+        logger.info("No signals awaiting conviction scoring")
+        return
+
+    logger.info("Fetching market context for %d signals...", len(signals))
+
+    # Fetch market context for each unique ticker+date combo
+    context_cache: Dict[str, Dict] = {}
+    for sig in signals:
+        cache_key = f"{sig['ticker']}:{sig['signal_date']}"
+        if cache_key not in context_cache:
+            ctx = _fetch_market_context(sig["ticker"], sig["signal_date"])
+            context_cache[cache_key] = ctx
+
+    logger.info("Market context fetched for %d ticker/date combos", len(context_cache))
+
+    # Build JSONL
+    jsonl_path = BATCH_DIR / f"conviction_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jsonl"
+    skipped = 0
+    with open(jsonl_path, "w") as f:
+        for sig in signals:
+            cache_key = f"{sig['ticker']}:{sig['signal_date']}"
+            ctx = context_cache.get(cache_key, {})
+            if ctx.get("error"):
+                skipped += 1
+                continue
+            line = _build_conviction_request_line(sig, ctx)
+            f.write(json.dumps(line) + "\n")
+
+    written = len(signals) - skipped
+    size_mb = jsonl_path.stat().st_size / 1_048_576
+    logger.info("JSONL written: %s (%.1f MB, %d requests, %d skipped no market data)",
+                jsonl_path, size_mb, written, skipped)
+
+    if written == 0:
+        logger.info("No signals with market data to score")
+        return
+
+    batch_id = await _upload_and_submit_batch(
+        jsonl_path, f"Conviction batch: {written} signals"
+    )
+
+    state = _load_state()
+    state["conviction_batch_id"] = batch_id
+    state["conviction_count"] = written
+    state["conviction_submitted_at"] = datetime.now(timezone.utc).isoformat()
+    state["conviction_status"] = "submitted"
+    _save_state(state)
+
+    logger.info("✓ Conviction batch submitted: %s (%d signals)", batch_id, written)
+    await _send_telegram(
+        f"🎯 <b>Conviction batch submitted</b>\n"
+        f"Signals: {written}\n"
+        f"Skipped (no market data): {skipped}\n"
+        f"Batch ID: <code>{batch_id}</code>"
+    )
 
 
 # ── Submit batch to OpenAI ──
@@ -295,11 +713,17 @@ async def _download_batch_results(output_file_id: str) -> List[Dict[str, Any]]:
 # ── Parse Sentry-1 results and store ──
 
 async def _process_sentry1_results(results: List[Dict[str, Any]]) -> Dict[str, int]:
-    """Parse Sentry-1 batch results, store in DB. Returns stats."""
+    """Parse Sentry-1 batch results, store in DB.
+
+    Handles two response formats:
+    1. Ticker resolver: {"us_ticker": "SYMBOL", ...} — for EMA unknown tickers
+    2. Standard gate: {"company_probability": N, "price_probability": N, ...}
+    """
     db = FeedDatabase(DB_PATH)
     await db.connect()
 
-    stats = {"total": 0, "passed": 0, "failed": 0, "parse_errors": 0}
+    stats = {"total": 0, "passed": 0, "failed": 0, "parse_errors": 0,
+             "tickers_resolved": 0, "tickers_private": 0}
 
     for item in results:
         stats["total"] += 1
@@ -324,24 +748,61 @@ async def _process_sentry1_results(results: List[Dict[str, Any]]) -> Dict[str, i
         try:
             parsed = json.loads(raw_text)
         except Exception:
-            stats["parse_errors"] += 1
-            await db.update_backtest_signal_llm(
-                item_id,
-                sentry1_company=0, sentry1_price=0, sentry1_pass=0,
-                llm_rationale=f"sentry1_parse_error: {raw_text[:200]}",
-            )
+            import re
+            # Try ticker resolver format
+            tk_m = re.search(r'"us_ticker"\s*:\s*"([A-Z]{1,5})"', raw_text)
+            if tk_m:
+                parsed = {"us_ticker": tk_m.group(1)}
+            else:
+                # Try standard sentry1 format
+                cp_m = re.search(r'"company_probability"\s*:\s*(\d+)', raw_text)
+                pp_m = re.search(r'"price_probability"\s*:\s*(\d+)', raw_text)
+                if cp_m and pp_m:
+                    parsed = {
+                        "company_probability": int(cp_m.group(1)),
+                        "price_probability": int(pp_m.group(1)),
+                    }
+                else:
+                    stats["parse_errors"] += 1
+                    await db.update_backtest_signal_llm(
+                        item_id,
+                        sentry1_company=0, sentry1_price=0, sentry1_pass=0,
+                        llm_rationale=f"sentry1_parse_error: {raw_text[:200]}",
+                    )
+                    continue
+
+        # ── Handle ticker resolver response ──
+        if "us_ticker" in parsed:
+            us_ticker = parsed.get("us_ticker")
+            if us_ticker and isinstance(us_ticker, str) and len(us_ticker) <= 6:
+                # Resolved! Update ticker and mark as passed
+                await db._db.execute(
+                    "UPDATE backtest_signals SET ticker = ?, llm_scored = 1, sentry1_pass = 1 "
+                    "WHERE item_id = ?",
+                    (us_ticker.upper(), item_id),
+                )
+                stats["tickers_resolved"] += 1
+                stats["passed"] += 1
+            else:
+                # Private or unknown — mark as failed
+                await db._db.execute(
+                    "UPDATE backtest_signals SET llm_scored = 1, sentry1_pass = 0 "
+                    "WHERE item_id = ?",
+                    (item_id,),
+                )
+                stats["tickers_private"] += 1
+                stats["failed"] += 1
+            await db._db.commit()
             continue
 
         company_prob = max(0, min(100, int(parsed.get("company_probability", 0) or 0)))
         price_prob = max(0, min(100, int(parsed.get("price_probability", 0) or 0)))
         sentry1_pass = company_prob >= 60 and price_prob >= 50
-        rationale = str(parsed.get("rationale", "") or "").strip()
-
         llm_data = {
             "sentry1_company": company_prob,
             "sentry1_price": price_prob,
             "sentry1_pass": 1 if sentry1_pass else 0,
-            "llm_rationale": rationale[:500],
+            "llm_rationale": None,  # skip rationale in batch to save tokens
         }
 
         if sentry1_pass:
@@ -450,6 +911,12 @@ async def _process_ranker_results(results: List[Dict[str, Any]]) -> Dict[str, in
         if not isinstance(evidence_spans, list):
             evidence_spans = []
 
+        # Extract signal_assessment
+        sa = obj.get("signal_assessment") or {}
+        magnitude = str(sa.get("magnitude", "moderate")).strip().lower() if isinstance(sa, dict) else "moderate"
+        novelty = str(sa.get("novelty", "first_disclosure")).strip().lower() if isinstance(sa, dict) else "first_disclosure"
+        certainty = str(sa.get("certainty", "confirmed")).strip().lower() if isinstance(sa, dict) else "confirmed"
+
         # Get source from DB for this signal
         sig_rows = await db._db.execute_fetchall(
             "SELECT event_type FROM backtest_signals WHERE item_id = ?",
@@ -464,6 +931,9 @@ async def _process_ranker_results(results: List[Dict[str, Any]]) -> Dict[str, in
                 "numeric_terms": numeric_terms,
                 "risk_flags": risk_flags,
                 "evidence_spans": evidence_spans,
+                "magnitude": magnitude,
+                "novelty": novelty,
+                "certainty": certainty,
             },
             doc_source=doc_source,
             freshness_mult=1.0,
@@ -481,15 +951,12 @@ async def _process_ranker_results(results: List[Dict[str, Any]]) -> Dict[str, in
             "llm_polarity": _classify_polarity(event_type),
             "llm_numeric_terms": json.dumps(numeric_terms),
             "llm_risk_flags": json.dumps(risk_flags),
-            "llm_evidence_spans": json.dumps(evidence_spans[:3]),
-            "llm_rationale": (
-                f"event={event_type} impact={scoring.impact_score} "
-                f"conf={scoring.confidence} action={scoring.action}"
-            ),
+            "llm_evidence_spans": None,  # skip in batch to save storage
+            "llm_rationale": None,       # skip in batch to save tokens
         }
         stats["succeeded"] += 1
 
-        # Update only ranker fields — don't overwrite sentry1 fields
+        # Update ranker fields AND override action with LLM's recommendation
         await db._db.execute(
             """UPDATE backtest_signals SET
                 llm_event_type = ?,
@@ -500,7 +967,8 @@ async def _process_ranker_results(results: List[Dict[str, Any]]) -> Dict[str, in
                 llm_numeric_terms = ?,
                 llm_risk_flags = ?,
                 llm_evidence_spans = ?,
-                llm_rationale = ?
+                llm_rationale = ?,
+                action = ?
             WHERE item_id = ?""",
             (
                 llm_data["llm_event_type"],
@@ -512,6 +980,7 @@ async def _process_ranker_results(results: List[Dict[str, Any]]) -> Dict[str, in
                 llm_data["llm_risk_flags"],
                 llm_data["llm_evidence_spans"],
                 llm_data["llm_rationale"],
+                llm_data["llm_action"],
                 item_id,
             ),
         )
@@ -524,23 +993,69 @@ async def _process_ranker_results(results: List[Dict[str, Any]]) -> Dict[str, in
 # ── Commands ──
 
 async def cmd_submit_sentry1():
-    """Build JSONL for all unscored signals, upload and submit Sentry-1 batch."""
+    """Route signals for Sentry-1 processing.
+
+    Edgar M&A forms: skip Sentry-1, mark as passed (all are price-moving).
+    EMA with known ticker: skip Sentry-1, mark as passed.
+    EMA with unknown ticker: send to LLM as ticker resolver batch.
+    """
     db = FeedDatabase(DB_PATH)
     await db.connect()
 
-    # Get unscored signals
     rows = await db._db.execute_fetchall(
         "SELECT * FROM backtest_signals WHERE llm_scored = 0"
     )
     columns = [desc[0] for desc in (await db._db.execute("SELECT * FROM backtest_signals LIMIT 0")).description]
-    signals = [dict(zip(columns, row)) for row in rows]
-    await db.close()
+    all_signals = [dict(zip(columns, row)) for row in rows]
 
-    if not signals:
-        logger.info("No unscored signals found")
+    # ── Edgar: auto-pass all M&A forms (no Sentry-1 needed) ──────────
+    edgar_passed = 0
+    for sig in all_signals:
+        if sig.get("source") == "edgar":
+            await db._db.execute(
+                "UPDATE backtest_signals SET llm_scored = 1, sentry1_pass = 1 "
+                "WHERE item_id = ?", (sig["item_id"],),
+            )
+            edgar_passed += 1
+
+    # ── EMA with known ticker: auto-pass ─────────────────────────────
+    ema_known_passed = 0
+    for sig in all_signals:
+        if sig.get("source") == "ema" and not sig.get("ticker", "").startswith("UNKNOWN_"):
+            await db._db.execute(
+                "UPDATE backtest_signals SET llm_scored = 1, sentry1_pass = 1 "
+                "WHERE item_id = ?", (sig["item_id"],),
+            )
+            ema_known_passed += 1
+
+    # ── EMA with unknown ticker: send to LLM for ticker resolution ───
+    ema_unknown = [
+        sig for sig in all_signals
+        if sig.get("source") == "ema" and sig.get("ticker", "").startswith("UNKNOWN_")
+    ]
+
+    await db._db.commit()
+
+    logger.info(
+        "Sentry-1 routing: edgar auto-passed=%d, ema known auto-passed=%d, "
+        "ema unknown (ticker resolve)=%d",
+        edgar_passed, ema_known_passed, len(ema_unknown),
+    )
+
+    if not ema_unknown:
+        logger.info("No signals need Sentry-1 LLM calls")
+        await db.close()
         return
 
-    logger.info("Building Sentry-1 batch for %d signals...", len(signals))
+    # Build JSONL for EMA ticker resolution only
+    signals = ema_unknown
+
+    if not signals:
+        logger.info("No signals need Sentry-1 LLM calls — all auto-passed")
+        await db.close()
+        return
+
+    logger.info("Building Sentry-1 batch for %d EMA ticker resolution requests...", len(signals))
 
     jsonl_path = BATCH_DIR / f"sentry1_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jsonl"
     with open(jsonl_path, "w") as f:
@@ -591,35 +1106,56 @@ async def cmd_submit_ranker():
         logger.info("No signals awaiting Ranker scoring")
         return
 
-    logger.info("Building Ranker batch for %d signals...", len(signals))
+    # Split by model: pharma (nano) vs edgar M&A (mini)
+    # OpenAI batches require one model per batch
+    pharma_sigs = [s for s in signals if _is_pharma_source(s.get("source", ""))]
+    edgar_sigs = [s for s in signals if not _is_pharma_source(s.get("source", ""))]
 
-    jsonl_path = BATCH_DIR / f"ranker_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jsonl"
-    with open(jsonl_path, "w") as f:
-        for sig in signals:
-            line = _build_ranker_request_line(sig)
-            f.write(json.dumps(line) + "\n")
+    logger.info("Building Ranker batches: %d pharma (nano) + %d edgar (mini)...",
+                len(pharma_sigs), len(edgar_sigs))
 
-    size_mb = jsonl_path.stat().st_size / 1_048_576
-    logger.info("JSONL written: %s (%.1f MB, %d requests)", jsonl_path, size_mb, len(signals))
+    batch_ids = []
+    total_written = 0
 
-    batch_id = await _upload_and_submit_batch(
-        jsonl_path, f"Ranker batch: {len(signals)} signals"
-    )
+    for label, sigs, model_name in [
+        ("pharma", pharma_sigs, SENTRY1_MODEL),  # nano
+        ("edgar", edgar_sigs, RANKER_MODEL),       # mini
+    ]:
+        if not sigs:
+            continue
+
+        jsonl_path = BATCH_DIR / f"ranker_{label}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jsonl"
+        with open(jsonl_path, "w") as f:
+            for sig in sigs:
+                line = _build_ranker_request_line(sig)
+                f.write(json.dumps(line) + "\n")
+
+        size_mb = jsonl_path.stat().st_size / 1_048_576
+        logger.info("JSONL %s: %s (%.1f MB, %d requests, model=%s)",
+                    label, jsonl_path, size_mb, len(sigs), model_name)
+
+        bid = await _upload_and_submit_batch(
+            jsonl_path, f"Ranker {label} batch: {len(sigs)} signals ({model_name})"
+        )
+        batch_ids.append(bid)
+        total_written += len(sigs)
 
     state = _load_state()
-    state["ranker_batch_id"] = batch_id
-    state["ranker_count"] = len(signals)
+    # Store all ranker batch IDs (poll will check each)
+    state["ranker_batch_id"] = batch_ids[0] if batch_ids else None
+    if len(batch_ids) > 1:
+        state["ranker_2_batch_id"] = batch_ids[1]
+        state["ranker_2_status"] = "submitted"
+    state["ranker_count"] = total_written
     state["ranker_submitted_at"] = datetime.now(timezone.utc).isoformat()
     state["ranker_status"] = "submitted"
     _save_state(state)
 
-    logger.info("✓ Ranker batch submitted: %s (%d signals)", batch_id, len(signals))
+    logger.info("✓ Ranker batches submitted: %s (%d signals)", batch_ids, total_written)
     await _send_telegram(
-        f"🧠 <b>Ranker batch submitted</b>\n"
-        f"Signals: {len(signals)}\n"
-        f"Batch ID: <code>{batch_id}</code>\n"
-        f"JSONL: {size_mb:.1f} MB\n"
-        f"Expected completion: ~24hrs"
+        f"🧠 <b>Ranker batches submitted</b>\n"
+        f"Signals: {total_written}\n"
+        f"Batches: {', '.join(batch_ids)}"
     )
 
 
@@ -627,7 +1163,7 @@ async def cmd_poll():
     """Check batch status. If complete, download results and process."""
     state = _load_state()
 
-    for stage in ["sentry1", "ranker"]:
+    for stage in ["sentry1", "ranker", "ranker_2", "conviction"]:
         batch_id = state.get(f"{stage}_batch_id")
         if not batch_id:
             continue
@@ -669,18 +1205,23 @@ async def cmd_poll():
                 state[f"{stage}_stats"] = stats
                 _save_state(state)
 
+                tickers_msg = ""
+                if stats.get("tickers_resolved"):
+                    tickers_msg = f"\nTickers resolved: {stats['tickers_resolved']}\nTickers private: {stats['tickers_private']}"
+
                 msg = (
                     f"✅ <b>Sentry-1 batch complete</b>\n"
                     f"Total: {stats['total']}\n"
                     f"Passed: {stats['passed']} ({100*stats['passed']/max(1,stats['total']):.0f}%)\n"
                     f"Failed gate: {stats['failed']}\n"
-                    f"Parse errors: {stats['parse_errors']}\n\n"
+                    f"Parse errors: {stats['parse_errors']}"
+                    f"{tickers_msg}\n\n"
                     f"Ready to submit Ranker batch:\n"
                     f"<code>python batch_scorer.py submit-ranker</code>"
                 )
                 logger.info("Sentry-1 stats: %s", stats)
 
-            else:  # ranker
+            elif stage in ("ranker", "ranker_2"):
                 stats = await _process_ranker_results(results)
                 state[f"{stage}_status"] = "completed"
                 state[f"{stage}_stats"] = stats
@@ -691,10 +1232,25 @@ async def cmd_poll():
                     f"Total: {stats['total']}\n"
                     f"Succeeded: {stats['succeeded']}\n"
                     f"Parse errors: {stats['parse_errors']}\n\n"
-                    f"All scoring done! Run optimizer:\n"
-                    f"<code>python main.py --analyze --from 2023-04-12 --to 2026-04-12</code>"
+                    f"Ready to submit Conviction batch:\n"
+                    f"<code>python batch_scorer.py submit-conviction</code>"
                 )
                 logger.info("Ranker stats: %s", stats)
+
+            elif stage == "conviction":
+                stats = await _process_conviction_results(results)
+                state[f"{stage}_status"] = "completed"
+                state[f"{stage}_stats"] = stats
+                _save_state(state)
+
+                msg = (
+                    f"🎯 <b>Conviction batch complete</b>\n"
+                    f"Total: {stats['total']}\n"
+                    f"Scored: {stats['scored']}\n"
+                    f"Parse errors: {stats['parse_errors']}\n\n"
+                    f"All scoring done! Run optimizer."
+                )
+                logger.info("Conviction stats: %s", stats)
 
             await _send_telegram(msg)
 

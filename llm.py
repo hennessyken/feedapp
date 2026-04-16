@@ -178,7 +178,7 @@ You will be given (JSON):
 - optional market context (profile/quote)
 
 Task:
-Extract ONLY verifiable facts from the DOCUMENT_TEXT_EXCERPT. Do NOT score impact. Do NOT recommend actions.
+Extract ONLY verifiable facts from the DOCUMENT_TEXT_EXCERPT, then assess the event's trading significance.
 Return a single JSON object with the exact schema below.
 
 Output JSON only (no markdown, no commentary):
@@ -202,10 +202,29 @@ Output JSON only (no markdown, no commentary):
     "is_earnings_release": true | false,
     "dividend_change": "increase | decrease | special | initiated | suspended | null"
   },
+  "signal_assessment": {
+    "magnitude": "major | moderate | minor",
+    "novelty": "first_disclosure | update | routine",
+    "certainty": "confirmed | expected | speculative"
+  },
   "evidence_spans": [
-    {"field": "event_type | offering_amount_usd | dilution | ownership_percent | etc", "quote": "VERBATIM excerpt from DOCUMENT_TEXT_EXCERPT"}
+    {"field": "event_type | offering_amount_usd | dilution | ownership_percent | magnitude | novelty | certainty | etc", "quote": "VERBATIM excerpt from DOCUMENT_TEXT_EXCERPT"}
   ]
 }
+
+signal_assessment guidance:
+- magnitude: How significant is this event for the company's stock price?
+  - "major": Transformative — M&A deal, blockbuster drug approval, first-ever product in new market, earnings surprise >20%, CEO departure, going concern.
+  - "moderate": Material but not transformative — line extension approval, mid-single-digit earnings beat/miss, routine clinical trial update with positive data, new contract with stated value.
+  - "minor": Low impact — routine label change, administrative regulatory update, expected/scheduled filing, minor product update, generic approval in crowded space.
+- novelty: Is this new information?
+  - "first_disclosure": First time this information appears publicly. No prior announcement of this specific event.
+  - "update": Follow-up to a previously announced event (e.g. completion of a previously announced deal, updated terms, trial results after prior announcement of trial start).
+  - "routine": Scheduled or expected filing (annual results, quarterly update, routine renewal).
+- certainty: How definitive is the outcome?
+  - "confirmed": Event is completed or decision is final (approved, deal closed, results published).
+  - "expected": Event is highly likely but not yet final (recommended offer, pending regulatory approval, guidance issued).
+  - "speculative": Event is proposed, under review, or uncertain (strategic review, potential bid, application submitted).
 
 Rules (strict):
 - Use ONLY the DOCUMENT_TEXT_EXCERPT as evidence. No outside knowledge.
@@ -214,9 +233,9 @@ Rules (strict):
   - event_type always requires field="event_type" in evidence_spans.
   - Any non-null numeric_terms key must have a matching evidence_spans[].field entry.
   - Any true risk_flags key must have a matching evidence_spans[].field entry.
+  - signal_assessment fields (magnitude, novelty, certainty) each require a supporting evidence_span.
 - Quotes must be direct substrings from the excerpt (no paraphrase, no ellipses).
 - For non-English excerpts: extract and quote from the original language; translate field names to English in the schema.
-- Do not include impact_score, confidence, action, or rationale.
 
 Event_type classification (use explicit language only; otherwise OTHER):
 - EARNINGS_BEAT / EARNINGS_MISS: explicit result vs prior guidance or consensus expectations.
@@ -286,10 +305,20 @@ Output JSON only (no markdown, no commentary):
   "risk_flags": {
     "regulatory_negative": true | false
   },
+  "signal_assessment": {
+    "magnitude": "major | moderate | minor",
+    "novelty": "first_disclosure | update | routine",
+    "certainty": "confirmed | expected | speculative"
+  },
   "evidence_spans": [
-    {"field": "event_type", "quote": "verbatim excerpt"}
+    {"field": "event_type | magnitude | novelty | certainty", "quote": "verbatim excerpt"}
   ]
 }
+
+signal_assessment guidance:
+- magnitude: "major" = new drug/indication approval, pivotal trial success/failure, complete response letter, safety withdrawal. "moderate" = label expansion, supplemental approval, positive Phase 2 data, biosimilar approval. "minor" = routine renewal, minor label update, administrative change, expected generic approval.
+- novelty: "first_disclosure" = first public announcement. "update" = follow-up to known event (e.g. final approval after prior recommendation). "routine" = scheduled/expected (annual renewal, routine review).
+- certainty: "confirmed" = decision is final. "expected" = recommended but not yet final. "speculative" = under review/submitted.
 
 Rules:
 - event_type MUST be one of the 5 listed options
@@ -298,6 +327,67 @@ Rules:
 - If uncertain, use event_type="OTHER" and null for optional fields"""
 
 _PHARMA_SOURCES = {"ema", "fda", "clinical_trials"}
+
+# M&A form types that get a specialized ranker prompt
+_MA_FORM_TYPES = {"DEFM14A", "S-4", "SC TO-T", "SC TO-T/A", "CB", "CB/A"}
+
+RANKER_MA_PROMPT = """You are extracting key facts from a US SEC M&A filing.
+
+The document is a merger proxy (DEFM14A), registration statement (S-4), or tender offer (SC TO-T).
+The Sentry-1 gate has already confirmed this is likely a material, price-moving event.
+
+Extract ONLY verifiable facts from the document text.
+
+Output JSON only (no markdown, no commentary):
+{
+  "event_type": "M_A_TARGET | M_A_ACQUIRER | M_A",
+  "deal_terms": {
+    "deal_price_per_share": number | null,
+    "premium_percent": number | null,
+    "deal_value_usd": number | null,
+    "deal_type": "cash | stock | mixed | null",
+    "exchange_ratio": number | null,
+    "acquirer_name": "string | null",
+    "target_name": "string | null"
+  },
+  "deal_status": {
+    "has_definitive_agreement": true | false,
+    "shareholder_vote_required": true | false,
+    "regulatory_approval_required": true | false,
+    "expected_close_date": "string | null",
+    "competing_bids_mentioned": true | false,
+    "go_shop_provision": true | false
+  },
+  "risk_flags": {
+    "going_concern": true | false,
+    "restatement": true | false,
+    "regulatory_negative": true | false
+  },
+  "signal_assessment": {
+    "magnitude": "major | moderate | minor",
+    "novelty": "first_disclosure | update | routine",
+    "certainty": "confirmed | expected | speculative"
+  },
+  "evidence_spans": [
+    {"field": "deal_price_per_share | premium_percent | event_type | magnitude | etc", "quote": "verbatim excerpt"}
+  ]
+}
+
+event_type guidance:
+- M_A_TARGET: this company IS the acquisition target (someone is buying them)
+- M_A_ACQUIRER: this company IS the acquirer (they are buying someone else)
+- M_A: role is ambiguous or it's a merger of equals
+
+signal_assessment guidance:
+- magnitude: "major" = large premium (>20%), strategic acquisition, go-private, hostile bid. "moderate" = standard acquisition with 10-20% premium, expected deal. "minor" = merger of equals with minimal premium, administrative amendment to existing deal.
+- novelty: "first_disclosure" = initial deal announcement or first proxy filing. "update" = amendment, revised terms, updated timeline. "routine" = scheduled shareholder vote materials for known deal.
+- certainty: "confirmed" = definitive agreement signed, deal closing. "expected" = recommended by board, awaiting vote/regulatory. "speculative" = proposal stage, no definitive agreement.
+
+Rules:
+- Use ONLY the document text as evidence — no outside knowledge
+- Every non-null field must have a supporting evidence_span with a verbatim quote
+- Convert all amounts to USD if possible; note original currency in the quote
+- If uncertain, use null for numbers and false for booleans"""
 
 _SENTRY1_FORM_ADDENDA: Dict[str, str] = {
     # Exchange-type addenda — selected by doc_source (feed name)
@@ -377,6 +467,9 @@ def _is_pharma_source(doc_source: str) -> bool:
 def _build_ranker_prompt(*, doc_source: str, base_form_type: str) -> str:
     if _is_pharma_source(doc_source):
         return RANKER_PHARMA_PROMPT
+    # M&A forms get a specialized prompt with deal-specific extraction
+    if base_form_type.upper() in _MA_FORM_TYPES:
+        return RANKER_MA_PROMPT
     family = _exchange_family(doc_source)
     base = RANKER_REGULATORY_BASE_PROMPT.replace("__EVENT_TYPES__", " | ".join(RANKER_EVENT_TYPES))
     addendum = _RANKER_FORM_ADDENDA.get(family, "")
@@ -951,6 +1044,9 @@ class OpenAiRegulatoryLlmGateway:
         label_analysis: Dict[str, Any] = dict(label_analysis_defaults)
 
         evidence_spans: List[Dict[str, str]] = []
+        signal_magnitude: str = "moderate"
+        signal_novelty: str = "first_disclosure"
+        signal_certainty: str = "confirmed"
 
         def _norm(s: str) -> str:
             return re.sub(r"\s+", " ", (s or "").strip().lower())
@@ -1142,6 +1238,22 @@ class OpenAiRegulatoryLlmGateway:
             # label_analysis: keep parsed values (no evidence-required reset
             # since label_analysis fields are informational, not trade-driving).
 
+            # signal_assessment: extract magnitude/novelty/certainty
+            sa = obj.get("signal_assessment")
+            if isinstance(sa, dict):
+                _valid_magnitude = {"major", "moderate", "minor"}
+                _valid_novelty = {"first_disclosure", "update", "routine"}
+                _valid_certainty = {"confirmed", "expected", "speculative"}
+                mag = str(sa.get("magnitude", "")).strip().lower()
+                nov = str(sa.get("novelty", "")).strip().lower()
+                cert = str(sa.get("certainty", "")).strip().lower()
+                if mag in _valid_magnitude:
+                    signal_magnitude = mag
+                if nov in _valid_novelty:
+                    signal_novelty = nov
+                if cert in _valid_certainty:
+                    signal_certainty = cert
+
         except Exception as e:
             logging.error(
                 "RANKER PARSE FAILURE decision_id=%s error=%r raw_preview=%r",
@@ -1177,4 +1289,7 @@ class OpenAiRegulatoryLlmGateway:
             evidence_spans=list(evidence_spans),
             raw=str(raw or ""),
             decision_id=decision_id,
+            magnitude=signal_magnitude,
+            novelty=signal_novelty,
+            certainty=signal_certainty,
         )

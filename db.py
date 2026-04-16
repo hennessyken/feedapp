@@ -668,10 +668,35 @@ class FeedDatabase:
         return row[0] if row else 0
 
     async def update_backtest_signal_llm(self, item_id: str, **kwargs: Any) -> None:
-        """Update LLM analysis fields on a backtest signal."""
+        """Update LLM analysis fields on a backtest signal.
+
+        When llm_action is provided, also overrides the keyword-based `action`
+        so the signal reflects the LLM's recommendation.
+        """
         assert self._db
+        # Build SET clause — always override action with llm_action when present
+        llm_action = kwargs.get("llm_action")
+        action_clause = ", action = ?" if llm_action else ""
+        params = [
+            kwargs.get("sentry1_company"),
+            kwargs.get("sentry1_price"),
+            kwargs.get("sentry1_pass"),
+            kwargs.get("llm_event_type"),
+            kwargs.get("llm_confidence"),
+            kwargs.get("llm_impact_score"),
+            llm_action,
+            kwargs.get("llm_polarity"),
+            kwargs.get("llm_numeric_terms"),
+            kwargs.get("llm_risk_flags"),
+            kwargs.get("llm_evidence_spans"),
+            kwargs.get("llm_rationale"),
+        ]
+        if llm_action:
+            params.append(llm_action)
+        params.append(item_id)
+
         await self._db.execute(
-            """UPDATE backtest_signals SET
+            f"""UPDATE backtest_signals SET
                 llm_scored = 1,
                 sentry1_company = ?,
                 sentry1_price = ?,
@@ -685,22 +710,9 @@ class FeedDatabase:
                 llm_risk_flags = ?,
                 llm_evidence_spans = ?,
                 llm_rationale = ?
+                {action_clause}
             WHERE item_id = ?""",
-            (
-                kwargs.get("sentry1_company"),
-                kwargs.get("sentry1_price"),
-                kwargs.get("sentry1_pass"),
-                kwargs.get("llm_event_type"),
-                kwargs.get("llm_confidence"),
-                kwargs.get("llm_impact_score"),
-                kwargs.get("llm_action"),
-                kwargs.get("llm_polarity"),
-                kwargs.get("llm_numeric_terms"),
-                kwargs.get("llm_risk_flags"),
-                kwargs.get("llm_evidence_spans"),
-                kwargs.get("llm_rationale"),
-                item_id,
-            ),
+            tuple(params),
         )
         await self._db.commit()
 

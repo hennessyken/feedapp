@@ -84,7 +84,11 @@ _SPONSOR_TICKERS: Dict[str, str] = {
 
 
 def _lookup_sponsor_ticker(sponsor: str) -> str:
-    """Best-effort sponsor name → US ticker."""
+    """Best-effort sponsor name → US ticker.
+
+    Returns known ticker if in the dictionary, otherwise returns the
+    sponsor name as a placeholder so the signal is not dropped.
+    """
     if not sponsor:
         return ""
     s = sponsor.lower().strip()
@@ -95,7 +99,9 @@ def _lookup_sponsor_ticker(sponsor: str) -> str:
     for key, ticker in _SPONSOR_TICKERS.items():
         if key in s or s.startswith(key):
             return ticker
-    return ""
+    # Return sponsor name as placeholder — don't drop unknown companies
+    placeholder = s.replace(" ", "_").upper()[:20]
+    return f"UNKNOWN_{placeholder}" if placeholder else ""
 
 
 class ClinicalTrialsFeedAdapter(BaseFeedAdapter):

@@ -111,11 +111,12 @@ def generate_html_report(
             </tr>""")
 
         ml_html = f"""
-        <h2>🤖 ML Classifier (XGBoost)</h2>
+        <h2>🤖 ML Classifier (LightGBM + LogReg baseline)</h2>
         <div class="summary-box">
             Best global: hold={bg.get('hold_days','')}d stop={_stop_str(bg.get('stop_loss_pct'))} |
-            AUC={bg.get('cv_auc_roc',0):.3f} F1={bg.get('cv_f1',0):.3f} |
-            Walk-forward: {bg.get('n_walk_forward_windows', 0)} windows
+            LGBM AUC={bg.get('cv_auc_roc',0):.3f} F1={bg.get('cv_f1',0):.3f} |
+            LR AUC={bg.get('lr_baseline_auc_roc',0):.3f} F1={bg.get('lr_baseline_f1',0):.3f} |
+            Walk-forward: {bg.get('walk_forward_windows', bg.get('n_walk_forward_windows', 0))} windows
         </div>
         <table>
             <thead><tr>

@@ -87,6 +87,74 @@ _8K_ITEMS: Dict[str, str] = {
 }
 
 
+# Forms where full text adds real signal — download the primary document
+_FULL_TEXT_FORMS = {"DEFM14A", "S-4", "SC TO-T", "SC TO-T/A", "CB", "CB/A"}
+
+# Max chars to extract from a filing document (keeps LLM cost manageable)
+_MAX_FILING_TEXT = 6_000
+
+
+async def _fetch_filing_text(
+    http: httpx.AsyncClient, filing_url: str, user_agent: str,
+) -> str:
+    """Download the primary document from an EDGAR filing index page.
+
+    Returns up to _MAX_FILING_TEXT chars of cleaned text, or "" on failure.
+    The filing index lists all documents; we pick the first .htm/.txt that
+    isn't the index itself.
+    """
+    if not filing_url:
+        return ""
+    headers = {"User-Agent": user_agent}
+
+    try:
+        # Fetch the filing index page
+        resp = await http.get(filing_url, headers=headers, timeout=15)
+        resp.raise_for_status()
+        index_html = resp.text
+
+        # Find the primary document link (first .htm that isn't the index)
+        # Index pages list docs as: <a href="/Archives/edgar/data/CIK/ACC/filename.htm">
+        import re as _re
+        doc_links = _re.findall(
+            r'href="(/Archives/edgar/data/[^"]+\.(?:htm|txt))"', index_html
+        )
+        # Skip the index page itself
+        primary = None
+        for link in doc_links:
+            if "-index" in link.lower():
+                continue
+            # Skip tiny exhibits (R files, xml, xsd)
+            if any(skip in link.lower() for skip in ["r1.", "r2.", ".xml", ".xsd"]):
+                continue
+            primary = link
+            break
+
+        if not primary:
+            return ""
+
+        # Fetch the primary document
+        doc_url = f"https://www.sec.gov{primary}"
+        resp2 = await http.get(doc_url, headers=headers, timeout=30)
+        resp2.raise_for_status()
+        raw = resp2.text
+
+        # Strip HTML tags, collapse whitespace
+        text = _re.sub(r"<style[^>]*>.*?</style>", " ", raw, flags=_re.DOTALL | _re.IGNORECASE)
+        text = _re.sub(r"<script[^>]*>.*?</script>", " ", text, flags=_re.DOTALL | _re.IGNORECASE)
+        text = _re.sub(r"<[^>]+>", " ", text)
+        text = _re.sub(r"&nbsp;?", " ", text)
+        text = _re.sub(r"&amp;", "&", text)
+        text = _re.sub(r"&#\d+;", " ", text)
+        text = _re.sub(r"\s+", " ", text).strip()
+
+        return text[:_MAX_FILING_TEXT]
+
+    except Exception as e:
+        logger.debug("Filing text fetch failed for %s: %s", filing_url, e)
+        return ""
+
+
 class EdgarFeedAdapter(BaseFeedAdapter):
     """Polls SEC EDGAR EFTS for recent material-event filings."""
 
@@ -252,5 +320,45 @@ class EdgarFeedAdapter(BaseFeedAdapter):
                 "form_type": form_type,
                 "items": items_list,
                 "file_date": file_date,
+                "needs_full_text": form_type.upper() in _FULL_TEXT_FORMS,
             },
         )
+
+    async def enrich_with_filing_text(self, items: List[FeedResult]) -> List[FeedResult]:
+        """Download full filing text for M&A forms (DEFM14A, S-4, SC TO-T).
+
+        Returns a new list with content_snippet replaced by actual filing
+        text for forms that benefit from it. Frozen dataclass — creates
+        new FeedResult objects.
+        """
+        import asyncio as _aio
+        result = []
+        enriched = 0
+
+        for item in items:
+            meta = item.metadata or {}
+            if not meta.get("needs_full_text") or not item.url:
+                result.append(item)
+                continue
+
+            text = await _fetch_filing_text(self._http, item.url, self._user_agent)
+            if text and len(text) > 100:
+                result.append(FeedResult(
+                    feed_source=item.feed_source,
+                    item_id=item.item_id,
+                    title=item.title,
+                    url=item.url,
+                    published_at=item.published_at,
+                    content_snippet=text,
+                    metadata=item.metadata,
+                ))
+                enriched += 1
+            else:
+                result.append(item)
+
+            # Rate limit: SEC asks for <=10 req/s
+            await _aio.sleep(0.15)
+
+        if enriched:
+            logger.info("Enriched %d/%d filings with full text", enriched, len(items))
+        return result

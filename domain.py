@@ -589,6 +589,24 @@ class DeterministicEventScorer:
     def _clamp_int(v: float, lo: int = 0, hi: int = 100) -> int:
         return int(max(lo, min(hi, int(round(v)))))
 
+    # Adjustments from signal_assessment fields (additive to base scores)
+    _MAGNITUDE_ADJ: Dict[str, Tuple[int, int]] = {
+        # (impact_adj, confidence_adj)
+        "major":    (+10, +5),
+        "moderate": (  0,  0),
+        "minor":    (-20, -10),
+    }
+    _NOVELTY_ADJ: Dict[str, Tuple[int, int]] = {
+        "first_disclosure": (+5, +5),
+        "update":           ( 0,  0),
+        "routine":          (-15, -10),
+    }
+    _CERTAINTY_ADJ: Dict[str, Tuple[int, int]] = {
+        "confirmed":   (+5, +5),
+        "expected":    ( 0,  0),
+        "speculative": (-10, -10),
+    }
+
     def score(
         self,
         *,
@@ -615,6 +633,7 @@ class DeterministicEventScorer:
             return DeterministicScoring(impact_score=10, confidence=0, action="ignore")
 
         span_count = len(evidence_spans)
+        impact = base_impact
         conf = base_conf
         if span_count == 0:
             return DeterministicScoring(impact_score=10, confidence=0, action="ignore")
@@ -623,9 +642,47 @@ class DeterministicEventScorer:
         elif span_count >= 4:
             conf += 5
 
-        # Save original action before downgrades so both checks apply
-        # independently (#2: freshness decay was unreachable after risk flag
-        # downgrade because both checked base_action == "trade").
+        # ── Signal assessment adjustments ─────────────────────────────
+        # LLM provides magnitude/novelty/certainty from document context.
+        # These shift scores up or down from the event_type base, producing
+        # a much wider score distribution than the lookup table alone.
+        magnitude = str(extraction.get("magnitude") or "moderate").strip().lower()
+        novelty = str(extraction.get("novelty") or "first_disclosure").strip().lower()
+        certainty = str(extraction.get("certainty") or "confirmed").strip().lower()
+
+        imp_adj, conf_adj = self._MAGNITUDE_ADJ.get(magnitude, (0, 0))
+        impact += imp_adj
+        conf += conf_adj
+
+        imp_adj, conf_adj = self._NOVELTY_ADJ.get(novelty, (0, 0))
+        impact += imp_adj
+        conf += conf_adj
+
+        imp_adj, conf_adj = self._CERTAINTY_ADJ.get(certainty, (0, 0))
+        impact += imp_adj
+        conf += conf_adj
+
+        # ── M&A deal terms boost ─────────────────────────────────────
+        # If the LLM extracted concrete deal pricing, that's high-confidence
+        deal_terms = extraction.get("deal_terms") if isinstance(extraction.get("deal_terms"), dict) else {}
+        if deal_terms.get("deal_price_per_share") is not None:
+            conf += 5  # concrete price = high confidence
+            premium = deal_terms.get("premium_percent")
+            if isinstance(premium, (int, float)) and premium > 20:
+                impact += 5  # large premium = higher impact
+        if isinstance(extraction.get("deal_status"), dict):
+            ds = extraction["deal_status"]
+            if ds.get("has_definitive_agreement"):
+                conf += 5  # signed deal = very high certainty
+
+        # ── Downgrade action if adjusted scores are too weak ──────────
+        if base_action == "trade":
+            if impact < 50 or conf < 50:
+                base_action = "watch"
+            elif impact < 60 or conf < 55:
+                base_action = "watch"
+
+        # Save original action before risk-flag downgrades
         original_action = base_action
 
         risk_flags = extraction.get("risk_flags") if isinstance(extraction.get("risk_flags"), dict) else {}
@@ -639,7 +696,7 @@ class DeterministicEventScorer:
             conf = min(conf, 70)
 
         return DeterministicScoring(
-            impact_score=self._clamp_int(base_impact),
+            impact_score=self._clamp_int(impact),
             confidence=self._clamp_int(conf),
             action=base_action,
         )
