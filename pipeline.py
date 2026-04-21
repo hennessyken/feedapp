@@ -273,6 +273,29 @@ class FeedPipeline:
             for name, task in tasks.items():
                 feed_results[name] = await task
 
+            # Seed company→ticker cache from SEC's company_tickers.json.
+            # The CIK map is loaded during the edgar fetch above, so this is
+            # a no-op on every cycle after the first (INSERT OR IGNORE).
+            try:
+                from feeds.edgar import seed_company_ticker_cache
+                await seed_company_ticker_cache(self._db)
+            except Exception as e:
+                logger.debug("company_ticker_cache seed skipped: %s", e)
+
+            # Enrich EDGAR items that need body text BEFORE screening.
+            # Only fetch bodies for items we haven't screened before — items
+            # already in the DB get skipped at insert time and never reach the
+            # screener, so enriching them wastes an SEC request.
+            for edgar_key in ("edgar", "edgar_form4"):
+                edgar_adapter = adapters.get(edgar_key)
+                if edgar_adapter and feed_results.get(edgar_key):
+                    try:
+                        feed_results[edgar_key] = await self._enrich_edgar(
+                            edgar_adapter, feed_results[edgar_key]
+                        )
+                    except Exception as e:
+                        logger.error("EDGAR enrichment (%s) failed: %s", edgar_key, e)
+
             # Process each feed's results (keyword screening)
             for feed_name, items in feed_results.items():
                 feed_stats, feed_relevant = await self._process_feed(feed_name, items)
@@ -321,6 +344,12 @@ class FeedPipeline:
             for s in stats.get("signals", {}).values()
             if isinstance(s, dict)
         )
+        total_errors = sum(
+            s.get("errors", 0)
+            for s in stats.get("signals", {}).values()
+            if isinstance(s, dict)
+        )
+
         logger.info(
             "Pipeline complete: %d fetched, %d new, %d relevant, %d irrelevant, %d vetoed, "
             "%d signals delivered (%.1fs)",
@@ -333,6 +362,31 @@ class FeedPipeline:
             elapsed,
         )
 
+        # Structured JSON summary — grep for CYCLE_JSON to feed directly to an LLM
+        import json as _json
+        cycle_summary = {
+            "event": "cycle_complete",
+            "started_at": stats["started_at"],
+            "finished_at": stats["finished_at"],
+            "elapsed_s": stats["elapsed_seconds"],
+            "feeds": {
+                name: {k: v for k, v in feed.items()}
+                for name, feed in stats.get("feeds", {}).items()
+            },
+            "totals": {
+                "fetched": stats["total_fetched"],
+                "new": stats["total_new"],
+                "relevant": stats["total_relevant"],
+                "irrelevant": stats["total_irrelevant"],
+                "vetoed": stats["total_vetoed"],
+                "delivered": total_delivered,
+                "errors": total_errors,
+            },
+            "spend_usd": stats["spend_usd"],
+            "errors": stats.get("errors", []),
+        }
+        logger.info("CYCLE_JSON %s", _json.dumps(cycle_summary, separators=(",", ":")))
+
         return stats
 
     def _create_adapters(self, http: httpx.AsyncClient) -> Dict[str, BaseFeedAdapter]:
@@ -342,6 +396,18 @@ class FeedPipeline:
                 user_agent=self._config.sec_user_agent,
                 days_back=self._config.edgar_days_back,
                 forms=self._config.edgar_forms,
+            ),
+            # Separate Form 4 adapter: pre-filtered at EFTS level to only
+            # filings that mention "purchase" — eliminates the ~95% of Form 4s
+            # that are routine option exercises and stock-plan disposals.
+            # feed_source is still "edgar" so dedup/screening pipelines apply.
+            "edgar_form4": EdgarFeedAdapter(
+                http,
+                user_agent=self._config.sec_user_agent,
+                days_back=self._config.edgar_days_back,
+                forms="4,4/A",
+                query="purchase",
+                max_pages=2,
             ),
             "fda": FdaFeedAdapter(
                 http,
@@ -366,6 +432,47 @@ class FeedPipeline:
         except Exception as e:
             logger.error("Feed %s failed: %s", name, e)
             return []
+
+    async def _enrich_edgar(
+        self, adapter: "EdgarFeedAdapter", items: List[FeedResult]
+    ) -> List[FeedResult]:
+        """Download filing body text for EDGAR items flagged needs_full_text.
+
+        Skips items already in the DB (they'd be dedup'd anyway) to avoid
+        burning SEC requests on re-fetches. Preserves original order so the
+        downstream `_process_feed` loop sees the same items it would have.
+        """
+        if not items:
+            return items
+
+        # Split into already-seen vs new. Only enrich the new ones.
+        new_items: List[FeedResult] = []
+        seen_items: List[FeedResult] = []
+        for item in items:
+            if await self._db.item_exists(item.item_id):
+                seen_items.append(item)
+            else:
+                new_items.append(item)
+
+        if not new_items:
+            return items
+
+        # Count how many will actually be fetched (for visibility)
+        to_fetch = sum(
+            1 for it in new_items
+            if (it.metadata or {}).get("needs_full_text") and it.url
+        )
+        if to_fetch:
+            logger.info(
+                "EDGAR enrichment: %d new items, %d need body text",
+                len(new_items), to_fetch,
+            )
+
+        enriched = await adapter.enrich_with_filing_text(new_items)
+
+        # Merge by item_id back into original order
+        enriched_map = {e.item_id: e for e in enriched}
+        return [enriched_map.get(it.item_id, it) for it in items]
 
     async def _process_feed(
         self, feed_name: str, items: List[FeedResult]

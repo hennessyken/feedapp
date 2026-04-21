@@ -139,30 +139,102 @@ def _format_fundamentals_block(
 
     return lines
 
-_TIER_ENV = {
-    "free":          "TELEGRAM_CHAT_ID_FREE",
-    "pro":           "TELEGRAM_CHAT_ID_PRO",
-    "pro_smallcap":  "TELEGRAM_CHAT_ID_SMALLCAP",
+# Channel → tier → env var.
+# SEC:  material corporate events (EDGAR 8-K, 6-K, S-1, Form 4)
+# FDA:  drug/regulatory/clinical events (FDA feed, EMA, ClinicalTrials,
+#       plus any EDGAR 8-K whose event type is clinical or regulatory)
+_CHANNEL_TIER_ENV: Dict[str, Dict[str, str]] = {
+    "sec": {
+        "free":         "TELEGRAM_CHAT_ID_SEC_FREE",
+        "pro":          "TELEGRAM_CHAT_ID_SEC_PRO",
+        "pro_smallcap": "TELEGRAM_CHAT_ID_SEC_SMALLCAP",
+    },
+    "fda": {
+        "free":         "TELEGRAM_CHAT_ID_FDA_FREE",
+        "pro":          "TELEGRAM_CHAT_ID_FDA_PRO",
+        "pro_smallcap": "TELEGRAM_CHAT_ID_FDA_SMALLCAP",
+    },
 }
 
+# Legacy single-channel env vars — used as fallback when channel-specific
+# ones are not configured (keeps existing deployments working).
+_LEGACY_TIER_ENV = {
+    "free":         "TELEGRAM_CHAT_ID_FREE",
+    "pro":          "TELEGRAM_CHAT_ID_PRO",
+    "pro_smallcap": "TELEGRAM_CHAT_ID_SMALLCAP",
+}
 
-def _token() -> Optional[str]:
+# Event types that belong on the FDA channel regardless of feed source.
+# An EDGAR 8-K announcing a clinical trial result or FDA decision goes to
+# FDA subscribers, not SEC subscribers.
+_FDA_EVENT_TYPES = {
+    "CLINICAL_TRIAL",
+    "CLINICAL_TRIAL_NEGATIVE",
+    "REGULATORY_DECISION",
+    "REGULATORY_NEGATIVE",
+}
+
+Channel = Literal["sec", "fda"]
+
+
+def classify_channel(feed_source: str, event_type: str) -> Channel:
+    """Route a signal to the SEC or FDA product channel.
+
+    Rules:
+    - FDA / EMA / ClinicalTrials feeds → always FDA channel
+    - EDGAR events with clinical/regulatory event type → FDA channel
+    - Everything else → SEC channel
+    """
+    src = (feed_source or "").lower()
+    if src in {"fda", "ema", "clinical_trials"}:
+        return "fda"
+    evt = (event_type or "").upper()
+    if evt in _FDA_EVENT_TYPES:
+        return "fda"
+    return "sec"
+
+
+def _token(channel: Channel = "sec") -> Optional[str]:
+    """Return the bot token for `channel`.
+
+    Lookup order:
+    1. TELEGRAM_BOT_TOKEN_SEC / TELEGRAM_BOT_TOKEN_FDA  (per-channel)
+    2. TELEGRAM_BOT_TOKEN                               (shared fallback)
+    """
+    per_channel = os.environ.get(f"TELEGRAM_BOT_TOKEN_{channel.upper()}", "").strip()
+    if per_channel:
+        return per_channel
     return (os.environ.get("TELEGRAM_BOT_TOKEN") or "").strip() or None
 
 
-def _chat_id(tier: str) -> Optional[str]:
-    env_var = _TIER_ENV.get(tier)
+def _chat_id(tier: str, channel: Channel = "sec") -> Optional[str]:
+    """Resolve the Telegram chat ID for a given tier + channel combination.
+
+    Lookup order:
+    1. Channel-specific env var  (TELEGRAM_CHAT_ID_SEC_PRO, etc.)
+    2. Legacy env var            (TELEGRAM_CHAT_ID_PRO, etc.)
+    3. Ultimate legacy fallback  (TELEGRAM_CHAT_ID)
+    """
+    env_var = _CHANNEL_TIER_ENV.get(channel, {}).get(tier)
     if env_var:
         cid = (os.environ.get(env_var) or "").strip()
         if cid:
             return cid
-    # legacy fallback
+    # Legacy single-channel fallback
+    legacy_var = _LEGACY_TIER_ENV.get(tier)
+    if legacy_var:
+        cid = (os.environ.get(legacy_var) or "").strip()
+        if cid:
+            return cid
     return (os.environ.get("TELEGRAM_CHAT_ID") or "").strip() or None
 
 
-def get_configured_channels() -> Dict[str, Optional[str]]:
-    """Return {tier: chat_id or None} for all known tiers."""
-    return {tier: _chat_id(tier) for tier in _TIER_ENV}
+def get_configured_channels() -> Dict[str, Dict[str, Optional[str]]]:
+    """Return {channel: {tier: chat_id or None}} for all known channels."""
+    return {
+        ch: {tier: _chat_id(tier, ch) for tier in tiers}
+        for ch, tiers in _CHANNEL_TIER_ENV.items()
+    }
 
 
 # ── Tier classification ───────────────────────────────────────────────────────
@@ -185,6 +257,28 @@ def classify_tier(signal: FormattedSignal, *, market_cap: Optional[float] = None
 
 # ── Message formatting ────────────────────────────────────────────────────────
 
+# Polarity badges — the very first thing a reader sees.
+_POLARITY_BADGE = {
+    "positive": "🟢 BULLISH",
+    "negative": "🔴 BEARISH",
+    "neutral":  "⚪ NEUTRAL",
+}
+# Direction arrow used inline with the ticker
+_POLARITY_ARROW = {
+    "positive": "↑",
+    "negative": "↓",
+    "neutral":  "↔",
+}
+
+
+def _polarity_header(signal: FormattedSignal) -> str:
+    """First line of every post: badge + arrow + ticker + company."""
+    badge = _POLARITY_BADGE.get(signal.polarity, "⚪ NEUTRAL")
+    arrow = _POLARITY_ARROW.get(signal.polarity, "↔")
+    company = getattr(signal, "company_name", "") or signal.ticker
+    return f"{badge}  {arrow}  {signal.ticker} — {company}"
+
+
 def _format_telegram_message(
     signal: FormattedSignal,
     human_text: Optional[str] = None,
@@ -199,12 +293,8 @@ def _format_telegram_message(
     post 24h later via _format_free_tier_delayed_message. If called with
     tier='free' we still emit something sane for backward compatibility.
     """
-    polarity_emoji = {"positive": "\u2191", "negative": "\u2193", "neutral": "\u2194"}
-    emoji = polarity_emoji.get(signal.polarity, "\u2194")
-    company = getattr(signal, "company_name", "") or signal.ticker
-
     lines = [
-        f"{emoji} {signal.ticker} — {company}",
+        _polarity_header(signal),
         signal.event.replace("_", " ").title(),
         "",
     ]
@@ -217,21 +307,17 @@ def _format_telegram_message(
     if tier in ("pro", "pro_smallcap"):
         lines.append(
             f"Impact: {signal.expected_impact.upper()}  |  "
-            f"Confidence: {signal.confidence:.0%}"
-        )
-        lines.append(
-            f"Polarity: {signal.polarity}  |  Timing: {signal.latency_class}"
+            f"Confidence: {signal.confidence:.0%}  |  "
+            f"Timing: {signal.latency_class}"
         )
 
         # Current price / buy anchor
-        price_parts: List[str] = []
         if buy_price is not None:
-            price_parts.append(f"Buy: ${buy_price:.4f}")
+            lines.append(f"Price at alert: ${buy_price:.2f}")
         elif fundamentals and fundamentals.get("current_price") is not None:
-            price_parts.append(f"Price: ${float(fundamentals['current_price']):.2f}")
+            lines.append(f"Price: ${float(fundamentals['current_price']):.2f}")
         else:
-            price_parts.append("Buy: market closed — pending next open")
-        lines.append("  |  ".join(price_parts))
+            lines.append("Price: market closed — will update at next open")
 
         # Fundamentals block (cap / sector / short / 52w range)
         ref_price = buy_price
@@ -243,20 +329,19 @@ def _format_telegram_message(
             lines.extend(fund_lines)
 
         # Source filing link — paid only
-        if signal.source and getattr(signal, "title", None) is not None:
-            # Prefer url attached to the formatted signal if present
-            url = getattr(signal, "url", "") or ""
-            if url:
-                safe_url = html.escape(url, quote=True)
-                lines.append("")
-                lines.append(f'<a href="{safe_url}">→ View source filing</a>')
+        url = getattr(signal, "url", "") or ""
+        if url:
+            safe_url = html.escape(url, quote=True)
+            lines.append("")
+            lines.append(f'<a href="{safe_url}">→ View source filing</a>')
     else:
-        # Legacy free-tier path (kept for back-compat only; free tier normally
-        # goes through _format_free_tier_delayed_message now).
+        # Legacy free-tier path (kept for back-compat only)
         lines.append("🔓 Real-time alerts + source filings on pro")
 
     lines.append("")
-    lines.append(f"Source: {signal.source}  |  {signal.timestamp}")
+    now_str = datetime.now(timezone.utc).strftime("%-d %b %Y  %H:%M UTC")
+    lines.append(f"Source: {signal.source}  |  {now_str}")
+    lines.append("For informational purposes only. Not financial advice. Do your own research.")
     return "\n".join(lines)
 
 
@@ -271,16 +356,15 @@ def _format_free_tier_delayed_message(
 ) -> str:
     """Format the 24h-delayed free-tier post.
 
-    The headline value is 'since flagged' price moves — this is what makes
+    The headline value is 'since triggered' price moves — this is what makes
     the delay feel like a feature rather than a penalty. No source URL, no
     real-time price, no buy anchor.
-    """
-    polarity_emoji = {"positive": "\u2191", "negative": "\u2193", "neutral": "\u2194"}
-    emoji = polarity_emoji.get(signal.polarity, "\u2194")
-    company = getattr(signal, "company_name", "") or signal.ticker
 
+    Footer shows the current send time (not the original signal time) so
+    subscribers see one clear timestamp and don't mistake this for a live alert.
+    """
     lines = [
-        f"{emoji} {signal.ticker} — {company}",
+        _polarity_header(signal),
         signal.event.replace("_", " ").title(),
         "",
     ]
@@ -289,9 +373,9 @@ def _format_free_tier_delayed_message(
         lines.append(summary)
         lines.append("")
 
-    # ── "Since flagged" moves ────────────────────────────────────────────
+    # ── "Since triggered" moves ──────────────────────────────────────────
     if price_at_flag is not None:
-        lines.append(f"Flagged 24h ago at ${float(price_at_flag):.2f}")
+        lines.append(f"Triggered 24h ago at ${float(price_at_flag):.2f}")
 
         move_parts: List[str] = []
         if price_1h is not None and price_at_flag:
@@ -305,7 +389,7 @@ def _format_free_tier_delayed_message(
             if s:
                 move_parts.append(f"{s} @ 24h")
         if move_parts:
-            lines.append(f"Since flagged: {', '.join(move_parts)}")
+            lines.append(f"Since triggered: {', '.join(move_parts)}")
         lines.append("")
 
     # ── Fundamentals (same block as paid) ────────────────────────────────
@@ -320,10 +404,16 @@ def _format_free_tier_delayed_message(
     lines.append("🔓 Real-time alerts + source filings on pro")
     lines.append("")
 
-    # Footer — use the flag time, not "now"
-    ts = flagged_at_iso or signal.timestamp
-    lines.append(f"Source: {signal.source}  |  flagged {ts}")
-    lines.append("Price moves shown. Past performance not indicative. Not investment advice.")
+    # Footer — show the original trigger time (yesterday) so subscribers
+    # understand when the signal was detected, not when this post fired.
+    raw_ts = flagged_at_iso or signal.timestamp or ""
+    try:
+        triggered_dt = datetime.fromisoformat(raw_ts.replace("Z", "+00:00"))
+        ts_str = triggered_dt.strftime("%-d %b %Y  %H:%M UTC")
+    except (ValueError, AttributeError):
+        ts_str = raw_ts
+    lines.append(f"Source: {signal.source}  |  Triggered {ts_str}")
+    lines.append("Price moves shown. Past performance not indicative. Not financial advice.")
     return "\n".join(lines)
 
 
@@ -360,25 +450,22 @@ async def send_signal(
     *,
     buy_price: Optional[float] = None,
     tier: Tier = "free",
+    channel: Channel = "sec",
     http: Optional[httpx.AsyncClient] = None,
     fundamentals: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Send a real-time signal to the channel for `tier`.
+    """Send a real-time signal to the correct product channel + tier.
 
-    Intended for paid tiers (pro / pro_smallcap). The free tier now gets a
-    separate delayed post via send_free_tier_delayed(); if called with
-    tier='free' this still works but emits the legacy teaser format.
-
-    Returns {sent, tier, chat_id, message_id}. Never raises.
+    Returns {sent, tier, channel, chat_id, message_id}. Never raises.
     """
-    token = _token()
-    chat_id = _chat_id(tier)
+    token = _token(channel)
+    chat_id = _chat_id(tier, channel)
     result: Dict[str, Any] = {
-        "sent": False, "tier": tier, "chat_id": chat_id, "message_id": None,
+        "sent": False, "tier": tier, "channel": channel, "chat_id": chat_id, "message_id": None,
     }
     if not token or not chat_id:
-        logger.info("SIGNAL_SKIPPED: tier=%s token=%s chat_id=%s ticker=%s",
-                    tier, bool(token), bool(chat_id), signal.ticker)
+        logger.info("SIGNAL_SKIPPED: tier=%s channel=%s token=%s chat_id=%s ticker=%s",
+                    tier, channel, bool(token), bool(chat_id), signal.ticker)
         return result
 
     message = _format_telegram_message(
@@ -417,21 +504,22 @@ async def send_free_tier_delayed(
     price_24h: Optional[float],
     fundamentals: Optional[Dict[str, Any]] = None,
     flagged_at_iso: Optional[str] = None,
+    channel: Channel = "sec",
     http: Optional[httpx.AsyncClient] = None,
 ) -> Dict[str, Any]:
     """Send the 24h-delayed post to the free-tier channel.
 
     Called by the free_tier scheduler, not by the signal pipeline.
-    Returns {sent, tier, chat_id, message_id}. Never raises.
+    Returns {sent, tier, channel, chat_id, message_id}. Never raises.
     """
-    token = _token()
-    chat_id = _chat_id("free")
+    token = _token(channel)
+    chat_id = _chat_id("free", channel)
     result: Dict[str, Any] = {
-        "sent": False, "tier": "free", "chat_id": chat_id, "message_id": None,
+        "sent": False, "tier": "free", "channel": channel, "chat_id": chat_id, "message_id": None,
     }
     if not token or not chat_id:
-        logger.info("FREE_DELAYED_SKIPPED: token=%s chat_id=%s ticker=%s",
-                    bool(token), bool(chat_id), signal.ticker)
+        logger.info("FREE_DELAYED_SKIPPED: channel=%s token=%s chat_id=%s ticker=%s",
+                    channel, bool(token), bool(chat_id), signal.ticker)
         return result
 
     message = _format_free_tier_delayed_message(
@@ -482,7 +570,7 @@ async def get_chat_info(tier: str, *, http: Optional[httpx.AsyncClient] = None) 
         out["error"] = "TELEGRAM_BOT_TOKEN not set"
         return out
     if not chat_id:
-        out["error"] = f"{_TIER_ENV.get(tier, tier)} not set"
+        out["error"] = f"{_LEGACY_TIER_ENV.get(tier, tier)} not set"
         return out
 
     owns = http is None

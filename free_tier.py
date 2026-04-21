@@ -20,11 +20,12 @@ All operations are best-effort: if IB is unavailable or returns None
 import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+from zoneinfo import ZoneInfo
 
 import httpx
 
 from db import FeedDatabase
-from notifier import send_free_tier_delayed
+from notifier import send_free_tier_delayed, classify_channel
 from signal_formatter import (
     FormattedSignal,
     _classify_impact,
@@ -34,6 +35,20 @@ from signal_formatter import (
 )
 
 logger = logging.getLogger(__name__)
+
+# ── Free-tier delivery window ─────────────────────────────────────────────────
+# Delayed posts are only sent between 7am and 9pm Eastern Time.
+# Outside this window the sweep is a no-op — items are picked up at 7am ET.
+# Paid-tier signals are always real-time with no window restriction.
+_ET = ZoneInfo("America/New_York")
+_WINDOW_START_HOUR = 7   # 7:00 am ET
+_WINDOW_END_HOUR   = 21  # 9:00 pm ET
+
+
+def _in_delivery_window() -> bool:
+    """Return True if the current ET time is within the free-tier send window."""
+    hour = datetime.now(_ET).hour
+    return _WINDOW_START_HOUR <= hour < _WINDOW_END_HOUR
 
 
 # ── Reconstruction: feed_items row → FormattedSignal ──────────────────────────
@@ -174,6 +189,16 @@ async def broadcast_pending_free_tier(
     Returns {"broadcast": n, "skipped": n}.
     """
     stats = {"broadcast": 0, "skipped": 0}
+
+    # Enforce quiet hours — hold posts until 7am ET, no blasts after 9pm ET.
+    if not _in_delivery_window():
+        now_et = datetime.now(_ET)
+        logger.debug(
+            "[free_tier] Outside delivery window (%s ET) — deferring until 07:00 ET",
+            now_et.strftime("%H:%M"),
+        )
+        return stats
+
     pending = await db.get_pending_free_tier()
 
     for row in pending:
@@ -185,6 +210,10 @@ async def broadcast_pending_free_tier(
         try:
             fund = await db.get_fundamentals(ticker)
             signal = _row_to_formatted_signal(row)
+            channel = classify_channel(
+                row.get("feed_source") or "",
+                row.get("event_type") or "",
+            )
 
             result = await send_free_tier_delayed(
                 signal,
@@ -194,6 +223,7 @@ async def broadcast_pending_free_tier(
                 fundamentals=fund,
                 flagged_at_iso=row.get("price_at_flag_at")
                                or row.get("published_at"),
+                channel=channel,
                 http=http,
             )
 

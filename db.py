@@ -7,6 +7,7 @@ Uses aiosqlite for async access. All timestamps stored as ISO-8601 UTC strings.
 
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -14,6 +15,38 @@ from typing import Any, Dict, List, Optional
 import aiosqlite
 
 logger = logging.getLogger(__name__)
+
+# ── Company-name normalisation for the ticker cache ───────────────────────────
+
+_LEGAL_SUFFIXES = re.compile(
+    r"\b(inc|incorporated|corp|corporation|co|company|ltd|limited|"
+    r"plc|llc|lp|llp|ag|se|sa|nv|bv|gmbh|ab|asa|oyj|"
+    r"holdings|holding|group|international|technologies|"
+    r"pharmaceuticals|pharma|therapeutics|biosciences|biologics|"
+    r"sciences|healthcare|medical|health|labs|laboratories)\b\.?",
+    re.IGNORECASE,
+)
+
+
+def _normalise_company(name: str) -> str:
+    """Return a normalised lookup key for a company name.
+
+    Strips legal-entity suffixes, punctuation, and extra whitespace so that
+    'Moderna Inc.', 'Moderna' and 'Moderna Therapeutics' all produce the
+    same key and hit the same cache row.
+
+    >>> _normalise_company("Moderna, Inc.")
+    'moderna'
+    >>> _normalise_company("Bristol-Myers Squibb Company")
+    'bristol-myers squibb'
+    """
+    if not name:
+        return ""
+    key = name.lower().strip()
+    key = _LEGAL_SUFFIXES.sub(" ", key)
+    key = re.sub(r"[,.'\"()&]", " ", key)
+    key = re.sub(r"\s+", " ", key).strip()
+    return key
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS feed_items (
@@ -97,6 +130,83 @@ CREATE TABLE IF NOT EXISTS backtest_prices (
     PRIMARY KEY (ticker, datetime)
 );
 CREATE INDEX IF NOT EXISTS idx_bt_prices_ticker ON backtest_prices(ticker);
+
+-- Company name → ticker cache.
+-- Populated whenever the LLM or EDGAR metadata successfully resolves a ticker.
+-- Looked up before every LLM call to avoid repeat resolution costs.
+-- company_key is a normalised form of the name (lowercase, no legal suffixes).
+CREATE TABLE IF NOT EXISTS company_ticker_cache (
+    company_key  TEXT PRIMARY KEY,   -- normalised lookup key
+    company_name TEXT NOT NULL,      -- original name as first seen
+    ticker       TEXT NOT NULL,
+    source       TEXT NOT NULL,      -- 'llm' | 'edgar_metadata' | 'manual'
+    hit_count    INTEGER DEFAULT 1,
+    created_at   TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ctc_ticker ON company_ticker_cache(ticker);
+
+-- One row per filing that entered the signal pipeline.
+-- Covers every stage: screened → sentry1 gate → decision → delivery.
+-- Disposition values:
+--   sent_pro | sent_smallcap | queued_free
+--   dropped_no_ticker | dropped_vetoed | dropped_sentry1_company
+--   dropped_sentry1_price | dropped_ignored | dropped_parse_error | dropped_error
+CREATE TABLE IF NOT EXISTS signal_log (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    logged_at        TEXT NOT NULL,
+
+    -- Filing identity
+    item_id          TEXT NOT NULL,
+    feed_source      TEXT,
+    ticker           TEXT,
+    company_name     TEXT,
+    form_type        TEXT,
+    event_type       TEXT,
+    title            TEXT,
+    url              TEXT,
+    published_at     TEXT,
+
+    -- Ticker resolution
+    ticker_source    TEXT,   -- metadata | cache | llm | none
+
+    -- Keyword screening
+    keyword_score    INTEGER,
+    keyword_category TEXT,
+    matched_keywords TEXT,   -- JSON array
+    vetoed           INTEGER DEFAULT 0,
+
+    -- Sentry-1 gate (NULL if LLM disabled or ticker not resolved)
+    sentry1_company  INTEGER,  -- 0-100 probability
+    sentry1_price    INTEGER,  -- 0-100 probability
+    sentry1_passed   INTEGER,  -- 0 | 1
+
+    -- Scoring
+    impact_score     INTEGER,
+    confidence       INTEGER,
+    action           TEXT,
+    freshness_mult   REAL,
+
+    -- Delivery outcome
+    disposition      TEXT NOT NULL,
+    drop_reason      TEXT,    -- human-readable if dropped
+    tier             TEXT,    -- free | pro | pro_smallcap
+    channel          TEXT,    -- sec | fda
+
+    -- Prices at key moments (NULL when market closed or IB unavailable)
+    price_at_flag    REAL,
+    price_1h         REAL,
+    price_24h        REAL,
+
+    -- Fundamentals snapshot at flag time
+    market_cap       REAL,
+    short_pct        REAL
+);
+CREATE INDEX IF NOT EXISTS idx_sl_ticker      ON signal_log(ticker);
+CREATE INDEX IF NOT EXISTS idx_sl_logged_at   ON signal_log(logged_at);
+CREATE INDEX IF NOT EXISTS idx_sl_disposition ON signal_log(disposition);
+CREATE INDEX IF NOT EXISTS idx_sl_event_type  ON signal_log(event_type);
+CREATE INDEX IF NOT EXISTS idx_sl_feed_source ON signal_log(feed_source);
 
 CREATE TABLE IF NOT EXISTS ticker_fundamentals (
     ticker              TEXT PRIMARY KEY,
@@ -192,6 +302,9 @@ class FeedDatabase:
         await self._migrate_columns()
         await self._migrate_backtest_signals_llm()
         await self._migrate_fundamentals_columns()
+        await self._migrate_company_ticker_cache()
+        await self._migrate_signal_log()
+        await self._migrate_signal_log_channel()
         logger.info("Database connected: %s", self._db_path)
 
     async def _migrate_fundamentals_columns(self) -> None:
@@ -214,6 +327,239 @@ class FeedDatabase:
                 logger.info("Migrated ticker_fundamentals columns: %s", ", ".join(added))
         except Exception as e:
             logger.warning("Fundamentals migration failed: %s", e)
+
+    async def _migrate_company_ticker_cache(self) -> None:
+        """Create the company_ticker_cache table if it doesn't exist yet.
+
+        The table is in SCHEMA so new DBs get it automatically; this handles
+        existing databases that were created before the table was added.
+        """
+        assert self._db
+        try:
+            await self._db.execute(
+                """CREATE TABLE IF NOT EXISTS company_ticker_cache (
+                    company_key  TEXT PRIMARY KEY,
+                    company_name TEXT NOT NULL,
+                    ticker       TEXT NOT NULL,
+                    source       TEXT NOT NULL,
+                    hit_count    INTEGER DEFAULT 1,
+                    created_at   TEXT NOT NULL,
+                    last_seen_at TEXT NOT NULL
+                )"""
+            )
+            await self._db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_ctc_ticker "
+                "ON company_ticker_cache(ticker)"
+            )
+            await self._db.commit()
+        except Exception as e:
+            logger.warning("company_ticker_cache migration failed: %s", e)
+
+    async def lookup_ticker_by_company(self, company_name: str) -> Optional[str]:
+        """Return a cached ticker for `company_name`, or None on miss.
+
+        Matching is done on the normalised key so minor name variants
+        ("Moderna Inc." vs "Moderna") resolve to the same entry. Also
+        bumps hit_count and last_seen_at on every hit.
+        """
+        assert self._db
+        key = _normalise_company(company_name)
+        if not key:
+            return None
+        now = datetime.now(timezone.utc).isoformat()
+        cur = await self._db.execute(
+            "SELECT ticker FROM company_ticker_cache WHERE company_key = ?", (key,)
+        )
+        row = await cur.fetchone()
+        if row is None:
+            return None
+        ticker = row[0]
+        # Bump usage stats (best-effort, don't let this fail the lookup)
+        try:
+            await self._db.execute(
+                """UPDATE company_ticker_cache
+                   SET hit_count = hit_count + 1, last_seen_at = ?
+                   WHERE company_key = ?""",
+                (now, key),
+            )
+            await self._db.commit()
+        except Exception:
+            pass
+        return ticker
+
+    async def cache_ticker(
+        self,
+        company_name: str,
+        ticker: str,
+        *,
+        source: str = "llm",
+    ) -> None:
+        """Upsert a company → ticker mapping into the cache.
+
+        On conflict (same normalised key) we update the ticker + source if
+        it changed, and always bump hit_count and last_seen_at.
+        """
+        assert self._db
+        key = _normalise_company(company_name)
+        if not key or not ticker:
+            return
+        now = datetime.now(timezone.utc).isoformat()
+        try:
+            await self._db.execute(
+                """INSERT INTO company_ticker_cache
+                       (company_key, company_name, ticker, source, hit_count,
+                        created_at, last_seen_at)
+                   VALUES (?, ?, ?, ?, 1, ?, ?)
+                   ON CONFLICT(company_key) DO UPDATE SET
+                       ticker       = excluded.ticker,
+                       source       = excluded.source,
+                       hit_count    = hit_count + 1,
+                       last_seen_at = excluded.last_seen_at""",
+                (key, company_name, ticker, source, now, now),
+            )
+            await self._db.commit()
+        except Exception as e:
+            logger.debug("cache_ticker failed for %s: %s", company_name, e)
+
+    async def _migrate_signal_log(self) -> None:
+        """Create signal_log table and indexes for existing databases."""
+        assert self._db
+        try:
+            await self._db.executescript("""
+                CREATE TABLE IF NOT EXISTS signal_log (
+                    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                    logged_at        TEXT NOT NULL,
+                    item_id          TEXT NOT NULL,
+                    feed_source      TEXT,
+                    ticker           TEXT,
+                    company_name     TEXT,
+                    form_type        TEXT,
+                    event_type       TEXT,
+                    title            TEXT,
+                    url              TEXT,
+                    published_at     TEXT,
+                    ticker_source    TEXT,
+                    keyword_score    INTEGER,
+                    keyword_category TEXT,
+                    matched_keywords TEXT,
+                    vetoed           INTEGER DEFAULT 0,
+                    sentry1_company  INTEGER,
+                    sentry1_price    INTEGER,
+                    sentry1_passed   INTEGER,
+                    impact_score     INTEGER,
+                    confidence       INTEGER,
+                    action           TEXT,
+                    freshness_mult   REAL,
+                    disposition      TEXT NOT NULL,
+                    drop_reason      TEXT,
+                    tier             TEXT,
+                    channel          TEXT,
+                    price_at_flag    REAL,
+                    price_1h         REAL,
+                    price_24h        REAL,
+                    market_cap       REAL,
+                    short_pct        REAL
+                );
+                CREATE INDEX IF NOT EXISTS idx_sl_ticker
+                    ON signal_log(ticker);
+                CREATE INDEX IF NOT EXISTS idx_sl_logged_at
+                    ON signal_log(logged_at);
+                CREATE INDEX IF NOT EXISTS idx_sl_disposition
+                    ON signal_log(disposition);
+                CREATE INDEX IF NOT EXISTS idx_sl_event_type
+                    ON signal_log(event_type);
+                CREATE INDEX IF NOT EXISTS idx_sl_feed_source
+                    ON signal_log(feed_source);
+            """)
+            await self._db.commit()
+        except Exception as e:
+            logger.warning("signal_log migration failed: %s", e)
+
+    async def _migrate_signal_log_channel(self) -> None:
+        """Add the `channel` column to existing signal_log tables."""
+        assert self._db
+        try:
+            cur = await self._db.execute("PRAGMA table_info(signal_log)")
+            existing = {row[1] for row in await cur.fetchall()}
+            if existing and "channel" not in existing:
+                await self._db.execute(
+                    "ALTER TABLE signal_log ADD COLUMN channel TEXT"
+                )
+                await self._db.commit()
+                logger.info("Migrated signal_log: added 'channel' column")
+        except Exception as e:
+            logger.warning("signal_log channel migration failed: %s", e)
+
+    async def write_signal_log(
+        self,
+        *,
+        item_id: str,
+        feed_source: str = "",
+        ticker: str = "",
+        company_name: str = "",
+        form_type: str = "",
+        event_type: str = "",
+        title: str = "",
+        url: str = "",
+        published_at: str = "",
+        ticker_source: str = "none",
+        keyword_score: Optional[int] = None,
+        keyword_category: str = "",
+        matched_keywords: Optional[List[str]] = None,
+        vetoed: bool = False,
+        sentry1_company: Optional[int] = None,
+        sentry1_price: Optional[int] = None,
+        sentry1_passed: Optional[bool] = None,
+        impact_score: Optional[int] = None,
+        confidence: Optional[int] = None,
+        action: str = "",
+        freshness_mult: Optional[float] = None,
+        disposition: str,
+        drop_reason: str = "",
+        tier: str = "",
+        channel: str = "",
+        price_at_flag: Optional[float] = None,
+        price_1h: Optional[float] = None,
+        price_24h: Optional[float] = None,
+        market_cap: Optional[float] = None,
+        short_pct: Optional[float] = None,
+    ) -> None:
+        """Append one row to signal_log. Never raises — logging must not
+        break the pipeline."""
+        assert self._db
+        now = datetime.now(timezone.utc).isoformat()
+        try:
+            await self._db.execute(
+                """INSERT INTO signal_log (
+                    logged_at, item_id, feed_source, ticker, company_name,
+                    form_type, event_type, title, url, published_at,
+                    ticker_source, keyword_score, keyword_category,
+                    matched_keywords, vetoed,
+                    sentry1_company, sentry1_price, sentry1_passed,
+                    impact_score, confidence, action, freshness_mult,
+                    disposition, drop_reason, tier, channel,
+                    price_at_flag, price_1h, price_24h,
+                    market_cap, short_pct
+                ) VALUES (
+                    ?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?, ?,?,?, ?,?,?,?,
+                    ?,?,?,?, ?,?,?, ?,?
+                )""",
+                (
+                    now, item_id, feed_source, ticker, company_name,
+                    form_type, event_type, title, url, published_at,
+                    ticker_source, keyword_score, keyword_category,
+                    json.dumps(matched_keywords or []), int(vetoed),
+                    sentry1_company, sentry1_price,
+                    None if sentry1_passed is None else int(sentry1_passed),
+                    impact_score, confidence, action, freshness_mult,
+                    disposition, drop_reason, tier, channel or None,
+                    price_at_flag, price_1h, price_24h,
+                    market_cap, short_pct,
+                ),
+            )
+            await self._db.commit()
+        except Exception as e:
+            logger.debug("write_signal_log failed: %s", e)
 
     async def _migrate_backtest_prices(self) -> None:
         """Drop old daily backtest_prices table if it has 'date' column (pre-intraday)."""

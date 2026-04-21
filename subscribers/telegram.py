@@ -6,6 +6,7 @@ Extracted from pipeline.py _analyze_and_deliver(). Identical logic,
 just wrapped as a subscriber for the fan-out model.
 """
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -46,7 +47,7 @@ class TelegramSubscriber(BaseSubscriber):
     ) -> Dict[str, Any]:
         from signal_formatter import format_signal, format_signal_text
         from signal_formatter import _classify_polarity, _classify_impact, _classify_latency
-        from notifier import send_signal, classify_tier
+        from notifier import send_signal, classify_tier, classify_channel
 
         stats = {"analyzed": 0, "sent": 0, "skipped": 0, "ignored": 0, "errors": 0}
         scorer = DeterministicEventScorer()
@@ -115,7 +116,21 @@ class TelegramSubscriber(BaseSubscriber):
                     meta.get("company_name") or meta.get("entity_name") or ""
                 ).strip()
 
-                # LLM ticker resolution
+                # ── Ticker resolution: cache → LLM ──────────────────────
+                ticker_source = "none"
+                if ticker:
+                    ticker_source = "metadata"
+
+                if not ticker and company_name:
+                    cached = await ctx.db.lookup_ticker_by_company(company_name)
+                    if cached:
+                        ticker = cached
+                        ticker_source = "cache"
+                        logger.info(
+                            "[telegram] Ticker from cache: %s → %s",
+                            company_name, ticker,
+                        )
+
                 if not ticker and llm is not None:
                     try:
                         resolved = await _resolve_ticker_llm(
@@ -124,17 +139,32 @@ class TelegramSubscriber(BaseSubscriber):
                             item.feed_source,
                         )
                         if resolved:
-                            ticker = resolved["ticker"]
-                            if not company_name:
-                                company_name = resolved["company"]
-                            logger.info(
-                                "[telegram] Ticker resolved: %s → %s (%s)",
-                                item.title[:50], ticker, company_name,
-                            )
-                            if ctx.spend_tracker and resolved.get("usage"):
-                                await ctx.spend_tracker.record(
-                                    "gpt-5-nano", resolved["usage"],
-                                    call_type="ticker_resolve",
+                            raw_ticker = resolved["ticker"] or ""
+                            # Reject LLM placeholders like UNKNOWN_COMPANY_NAME
+                            import re as _re
+                            if raw_ticker and not raw_ticker.upper().startswith("UNKNOWN") and _re.fullmatch(r"[A-Z]{1,5}(?:\.[A-Z])?", raw_ticker.upper()):
+                                ticker = raw_ticker.upper()
+                                ticker_source = "llm"
+                                if not company_name:
+                                    company_name = resolved["company"]
+                                logger.info(
+                                    "[telegram] Ticker resolved via LLM: %s → %s (%s)",
+                                    item.title[:50], ticker, company_name,
+                                )
+                                if ctx.spend_tracker and resolved.get("usage"):
+                                    await ctx.spend_tracker.record(
+                                        "gpt-5-nano", resolved["usage"],
+                                        call_type="ticker_resolve",
+                                    )
+                                # Cache for next time — free resolution on repeat hits
+                                if ticker and company_name:
+                                    await ctx.db.cache_ticker(
+                                        company_name, ticker, source="llm",
+                                    )
+                            else:
+                                logger.debug(
+                                    "[telegram] LLM ticker rejected (not a valid symbol): %r",
+                                    raw_ticker,
                                 )
                     except Exception as e:
                         logger.debug("[telegram] Ticker resolution failed: %s", e)
@@ -145,13 +175,40 @@ class TelegramSubscriber(BaseSubscriber):
                         item.title[:60], item.feed_source,
                     )
                     stats["skipped"] += 1
+                    await ctx.db.write_signal_log(
+                        item_id=item.item_id,
+                        feed_source=item.feed_source,
+                        ticker="",
+                        company_name=company_name,
+                        form_type=str(meta.get("form_type") or ""),
+                        event_type=event_type,
+                        title=item.title,
+                        url=item.url or "",
+                        published_at=item.published_at or "",
+                        ticker_source="none",
+                        keyword_score=screen.score,
+                        keyword_category=screen.event_category,
+                        matched_keywords=list(screen.matched_keywords),
+                        vetoed=screen.vetoed,
+                        disposition="dropped_no_ticker",
+                        drop_reason="ticker not resolvable from metadata, cache, or LLM",
+                    )
                     continue
 
                 if not company_name:
                     company_name = ticker
 
+                # Seed the cache from metadata-resolved tickers (EDGAR) so
+                # subsequent FDA/EMA filings for the same company skip the LLM.
+                if ticker and company_name and company_name != ticker:
+                    await ctx.db.cache_ticker(
+                        company_name, ticker, source="edgar_metadata",
+                    )
+
                 llm_ranker_succeeded = False
                 sentry1_passed = False
+                sentry1_company_prob: Optional[int] = None
+                sentry1_price_prob: Optional[int] = None
                 excerpt = f"{item.title}\n\n{item.content_snippet or ''}"[:12_000]
 
                 # ── LLM path: Sentry-1 gate → Ranker extraction ─────────
@@ -176,6 +233,9 @@ class TelegramSubscriber(BaseSubscriber):
                                 llm._last_model, llm._last_usage, call_type="sentry1",
                             )
 
+                        sentry1_company_prob = sentry_result.company_probability
+                        sentry1_price_prob = sentry_result.price_probability
+
                         logger.info(
                             "[telegram] Sentry-1 %s: company=%d%% price=%d%% — %s",
                             ticker,
@@ -186,9 +246,47 @@ class TelegramSubscriber(BaseSubscriber):
 
                         if sentry_result.company_probability < 60:
                             stats["skipped"] += 1
+                            await ctx.db.write_signal_log(
+                                item_id=item.item_id,
+                                feed_source=item.feed_source,
+                                ticker=ticker, company_name=company_name,
+                                form_type=str(meta.get("form_type") or ""),
+                                event_type=event_type, title=item.title,
+                                url=item.url or "", published_at=item.published_at or "",
+                                ticker_source=ticker_source,
+                                keyword_score=screen.score,
+                                keyword_category=screen.event_category,
+                                matched_keywords=list(screen.matched_keywords),
+                                vetoed=screen.vetoed,
+                                sentry1_company=sentry1_company_prob,
+                                sentry1_price=sentry1_price_prob,
+                                sentry1_passed=False,
+                                freshness_mult=round(freshness_mult, 4),
+                                disposition="dropped_sentry1_company",
+                                drop_reason=f"company_probability={sentry_result.company_probability}% < 60%",
+                            )
                             continue
                         if sentry_result.price_probability < 50:
                             stats["skipped"] += 1
+                            await ctx.db.write_signal_log(
+                                item_id=item.item_id,
+                                feed_source=item.feed_source,
+                                ticker=ticker, company_name=company_name,
+                                form_type=str(meta.get("form_type") or ""),
+                                event_type=event_type, title=item.title,
+                                url=item.url or "", published_at=item.published_at or "",
+                                ticker_source=ticker_source,
+                                keyword_score=screen.score,
+                                keyword_category=screen.event_category,
+                                matched_keywords=list(screen.matched_keywords),
+                                vetoed=screen.vetoed,
+                                sentry1_company=sentry1_company_prob,
+                                sentry1_price=sentry1_price_prob,
+                                sentry1_passed=False,
+                                freshness_mult=round(freshness_mult, 4),
+                                disposition="dropped_sentry1_price",
+                                drop_reason=f"price_probability={sentry_result.price_probability}% < 50%",
+                            )
                             continue
 
                         sentry1_passed = True
@@ -342,12 +440,46 @@ class TelegramSubscriber(BaseSubscriber):
                 # Skip ignored signals
                 if final_action == "ignore" or final_confidence < 55:
                     stats["ignored"] += 1
+                    await ctx.db.write_signal_log(
+                        item_id=item.item_id,
+                        feed_source=item.feed_source,
+                        ticker=ticker, company_name=company_name,
+                        form_type=str(meta.get("form_type") or ""),
+                        event_type=event_type, title=item.title,
+                        url=item.url or "", published_at=item.published_at or "",
+                        ticker_source=ticker_source,
+                        keyword_score=screen.score,
+                        keyword_category=screen.event_category,
+                        matched_keywords=list(screen.matched_keywords),
+                        vetoed=screen.vetoed,
+                        sentry1_company=sentry1_company_prob,
+                        sentry1_price=sentry1_price_prob,
+                        sentry1_passed=sentry1_passed,
+                        impact_score=impact_out, confidence=final_confidence,
+                        action=final_action, freshness_mult=round(freshness_mult, 4),
+                        disposition="dropped_ignored",
+                        drop_reason=f"action={final_action} confidence={final_confidence}",
+                    )
                     continue
 
                 # Skip PARSE_ERROR
                 if event_type == "PARSE_ERROR":
                     logger.info("[telegram] Skipping PARSE_ERROR for %s", ticker)
                     stats["ignored"] += 1
+                    await ctx.db.write_signal_log(
+                        item_id=item.item_id,
+                        feed_source=item.feed_source,
+                        ticker=ticker, company_name=company_name,
+                        form_type=str(meta.get("form_type") or ""),
+                        event_type=event_type, title=item.title,
+                        url=item.url or "", published_at=item.published_at or "",
+                        ticker_source=ticker_source,
+                        keyword_score=screen.score,
+                        keyword_category=screen.event_category,
+                        matched_keywords=list(screen.matched_keywords),
+                        disposition="dropped_parse_error",
+                        drop_reason="LLM returned PARSE_ERROR event type",
+                    )
                     continue
 
                 # ── Build signal + deliver via Telegram ──────────────────
@@ -381,13 +513,9 @@ class TelegramSubscriber(BaseSubscriber):
                                 await ctx.db.update_buy_price(
                                     item.item_id, buy_price, signal_date,
                                 )
-                                # Also stamp price_at_flag — the anchor used by
-                                # the free tier's "since flagged" move calculation.
                                 await ctx.db.update_price_at_flag(
                                     item.item_id, buy_price,
                                 )
-                                # Cache on fundamentals row so paid posts can show
-                                # a recent price even when IB is unavailable.
                                 await ctx.db.update_current_price(ticker, buy_price)
                                 logger.info("[telegram] Buy price: %s = $%.4f", ticker, buy_price)
                             else:
@@ -406,26 +534,49 @@ class TelegramSubscriber(BaseSubscriber):
                         api_key=config.openai_api_key,
                     )
                     tier = classify_tier(formatted)
+                    channel = classify_channel(item.feed_source, event_type)
+                    fundamentals = await ctx.db.get_fundamentals(ticker)
 
-                    # ── Free tier: defer. The free_tier scheduler will emit
-                    # the delayed post 24h from now with since-flagged moves.
+                    # ── Free tier: defer ─────────────────────────────────
                     if tier == "free":
-                        stats["sent"] += 1  # count as "queued" — delivery is deferred
+                        stats["sent"] += 1
                         logger.info(
-                            "[telegram] QUEUED for free-tier +24h: %s %s",
-                            ticker, event_type,
+                            "[telegram] QUEUED for free-tier +24h: %s %s channel=%s",
+                            ticker, event_type, channel,
+                        )
+                        await ctx.db.write_signal_log(
+                            item_id=item.item_id,
+                            feed_source=item.feed_source,
+                            ticker=ticker, company_name=company_name,
+                            form_type=str(meta.get("form_type") or ""),
+                            event_type=event_type, title=item.title,
+                            url=item.url or "", published_at=item.published_at or "",
+                            ticker_source=ticker_source,
+                            keyword_score=screen.score,
+                            keyword_category=screen.event_category,
+                            matched_keywords=list(screen.matched_keywords),
+                            vetoed=screen.vetoed,
+                            sentry1_company=sentry1_company_prob,
+                            sentry1_price=sentry1_price_prob,
+                            sentry1_passed=sentry1_passed,
+                            impact_score=impact_out, confidence=final_confidence,
+                            action=final_action, freshness_mult=round(freshness_mult, 4),
+                            disposition="queued_free",
+                            tier="free",
+                            channel=channel,
+                            price_at_flag=buy_price,
+                            market_cap=fundamentals.get("market_cap") if fundamentals else None,
+                            short_pct=fundamentals.get("short_pct_of_float") if fundamentals else None,
                         )
                         continue
 
-                    # ── Paid tiers: send real-time, with fundamentals inline.
-                    fundamentals = await ctx.db.get_fundamentals(ticker)
+                    # ── Paid tiers: send real-time ───────────────────────
                     result = await send_signal(
                         formatted, human_text=human_text,
-                        buy_price=buy_price, tier=tier, http=ctx.http,
-                        fundamentals=fundamentals,
+                        buy_price=buy_price, tier=tier, channel=channel,
+                        http=ctx.http, fundamentals=fundamentals,
                     )
                     sent = result.get("sent", False)
-                    # Persist tier + message_id for GUI lookup
                     try:
                         if sent and hasattr(ctx, "db") and ctx.db:
                             await ctx.db.mark_telegram_sent(
@@ -435,11 +586,38 @@ class TelegramSubscriber(BaseSubscriber):
                             )
                     except Exception:
                         pass
+
+                    disposition = f"sent_{tier}" if sent else "dropped_send_failed"
+                    await ctx.db.write_signal_log(
+                        item_id=item.item_id,
+                        feed_source=item.feed_source,
+                        ticker=ticker, company_name=company_name,
+                        form_type=str(meta.get("form_type") or ""),
+                        event_type=event_type, title=item.title,
+                        url=item.url or "", published_at=item.published_at or "",
+                        ticker_source=ticker_source,
+                        keyword_score=screen.score,
+                        keyword_category=screen.event_category,
+                        matched_keywords=list(screen.matched_keywords),
+                        vetoed=screen.vetoed,
+                        sentry1_company=sentry1_company_prob,
+                        sentry1_price=sentry1_price_prob,
+                        sentry1_passed=sentry1_passed,
+                        impact_score=impact_out, confidence=final_confidence,
+                        action=final_action, freshness_mult=round(freshness_mult, 4),
+                        disposition=disposition,
+                        tier=tier,
+                        channel=channel,
+                        price_at_flag=buy_price,
+                        market_cap=fundamentals.get("market_cap") if fundamentals else None,
+                        short_pct=fundamentals.get("short_pct_of_float") if fundamentals else None,
+                    )
+
                     if sent:
                         stats["sent"] += 1
                         logger.info(
-                            "[telegram] SENT: %s %s impact=%d conf=%d",
-                            ticker, event_type, impact_out, final_confidence,
+                            "[telegram] SENT: %s %s impact=%d conf=%d tier=%s channel=%s",
+                            ticker, event_type, impact_out, final_confidence, tier, channel,
                         )
                     else:
                         stats["skipped"] += 1
@@ -450,6 +628,12 @@ class TelegramSubscriber(BaseSubscriber):
             except Exception as e:
                 logger.error("[telegram] Analysis failed for %s: %s", item.item_id, e)
                 stats["errors"] += 1
+                await ctx.db.write_signal_log(
+                    item_id=item.item_id,
+                    feed_source=item.feed_source,
+                    disposition="dropped_error",
+                    drop_reason=str(e)[:200],
+                )
 
         logger.info(
             "[telegram] Complete: %d analyzed, %d sent, %d skipped, %d ignored, %d errors",

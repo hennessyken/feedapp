@@ -28,12 +28,16 @@ _COMPANY_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 
 # In-memory CIK→ticker cache (loaded once per process)
 _cik_ticker_map: Dict[str, str] = {}
+# company_tickers.json also carries the company title — store it so we can
+# bulk-seed the company_ticker_cache table without a second HTTP request.
+# Maps normalised company name → (original_title, ticker).
+_sec_company_seed: Dict[str, tuple] = {}
 _cik_map_loaded = False
 
 
 async def _ensure_cik_map(http: httpx.AsyncClient, user_agent: str) -> None:
     """Download SEC CIK→ticker mapping (once per process)."""
-    global _cik_ticker_map, _cik_map_loaded
+    global _cik_ticker_map, _sec_company_seed, _cik_map_loaded
     if _cik_map_loaded:
         return
     try:
@@ -47,12 +51,56 @@ async def _ensure_cik_map(http: httpx.AsyncClient, user_agent: str) -> None:
         for entry in data.values():
             cik = str(entry["cik_str"])
             ticker = entry.get("ticker", "")
+            title = entry.get("title", "")
             if cik and ticker:
                 _cik_ticker_map[cik] = ticker.upper()
+            if ticker and title:
+                from db import _normalise_company
+                key = _normalise_company(title)
+                if key:
+                    _sec_company_seed[key] = (title, ticker.upper())
         _cik_map_loaded = True
-        logger.info("Loaded SEC CIK→ticker map: %d entries", len(_cik_ticker_map))
+        logger.info(
+            "Loaded SEC CIK→ticker map: %d entries (%d company names for cache seed)",
+            len(_cik_ticker_map), len(_sec_company_seed),
+        )
     except Exception as e:
         logger.warning("Failed to load SEC CIK→ticker map: %s", e)
+
+
+async def seed_company_ticker_cache(db: Any) -> int:
+    """Bulk-upsert SEC company names → tickers into the DB cache.
+
+    Called once per process after the CIK map loads. Uses INSERT OR IGNORE
+    so existing LLM-resolved entries are never overwritten — those are more
+    precise than the SEC's broad company titles.
+
+    Returns the number of rows inserted (0 on repeat calls).
+    """
+    if not _sec_company_seed:
+        return 0
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    rows = [
+        (key, title, ticker, "sec_cik_map", now, now)
+        for key, (title, ticker) in _sec_company_seed.items()
+    ]
+    inserted = 0
+    try:
+        assert db._db is not None
+        # INSERT OR IGNORE — don't overwrite LLM-resolved or manual entries.
+        await db._db.executemany(
+            """INSERT OR IGNORE INTO company_ticker_cache
+               (company_key, company_name, ticker, source, created_at, last_seen_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            rows,
+        )
+        await db._db.commit()
+        inserted = len(rows)
+        logger.info("Seeded company_ticker_cache with %d SEC entries", inserted)
+    except Exception as e:
+        logger.warning("company_ticker_cache seed failed: %s", e)
+    return inserted
 
 
 # EDGAR EFTS full-text search endpoint
@@ -87,8 +135,31 @@ _8K_ITEMS: Dict[str, str] = {
 }
 
 
-# Forms where full text adds real signal — download the primary document
-_FULL_TEXT_FORMS = {"DEFM14A", "S-4", "SC TO-T", "SC TO-T/A", "CB", "CB/A"}
+# Forms where the title gives us nothing useful — we MUST download body text
+# or the keyword screener has nothing to match on.
+#
+#   6-K/6-K/A — foreign private issuer reports. No standard item taxonomy,
+#              so titles are just "Company — 6-K" with no content hints.
+#   4/4/A     — insider transaction reports. Title is bare; body text contains
+#               transaction type (purchase/sale), shares, and price.
+#   S-1/S-1/A — IPO registration statements. "Public offering" is in the
+#               opening paragraphs, well within our 6k-char extract.
+#   DEFM14A / S-4 / SC TO-T / CB — M&A-related forms where deal terms live
+#                                   in the body, not the title.
+_FULL_TEXT_FORMS = {
+    "6-K", "6-K/A",
+    "4", "4/A",
+    "S-1", "S-1/A",
+    "DEFM14A", "S-4", "SC TO-T", "SC TO-T/A", "CB", "CB/A",
+}
+
+# 8-K items that carry no descriptive signal on their own. When an 8-K's
+# items list is empty or contains only these, the title won't match any
+# screener keyword and we should enrich body text before screening.
+#   7.01 — Regulation FD Disclosure (catch-all, often material)
+#   8.01 — Other Events (explicit "we're filing this because we must")
+#   9.01 — Financial Statements and Exhibits (boilerplate companion item)
+_LOW_SIGNAL_8K_ITEMS = frozenset({"7.01", "8.01", "9.01"})
 
 # Max chars to extract from a filing document (keeps LLM cost manageable)
 _MAX_FILING_TEXT = 6_000
@@ -168,7 +239,7 @@ class EdgarFeedAdapter(BaseFeedAdapter):
         days_back: int = 1,
         forms: str = "8-K,6-K",
         page_size: int = 50,
-        max_pages: int = 4,
+        max_pages: int = 2,
         query: str = "",
     ) -> None:
         super().__init__(http)
@@ -277,6 +348,13 @@ class EdgarFeedAdapter(BaseFeedAdapter):
         if not entity:
             return None
 
+        # For Form 4, display_names[1] is the reporting person (insider).
+        # Build a richer title: "Company — Form 4: Insider Purchase (Jane Smith)"
+        form_upper_early = (src.get("form", "") or src.get("file_type", "")).upper()
+        insider_name = ""
+        if form_upper_early in {"4", "4/A"} and len(display_names) > 1:
+            insider_name = display_names[1].split("(")[0].strip()
+
         # Build title from entity + form type + item descriptions
         item_descs = []
         for item_num in items_list:
@@ -285,7 +363,9 @@ class EdgarFeedAdapter(BaseFeedAdapter):
                 item_descs.append(f"{item_num}: {desc}")
 
         title = f"{entity} — {form_type}"
-        if item_descs:
+        if insider_name:
+            title += f" (Insider Filing: {insider_name})"
+        elif item_descs:
             title += f" ({', '.join(item_descs[:3])})"
 
         # Build filing URL
@@ -305,6 +385,18 @@ class EdgarFeedAdapter(BaseFeedAdapter):
             except ValueError:
                 pass
 
+        # Decide whether this filing needs body-text enrichment BEFORE screening.
+        # Three triggers:
+        #   1. Form type is in _FULL_TEXT_FORMS (6-K, M&A forms)
+        #   2. 8-K has no items listed (rare, but screener would see a bare title)
+        #   3. 8-K's items are entirely "low signal" (7.01 / 8.01 / 9.01)
+        form_upper = form_type.upper()
+        needs_full_text = form_upper in _FULL_TEXT_FORMS
+        if not needs_full_text and form_upper.startswith("8-K"):
+            item_set = {str(i).strip() for i in items_list if str(i).strip()}
+            if not item_set or item_set.issubset(_LOW_SIGNAL_8K_ITEMS):
+                needs_full_text = True
+
         return FeedResult(
             feed_source="edgar",
             item_id=stable_hash(f"edgar:{adsh}"),
@@ -320,7 +412,7 @@ class EdgarFeedAdapter(BaseFeedAdapter):
                 "form_type": form_type,
                 "items": items_list,
                 "file_date": file_date,
-                "needs_full_text": form_type.upper() in _FULL_TEXT_FORMS,
+                "needs_full_text": needs_full_text,
             },
         )
 

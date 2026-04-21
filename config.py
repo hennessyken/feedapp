@@ -79,16 +79,16 @@ class RuntimeConfig:
             os.getenv("SEC_USER_AGENT") or "Regfeed/1.0 (regfeed@example.com)"
         ).strip()
     )
-    edgar_days_back: int = field(default_factory=lambda: _env_int("EDGAR_DAYS_BACK", 1))
+    edgar_days_back: int = field(default_factory=lambda: _env_int("EDGAR_DAYS_BACK", 1))  # today only on first start
     edgar_forms: str = field(
-        default_factory=lambda: (os.getenv("EDGAR_FORMS") or "8-K,6-K").strip()
+        default_factory=lambda: (os.getenv("EDGAR_FORMS") or "8-K,6-K,S-1,S-1/A").strip()
     )
 
     # ── FDA ──
-    fda_max_age_days: int = field(default_factory=lambda: _env_int("FDA_MAX_AGE_DAYS", 7))
+    fda_max_age_days: int = field(default_factory=lambda: _env_int("FDA_MAX_AGE_DAYS", 1))
 
     # ── EMA ──
-    ema_max_age_days: int = field(default_factory=lambda: _env_int("EMA_MAX_AGE_DAYS", 7))
+    ema_max_age_days: int = field(default_factory=lambda: _env_int("EMA_MAX_AGE_DAYS", 1))
 
     # ── Keyword screening ──
     keyword_score_threshold: int = field(

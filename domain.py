@@ -225,6 +225,13 @@ class KeywordScreener:
             "trial terminated", "lack of efficacy",
             "safety concern", "clinical hold",
         ],
+        "INSIDER_BUY": [
+            "open market purchase", "open-market purchase",
+            "purchased shares", "acquisition of shares",
+            "insider purchase", "director purchase",
+            # Form 4 HTML renders transaction type as text
+            "transaction code p", "transaction code: p",
+        ],
         "CAPITAL_RETURN": [
             "share buyback programme", "share repurchase programme",
             "share repurchase program", "stock repurchase program",
@@ -348,6 +355,11 @@ class KeywordScreener:
         "grant of options", "grant of awards", "employee share scheme",
         "scrip dividend", "dividend reinvestment",
         "result of agm", "result of egm",
+        # Form 4 routine transactions — not price-moving
+        "stock option exercise", "option exercise", "exercise of stock option",
+        "tax withholding", "shares withheld for tax", "withheld for taxes",
+        "gift of shares", "shares gifted", "401(k)", "employee stock purchase plan",
+        "espp", "s-8 registration", "automatic sell-to-cover",
     ]
 
     def screen(self, title: str, snippet: str = "") -> KeywordScreenResult:
