@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="Catalyst Wire SEC">
+  <title>Catalyst Wire SEC</title>
+  <defs>
+    <style>
+      .bg     { fill: #0A1E3F; }
+      .spike  { fill: none; stroke: #F59E0B; stroke-width: 28; stroke-linecap: round; stroke-linejoin: round; }
+      .label  { font-family: 'Inter', 'Helvetica Neue', Helvetica, Arial, sans-serif; font-weight: 900; fill: #FFFFFF; }
+      .mark   { font-family: 'Inter', 'Helvetica Neue', Helvetica, Arial, sans-serif; font-weight: 700; fill: #FFFFFF; fill-opacity: 0.6; }
+    </style>
+  </defs>
+
+  <!-- Badge field -->
+  <circle class="bg" cx="256" cy="256" r="256"/>
+
+  <!-- Catalyst waveform: flat → sharp spike → overshoot → new equilibrium -->
+  <path class="spike" d="M 70 220 L 200 220 L 230 128 L 270 300 L 310 200 L 340 220 L 442 220"/>
+
+  <!-- Product label -->
+  <text class="label" x="256" y="395" font-size="92" text-anchor="middle" letter-spacing="10">SEC</text>
+
+  <!-- Brand signature -->
+  <text class="mark" x="256" y="455" font-size="22" text-anchor="middle" letter-spacing="5">CATALYST WIRE</text>
+</svg>

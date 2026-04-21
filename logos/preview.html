@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Catalyst Wire — Logo Preview</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 48px 24px;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif;
+      background: #F3F4F6;
+      color: #111827;
+    }
+    h1 { margin: 0 0 8px; font-weight: 800; font-size: 28px; }
+    p  { margin: 0 0 40px; color: #6B7280; }
+    .row {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(320px, 1fr));
+      gap: 40px;
+      max-width: 960px;
+      margin: 0 auto 56px;
+    }
+    .card {
+      background: white;
+      border-radius: 16px;
+      padding: 32px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.04), 0 4px 12px rgba(0,0,0,0.06);
+      text-align: center;
+    }
+    .card h2 { margin: 0 0 24px; font-size: 18px; font-weight: 700; }
+    .sizes {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 24px;
+      margin-bottom: 16px;
+    }
+    .sizes img { display: block; border-radius: 50%; }
+    .s256 { width: 256px; height: 256px; }
+    .s96  { width:  96px; height:  96px; }
+    .s48  { width:  48px; height:  48px; }
+    .s24  { width:  24px; height:  24px; }
+    .label { color: #6B7280; font-size: 13px; margin-top: 8px; }
+    .on-dark { background: #111827; }
+    .on-dark .card { background: #1F2937; color: white; }
+    .on-dark .label { color: #9CA3AF; }
+  </style>
+</head>
+<body>
+  <h1>Catalyst Wire — Logo Preview</h1>
+  <p>Both logos, shown at the sizes they'll actually be used (hero, social, Telegram avatar, favicon).</p>
+
+  <div class="row">
+    <div class="card">
+      <h2>Catalyst Wire SEC</h2>
+      <div class="sizes">
+        <div>
+          <img class="s256" src="catalyst-wire-sec.svg" alt="">
+          <div class="label">256 px — hero</div>
+        </div>
+      </div>
+      <div class="sizes">
+        <div><img class="s96"  src="catalyst-wire-sec.svg" alt=""><div class="label">96 px</div></div>
+        <div><img class="s48"  src="catalyst-wire-sec.svg" alt=""><div class="label">48 px — TG</div></div>
+        <div><img class="s24"  src="catalyst-wire-sec.svg" alt=""><div class="label">24 px — favicon</div></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Catalyst Wire FDA</h2>
+      <div class="sizes">
+        <div>
+          <img class="s256" src="catalyst-wire-fda.svg" alt="">
+          <div class="label">256 px — hero</div>
+        </div>
+      </div>
+      <div class="sizes">
+        <div><img class="s96"  src="catalyst-wire-fda.svg" alt=""><div class="label">96 px</div></div>
+        <div><img class="s48"  src="catalyst-wire-fda.svg" alt=""><div class="label">48 px — TG</div></div>
+        <div><img class="s24"  src="catalyst-wire-fda.svg" alt=""><div class="label">24 px — favicon</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="on-dark" style="padding: 48px 24px; border-radius: 16px; max-width: 960px; margin: 0 auto;">
+    <div class="row" style="margin-bottom: 0;">
+      <div class="card">
+        <h2>SEC — on dark</h2>
+        <div class="sizes">
+          <div><img class="s96" src="catalyst-wire-sec.svg" alt=""></div>
+          <div><img class="s48" src="catalyst-wire-sec.svg" alt=""></div>
+        </div>
+      </div>
+      <div class="card">
+        <h2>FDA — on dark</h2>
+        <div class="sizes">
+          <div><img class="s96" src="catalyst-wire-fda.svg" alt=""></div>
+          <div><img class="s48" src="catalyst-wire-fda.svg" alt=""></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
