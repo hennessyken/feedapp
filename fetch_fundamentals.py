@@ -93,6 +93,12 @@ def _fetch_info(ticker: str, retries: int = 2) -> Optional[Dict[str, Any]]:
                 "exchange": info.get("exchange") or "",
                 "currency": info.get("currency") or "",
                 "country": info.get("country") or "",
+                # ── Post-enrichment fields (short interest, 52w range, price) ──
+                "short_pct_of_float": _safe_float(info.get("shortPercentOfFloat")),
+                "week52_high":        _safe_float(info.get("fiftyTwoWeekHigh")),
+                "week52_low":         _safe_float(info.get("fiftyTwoWeekLow")),
+                "current_price":      _safe_float(info.get("regularMarketPrice")
+                                                   or info.get("currentPrice")),
             }
         except Exception as e:
             logger.debug("Failed to fetch %s (attempt %d): %s", ticker, attempt + 1, e)
@@ -146,6 +152,12 @@ def _fetch_info_ib(ticker: str, ib: Any) -> Optional[Dict[str, Any]]:
             "exchange": det.contract.primaryExchange or "",
             "currency": det.contract.currency or "USD",
             "country": "",
+            # IB ReportSnapshot doesn't carry short interest / 52w range reliably.
+            # Leave NULL — the formatter drops NULL fields gracefully.
+            "short_pct_of_float": None,
+            "week52_high":        None,
+            "week52_low":         None,
+            "current_price":      None,
         }
 
         # reqFundamentalData("ReportSnapshot") returns XML with financials
@@ -228,8 +240,10 @@ async def _run_ib_backfill(db: FeedDatabase) -> tuple:
                 """INSERT OR REPLACE INTO ticker_fundamentals
                    (ticker, company_name, sector, industry, market_cap, cap_bucket,
                     pe_ratio, forward_pe, shares_out, float_shares, avg_volume,
-                    beta, dividend_yield, exchange, currency, country, fetched_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    beta, dividend_yield, exchange, currency, country, fetched_at,
+                    short_pct_of_float, week52_high, week52_low, current_price)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                           ?, ?, ?, ?)""",
                 (
                     ticker, info["company_name"], info["sector"], info["industry"],
                     info["market_cap"], info["cap_bucket"],
@@ -238,6 +252,10 @@ async def _run_ib_backfill(db: FeedDatabase) -> tuple:
                     info["beta"], info["dividend_yield"],
                     info["exchange"], info["currency"], info["country"],
                     now_str,
+                    info.get("short_pct_of_float"),
+                    info.get("week52_high"),
+                    info.get("week52_low"),
+                    info.get("current_price"),
                 ),
             )
             fetched += 1

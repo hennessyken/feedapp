@@ -99,25 +99,38 @@ CREATE TABLE IF NOT EXISTS backtest_prices (
 CREATE INDEX IF NOT EXISTS idx_bt_prices_ticker ON backtest_prices(ticker);
 
 CREATE TABLE IF NOT EXISTS ticker_fundamentals (
-    ticker          TEXT PRIMARY KEY,
-    company_name    TEXT,
-    sector          TEXT,
-    industry        TEXT,
-    market_cap      REAL,
-    cap_bucket      TEXT,       -- micro/small/mid/large/mega
-    pe_ratio        REAL,
-    forward_pe      REAL,
-    shares_out      REAL,
-    float_shares    REAL,
-    avg_volume      REAL,
-    beta            REAL,
-    dividend_yield  REAL,
-    exchange        TEXT,
-    currency        TEXT,
-    country         TEXT,
-    fetched_at      TEXT NOT NULL
+    ticker              TEXT PRIMARY KEY,
+    company_name        TEXT,
+    sector              TEXT,
+    industry            TEXT,
+    market_cap          REAL,
+    cap_bucket          TEXT,       -- micro/small/mid/large/mega
+    pe_ratio            REAL,
+    forward_pe          REAL,
+    shares_out          REAL,
+    float_shares        REAL,
+    avg_volume          REAL,
+    beta                REAL,
+    dividend_yield      REAL,
+    exchange            TEXT,
+    currency            TEXT,
+    country             TEXT,
+    fetched_at          TEXT NOT NULL,
+    -- Added for paid/free post enrichment:
+    short_pct_of_float  REAL,      -- yfinance shortPercentOfFloat (0.0-1.0)
+    week52_high         REAL,      -- fiftyTwoWeekHigh
+    week52_low          REAL,      -- fiftyTwoWeekLow
+    current_price       REAL       -- last known regularMarketPrice (cached)
 );
 """
+
+# New columns added to ticker_fundamentals via _migrate_fundamentals_columns
+_FUND_MIGRATE_COLUMNS = [
+    ("short_pct_of_float", "REAL"),
+    ("week52_high",        "REAL"),
+    ("week52_low",         "REAL"),
+    ("current_price",      "REAL"),
+]
 
 # Columns added via _migrate_columns (idempotent ALTER TABLE)
 _MIGRATE_COLUMNS = [
@@ -147,6 +160,17 @@ _MIGRATE_COLUMNS = [
     ("telegram_chat_id",    "TEXT"),     # resolved chat id at send time
     ("telegram_message_id", "INTEGER"),  # message id returned by Telegram
     ("telegram_sent_at",    "TEXT"),     # ISO-8601 UTC
+
+    # ── Free-tier delayed-release ("since flagged" move tracking) ──
+    ("price_at_flag",       "REAL"),     # IB price at signal-flag time (anchor)
+    ("price_at_flag_at",    "TEXT"),     # ISO-8601 UTC when anchor captured
+    ("price_1h",            "REAL"),     # IB price ~1h after flag
+    ("price_1h_at",         "TEXT"),
+    ("price_24h",           "REAL"),     # IB price ~24h after flag
+    ("price_24h_at",        "TEXT"),
+    ("free_tier_sent",      "INTEGER DEFAULT 0"),   # 1 once delayed post emitted
+    ("free_tier_sent_at",   "TEXT"),
+    ("free_tier_message_id","INTEGER"),
 ]
 
 
@@ -167,7 +191,29 @@ class FeedDatabase:
         await self._db.commit()
         await self._migrate_columns()
         await self._migrate_backtest_signals_llm()
+        await self._migrate_fundamentals_columns()
         logger.info("Database connected: %s", self._db_path)
+
+    async def _migrate_fundamentals_columns(self) -> None:
+        """Add enrichment columns to ticker_fundamentals if missing."""
+        assert self._db
+        try:
+            cur = await self._db.execute("PRAGMA table_info(ticker_fundamentals)")
+            existing = {row[1] for row in await cur.fetchall()}
+            if not existing:
+                return
+            added: List[str] = []
+            for col_name, col_type in _FUND_MIGRATE_COLUMNS:
+                if col_name not in existing:
+                    await self._db.execute(
+                        f"ALTER TABLE ticker_fundamentals ADD COLUMN {col_name} {col_type}"
+                    )
+                    added.append(col_name)
+            if added:
+                await self._db.commit()
+                logger.info("Migrated ticker_fundamentals columns: %s", ", ".join(added))
+        except Exception as e:
+            logger.warning("Fundamentals migration failed: %s", e)
 
     async def _migrate_backtest_prices(self) -> None:
         """Drop old daily backtest_prices table if it has 'date' column (pre-intraday)."""
@@ -479,6 +525,123 @@ class FeedDatabase:
         )
         rows = await cur.fetchall()
         return [dict(r) for r in rows]
+
+    # ── Free-tier delayed-release helpers ──────────────────────────────
+
+    async def update_price_at_flag(self, item_id: str, price: float) -> None:
+        """Capture the anchor price at signal-flag time (for free-tier 'since flagged' moves)."""
+        assert self._db
+        now = datetime.now(timezone.utc).isoformat()
+        await self._db.execute(
+            """UPDATE feed_items
+               SET price_at_flag = ?, price_at_flag_at = ?
+               WHERE item_id = ?""",
+            (price, now, item_id),
+        )
+        await self._db.commit()
+
+    async def update_price_milestone(
+        self, item_id: str, *, milestone: str, price: float,
+    ) -> None:
+        """Store a 1h or 24h after-flag price.
+
+        milestone must be '1h' or '24h'.
+        """
+        assert self._db
+        if milestone not in ("1h", "24h"):
+            raise ValueError(f"milestone must be '1h' or '24h', got {milestone!r}")
+        col_price = f"price_{milestone}"
+        col_at = f"price_{milestone}_at"
+        now = datetime.now(timezone.utc).isoformat()
+        await self._db.execute(
+            f"""UPDATE feed_items
+               SET {col_price} = ?, {col_at} = ?
+               WHERE item_id = ?""",
+            (price, now, item_id),
+        )
+        await self._db.commit()
+
+    async def get_pending_price_milestones(
+        self, *, milestone: str, min_age_hours: float,
+    ) -> List[Dict[str, Any]]:
+        """Return flagged signals whose price_{milestone} hasn't been captured yet
+        and whose age since flag is at least min_age_hours.
+
+        Only returns items that have a ticker and a price_at_flag_at timestamp.
+        """
+        assert self._db
+        if milestone not in ("1h", "24h"):
+            raise ValueError(f"milestone must be '1h' or '24h', got {milestone!r}")
+        col_price = f"price_{milestone}"
+        # SQLite: compare ISO strings by converting to julian days
+        cur = await self._db.execute(
+            f"""SELECT * FROM feed_items
+                WHERE ticker IS NOT NULL
+                  AND price_at_flag_at IS NOT NULL
+                  AND {col_price} IS NULL
+                  AND (julianday('now') - julianday(price_at_flag_at)) * 24.0 >= ?
+                ORDER BY price_at_flag_at""",
+            (float(min_age_hours),),
+        )
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+    async def get_pending_free_tier(self) -> List[Dict[str, Any]]:
+        """Find signals ready for free-tier delayed release (>=24h old, not yet sent)."""
+        assert self._db
+        cur = await self._db.execute(
+            """SELECT * FROM feed_items
+               WHERE ticker IS NOT NULL
+                 AND action IN ('trade', 'watch')
+                 AND free_tier_sent = 0
+                 AND price_at_flag_at IS NOT NULL
+                 AND (julianday('now') - julianday(price_at_flag_at)) * 24.0 >= 24.0
+               ORDER BY price_at_flag_at"""
+        )
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+    async def mark_free_tier_sent(
+        self, item_id: str, *, message_id: Optional[int] = None,
+    ) -> None:
+        """Mark that the delayed free-tier post has been emitted."""
+        assert self._db
+        now = datetime.now(timezone.utc).isoformat()
+        await self._db.execute(
+            """UPDATE feed_items
+               SET free_tier_sent = 1, free_tier_sent_at = ?, free_tier_message_id = ?
+               WHERE item_id = ?""",
+            (now, message_id, item_id),
+        )
+        await self._db.commit()
+
+    async def get_fundamentals(self, ticker: str) -> Optional[Dict[str, Any]]:
+        """Lookup the cached fundamentals row for a ticker."""
+        assert self._db
+        if not ticker:
+            return None
+        cur = await self._db.execute(
+            "SELECT * FROM ticker_fundamentals WHERE ticker = ?",
+            (ticker.upper().strip(),),
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def update_current_price(self, ticker: str, price: float) -> None:
+        """Cache the latest known price on the fundamentals row."""
+        assert self._db
+        if not ticker or price is None:
+            return
+        now = datetime.now(timezone.utc).isoformat()
+        # UPSERT: update if exists, insert minimal row otherwise
+        await self._db.execute(
+            """INSERT INTO ticker_fundamentals (ticker, current_price, fetched_at)
+               VALUES (?, ?, ?)
+               ON CONFLICT(ticker) DO UPDATE
+                 SET current_price = excluded.current_price""",
+            (ticker.upper().strip(), price, now),
+        )
+        await self._db.commit()
 
     async def update_sell_price(self, item_id: str, price: float) -> None:
         """Record the IB sell price at end of trading day."""

@@ -305,6 +305,28 @@ async def _run_continuous(config: RuntimeConfig) -> None:
             except Exception:
                 logging.exception("Auto EOD check failed")
 
+        # Free-tier delayed-release sweep: capture 1h/24h price milestones
+        # and emit 24h-old queued posts to the free channel.
+        try:
+            from free_tier import run_free_tier_cycle
+            from db import FeedDatabase
+            _db = FeedDatabase(config.db_path)
+            await _db.connect()
+            try:
+                ft_stats = await run_free_tier_cycle(_db, ib_client)
+                if any(ft_stats.values()):
+                    logging.info(
+                        "Free-tier sweep: 1h=%d, 24h=%d, broadcast=%d, skipped=%d",
+                        ft_stats.get("captured_1h", 0),
+                        ft_stats.get("captured_24h", 0),
+                        ft_stats.get("broadcast", 0),
+                        ft_stats.get("skipped", 0),
+                    )
+            finally:
+                await _db.close()
+        except Exception:
+            logging.exception("Free-tier sweep failed")
+
         await asyncio.sleep(max(1, config.poll_interval_seconds))
 
 

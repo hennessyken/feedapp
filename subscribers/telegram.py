@@ -367,7 +367,7 @@ class TelegramSubscriber(BaseSubscriber):
                     rationale=rationale,
                 )
 
-                # IB buy price
+                # IB buy price + free-tier anchor price
                 buy_price: Optional[float] = None
                 if ctx.ib_client is not None:
                     try:
@@ -381,6 +381,14 @@ class TelegramSubscriber(BaseSubscriber):
                                 await ctx.db.update_buy_price(
                                     item.item_id, buy_price, signal_date,
                                 )
+                                # Also stamp price_at_flag — the anchor used by
+                                # the free tier's "since flagged" move calculation.
+                                await ctx.db.update_price_at_flag(
+                                    item.item_id, buy_price,
+                                )
+                                # Cache on fundamentals row so paid posts can show
+                                # a recent price even when IB is unavailable.
+                                await ctx.db.update_current_price(ticker, buy_price)
                                 logger.info("[telegram] Buy price: %s = $%.4f", ticker, buy_price)
                             else:
                                 await ctx.db.mark_signal_pending(item.item_id, signal_date)
@@ -398,9 +406,23 @@ class TelegramSubscriber(BaseSubscriber):
                         api_key=config.openai_api_key,
                     )
                     tier = classify_tier(formatted)
+
+                    # ── Free tier: defer. The free_tier scheduler will emit
+                    # the delayed post 24h from now with since-flagged moves.
+                    if tier == "free":
+                        stats["sent"] += 1  # count as "queued" — delivery is deferred
+                        logger.info(
+                            "[telegram] QUEUED for free-tier +24h: %s %s",
+                            ticker, event_type,
+                        )
+                        continue
+
+                    # ── Paid tiers: send real-time, with fundamentals inline.
+                    fundamentals = await ctx.db.get_fundamentals(ticker)
                     result = await send_signal(
                         formatted, human_text=human_text,
                         buy_price=buy_price, tier=tier, http=ctx.http,
+                        fundamentals=fundamentals,
                     )
                     sent = result.get("sent", False)
                     # Persist tier + message_id for GUI lookup
