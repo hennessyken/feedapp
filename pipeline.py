@@ -118,9 +118,9 @@ class PipelineConfig:
     def __init__(
         self,
         *,
-        db_path: str = "feedapp.db",
+        db_path: str = "regfeed.db",
         # EDGAR
-        sec_user_agent: str = "FeedApp/1.0 (feedapp@example.com)",
+        sec_user_agent: str = "Regfeed/1.0 (regfeed@example.com)",
         edgar_days_back: int = 1,
         edgar_forms: str = "8-K,6-K",
         # FDA

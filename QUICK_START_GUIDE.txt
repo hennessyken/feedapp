@@ -46,14 +46,14 @@ Twitter bot (continuous):
 
 What gets stored
 ----------------
-Every item fetched from every source is written to feedapp.db, regardless
+Every item fetched from every source is written to regfeed.db, regardless
 of whether it passes screening. Items are never deleted. Each item gets:
 
   status = "relevant"    scored above KEYWORD_SCORE_THRESHOLD (default 30)
   status = "irrelevant"  below threshold, not a signal
   status = "vetoed"      matched a veto keyword, excluded from API signals
 
-The database file is feedapp.db in the working directory by default.
+The database file is regfeed.db in the working directory by default.
 Set DB_PATH to change this.
 
 
@@ -90,8 +90,8 @@ Full configuration reference
 -----------------------------
 Variable                    Default                            Notes
 --------                    -------                            -----
-SEC_USER_AGENT              FeedApp/1.0 (feedapp@example.com)  Required; use real name/email
-DB_PATH                     feedapp.db                         SQLite file path
+SEC_USER_AGENT              Regfeed/1.0 (regfeed@example.com)  Required; use real name/email
+DB_PATH                     regfeed.db                         SQLite file path
 EDGAR_DAYS_BACK             1                                  Lookback window for EDGAR
 EDGAR_FORMS                 8-K,6-K                            Form types to fetch
 FDA_MAX_AGE_DAYS            7                                  FDA item age cutoff
@@ -142,7 +142,7 @@ requirements.txt  Python dependencies
 Common tasks
 ------------
 Check what's in the database:
-  sqlite3 feedapp.db "SELECT feed_source, status, COUNT(*) FROM feed_items GROUP BY 1,2"
+  sqlite3 regfeed.db "SELECT feed_source, status, COUNT(*) FROM feed_items GROUP BY 1,2"
 
 See the top signals:
   curl "http://localhost:8000/signals?min_score=40"

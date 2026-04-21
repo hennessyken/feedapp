@@ -1022,10 +1022,12 @@ class RunRegulatorySignalScanUseCase:
                     _event(ctx, "signal_formatted", doc_id=doc.doc_id, ticker=ticker,
                            action=final_action, details=formatted.to_dict())
 
-                    from notifier import send_signal
-                    sent = await send_signal(formatted)
+                    from notifier import send_signal, classify_tier
+                    tier = classify_tier(formatted)
+                    result = await send_signal(formatted, tier=tier)
                     _event(ctx, "signal_delivered", doc_id=doc.doc_id, ticker=ticker,
-                           outcome="sent" if sent else "skipped")
+                           outcome="sent" if result.get("sent") else "skipped",
+                           details={"tier": tier, "message_id": result.get("message_id")})
                 except Exception as notify_err:
                     # Signal delivery failure must never crash the pipeline
                     logging.warning("Signal delivery failed for %s: %s", ticker, notify_err)

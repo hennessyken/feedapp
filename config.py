@@ -70,13 +70,13 @@ class RuntimeConfig:
 
     # ── Database ──
     db_path: str = field(
-        default_factory=lambda: (os.getenv("DB_PATH") or "").strip() or "feedapp.db"
+        default_factory=lambda: (os.getenv("DB_PATH") or "").strip() or "regfeed.db"
     )
 
     # ── SEC / EDGAR ──
     sec_user_agent: str = field(
         default_factory=lambda: (
-            os.getenv("SEC_USER_AGENT") or "FeedApp/1.0 (feedapp@example.com)"
+            os.getenv("SEC_USER_AGENT") or "Regfeed/1.0 (regfeed@example.com)"
         ).strip()
     )
     edgar_days_back: int = field(default_factory=lambda: _env_int("EDGAR_DAYS_BACK", 1))

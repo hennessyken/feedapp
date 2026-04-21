@@ -112,7 +112,7 @@ CREATE TABLE IF NOT EXISTS spend_alerts (
 class SpendTracker:
     """Tracks OpenAI API spend and sends Telegram alerts at $10 intervals."""
 
-    def __init__(self, db_path: str = "feedapp.db") -> None:
+    def __init__(self, db_path: str = "regfeed.db") -> None:
         self._db_path = db_path
         self._db: Optional[aiosqlite.Connection] = None
         self._cumulative: float = 0.0

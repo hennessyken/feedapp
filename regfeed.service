@@ -1,0 +1,18 @@
+[Unit]
+Description=Regfeed — Regulatory Signal Aggregator
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ken
+WorkingDirectory=/home/ken/Regfeed
+EnvironmentFile=/home/ken/Regfeed/.env
+ExecStart=/home/ken/Regfeed/.venv/bin/python main.py --continuous
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

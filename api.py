@@ -20,8 +20,14 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from pathlib import Path
+
+import httpx
 
 from db import FeedDatabase
+from notifier import get_configured_channels, get_chat_info
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +35,7 @@ logger = logging.getLogger(__name__)
 
 import os
 
-_DB_PATH = os.environ.get("DB_PATH", "feedapp.db")
+_DB_PATH = os.environ.get("DB_PATH", "regfeed.db")
 _db = FeedDatabase(_DB_PATH)
 
 
@@ -44,7 +50,7 @@ async def lifespan(app: FastAPI):
 # ── App ───────────────────────────────────────────────────────────────
 
 app = FastAPI(
-    title="FeedApp — Regulatory Signal API",
+    title="Regfeed — Regulatory Signal API",
     description="Real-time regulatory signals from SEC EDGAR, FDA, and EMA. "
                 "Screened by keyword relevance, updated continuously.",
     version="1.0.0",
@@ -186,6 +192,108 @@ async def stats():
         "top_categories": top_categories,
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
+
+
+# ── GUI endpoints ─────────────────────────────────────────────────────
+
+# Known feed sources (matches the adapters registered in pipeline.py)
+_FEED_SOURCES = ["edgar", "fda", "ema", "clinical_trials"]
+
+# A feed is "healthy" if it has ingested an item in the last N hours
+_FEED_HEALTH_WINDOW_HOURS = 24
+
+
+@app.get("/gui/sources")
+async def gui_sources():
+    """Per-feed status for the GUI — green/red + last activity."""
+    health = {h["feed_source"]: h for h in await _db.feed_source_health()}
+    now = datetime.now(timezone.utc)
+    out: List[Dict[str, Any]] = []
+    for src in _FEED_SOURCES:
+        h = health.get(src, {})
+        last_ingest = h.get("last_ingest_at")
+        status = "red"
+        age_hours: Optional[float] = None
+        if last_ingest:
+            try:
+                ts = datetime.fromisoformat(last_ingest.replace("Z", "+00:00"))
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+                age_hours = (now - ts).total_seconds() / 3600
+                status = "green" if age_hours <= _FEED_HEALTH_WINDOW_HOURS else "amber"
+            except Exception:
+                pass
+        out.append({
+            "source": src,
+            "status": status,
+            "total": h.get("total", 0),
+            "published": h.get("published", 0),
+            "last_ingest_at": last_ingest,
+            "last_publish_at": h.get("last_publish_at"),
+            "age_hours": round(age_hours, 1) if age_hours is not None else None,
+        })
+    return {"sources": out, "window_hours": _FEED_HEALTH_WINDOW_HOURS}
+
+
+@app.get("/gui/sources/{source}/messages")
+async def gui_source_messages(source: str, limit: int = Query(20, ge=1, le=100)):
+    """Last N messages published to Telegram from this feed source."""
+    if source not in _FEED_SOURCES:
+        raise HTTPException(status_code=404, detail=f"Unknown source: {source}")
+    items = await _db.get_recent_published(feed_source=source, limit=limit)
+    return {
+        "source": source,
+        "count": len(items),
+        "messages": [
+            {
+                "item_id": i["item_id"],
+                "title": i["title"],
+                "url": i["url"],
+                "ticker": i.get("ticker"),
+                "company_name": i.get("company_name"),
+                "event_type": i.get("event_type"),
+                "polarity": i.get("polarity"),
+                "impact_score": i.get("impact_score"),
+                "confidence": i.get("confidence"),
+                "tier": i.get("tier"),
+                "telegram_chat_id": i.get("telegram_chat_id"),
+                "telegram_message_id": i.get("telegram_message_id"),
+                "telegram_sent_at": i.get("telegram_sent_at"),
+                "published_at": i.get("published_at"),
+                "snippet": i.get("content_snippet"),
+            }
+            for i in items
+        ],
+    }
+
+
+@app.get("/gui/channels")
+async def gui_channels():
+    """List configured Telegram channels + live subscriber counts."""
+    tiers = list(get_configured_channels().keys())
+    async with httpx.AsyncClient(timeout=10) as client:
+        infos = []
+        for tier in tiers:
+            info = await get_chat_info(tier, http=client)
+            info["label"] = {
+                "free": "Free",
+                "pro": "Pro",
+                "pro_smallcap": "Pro Small-Cap",
+            }.get(tier, tier)
+            info["paid"] = tier != "free"
+            infos.append(info)
+    return {"channels": infos}
+
+
+# ── Static GUI ────────────────────────────────────────────────────────
+
+_STATIC_DIR = Path(__file__).parent / "web"
+if _STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
+
+    @app.get("/")
+    async def index():
+        return FileResponse(_STATIC_DIR / "index.html")
 
 
 @app.get("/signals")

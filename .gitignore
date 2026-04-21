@@ -27,3 +27,6 @@ ibgateway/
 
 # Archives / large binaries
 *.zip
+
+.gui.pid
+.gui.log

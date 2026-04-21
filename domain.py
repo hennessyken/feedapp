@@ -635,8 +635,9 @@ class DeterministicEventScorer:
         span_count = len(evidence_spans)
         impact = base_impact
         conf = base_conf
-        if span_count == 0:
-            return DeterministicScoring(impact_score=10, confidence=0, action="ignore")
+        # Batch-mode ranker strips evidence_spans to save tokens; treat a
+        # missing/empty list as neutral rather than a hard fail. The
+        # magnitude/novelty/certainty adjustments below still shape the score.
         if span_count == 1:
             conf -= 10
         elif span_count >= 4:

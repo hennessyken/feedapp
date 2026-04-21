@@ -31,7 +31,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-DB_PATH = os.getenv("DB_PATH", "feedapp.db")
+DB_PATH = os.getenv("DB_PATH", "regfeed.db")
 
 
 def _cap_bucket(market_cap: Optional[float]) -> str:

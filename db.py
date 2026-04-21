@@ -141,13 +141,19 @@ _MIGRATE_COLUMNS = [
     ("sell_price",       "REAL"),
     ("sell_price_at",    "TEXT"),
     ("signal_date",      "TEXT"),     # YYYY-MM-DD (ET) — groups signals by trading day
+
+    # ── Telegram publishing (tier-gated) ──
+    ("tier",                "TEXT"),     # free / pro / pro_smallcap
+    ("telegram_chat_id",    "TEXT"),     # resolved chat id at send time
+    ("telegram_message_id", "INTEGER"),  # message id returned by Telegram
+    ("telegram_sent_at",    "TEXT"),     # ISO-8601 UTC
 ]
 
 
 class FeedDatabase:
     """Async SQLite database for regulatory feed items."""
 
-    def __init__(self, db_path: str | Path = "feedapp.db") -> None:
+    def __init__(self, db_path: str | Path = "regfeed.db") -> None:
         self._db_path = str(db_path)
         self._db: Optional[aiosqlite.Connection] = None
 
@@ -715,6 +721,72 @@ class FeedDatabase:
             tuple(params),
         )
         await self._db.commit()
+
+    # ------------------------------------------------------------------
+    # Telegram publishing
+    # ------------------------------------------------------------------
+
+    async def mark_telegram_sent(
+        self,
+        item_id: str,
+        *,
+        tier: str,
+        chat_id: str,
+        message_id: Optional[int],
+    ) -> None:
+        """Record a successful Telegram publish for `item_id`."""
+        assert self._db
+        now = datetime.now(timezone.utc).isoformat()
+        await self._db.execute(
+            """UPDATE feed_items
+               SET tier = ?, telegram_chat_id = ?, telegram_message_id = ?,
+                   telegram_sent_at = ?
+               WHERE item_id = ?""",
+            (tier, chat_id, message_id, now, item_id),
+        )
+        await self._db.commit()
+
+    async def get_recent_published(
+        self,
+        *,
+        feed_source: Optional[str] = None,
+        tier: Optional[str] = None,
+        limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """Return recent items actually published to Telegram."""
+        assert self._db
+        clauses = ["telegram_sent_at IS NOT NULL"]
+        params: List[Any] = []
+        if feed_source:
+            clauses.append("feed_source = ?")
+            params.append(feed_source)
+        if tier:
+            clauses.append("tier = ?")
+            params.append(tier)
+        sql = (
+            "SELECT * FROM feed_items WHERE "
+            + " AND ".join(clauses)
+            + " ORDER BY telegram_sent_at DESC LIMIT ?"
+        )
+        params.append(limit)
+        cur = await self._db.execute(sql, params)
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+    async def feed_source_health(self) -> List[Dict[str, Any]]:
+        """Per-feed health: last ingest, last publish, counts."""
+        assert self._db
+        cur = await self._db.execute(
+            """SELECT feed_source,
+                      COUNT(*) AS total,
+                      SUM(CASE WHEN telegram_sent_at IS NOT NULL THEN 1 ELSE 0 END) AS published,
+                      MAX(created_at) AS last_ingest_at,
+                      MAX(telegram_sent_at) AS last_publish_at,
+                      MAX(published_at) AS last_item_at
+               FROM feed_items
+               GROUP BY feed_source"""
+        )
+        return [dict(r) for r in await cur.fetchall()]
 
     async def mark_tweeted(self, item_id: str, tweet_id: str) -> None:
         """Mark an item as posted to Twitter."""

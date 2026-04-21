@@ -133,7 +133,7 @@ class EmaFeedAdapter(BaseFeedAdapter):
         try:
             data = await self._get_json(
                 _EMA_NEWS_JSON,
-                headers={"User-Agent": "FeedApp/1.0"},
+                headers={"User-Agent": "Regfeed/1.0"},
             )
         except Exception as e:
             logger.warning("EMA news JSON fetch failed: %s", e)
@@ -188,7 +188,7 @@ class EmaFeedAdapter(BaseFeedAdapter):
         try:
             data = await self._get_json(
                 _EMA_MEDICINES_JSON,
-                headers={"User-Agent": "FeedApp/1.0"},
+                headers={"User-Agent": "Regfeed/1.0"},
             )
         except Exception as e:
             logger.warning("EMA medicines JSON fetch failed: %s", e)

@@ -148,7 +148,7 @@ class FdaFeedAdapter(BaseFeedAdapter):
         try:
             text = await self._get_text(
                 _FDA_PRESS_RSS,
-                headers={"User-Agent": "FeedApp/1.0"},
+                headers={"User-Agent": "Regfeed/1.0"},
             )
         except Exception as e:
             logger.warning("FDA RSS fetch failed: %s", e)
@@ -217,7 +217,7 @@ class FdaFeedAdapter(BaseFeedAdapter):
                 data = await self._get_json(
                     _OPENFDA_APPROVALS,
                     params=params,
-                    headers={"User-Agent": "FeedApp/1.0"},
+                    headers={"User-Agent": "Regfeed/1.0"},
                 )
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 404:

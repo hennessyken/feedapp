@@ -46,7 +46,7 @@ class TelegramSubscriber(BaseSubscriber):
     ) -> Dict[str, Any]:
         from signal_formatter import format_signal, format_signal_text
         from signal_formatter import _classify_polarity, _classify_impact, _classify_latency
-        from notifier import send_signal
+        from notifier import send_signal, classify_tier
 
         stats = {"analyzed": 0, "sent": 0, "skipped": 0, "ignored": 0, "errors": 0}
         scorer = DeterministicEventScorer()
@@ -397,10 +397,22 @@ class TelegramSubscriber(BaseSubscriber):
                         http_client=ctx.http,
                         api_key=config.openai_api_key,
                     )
-                    sent = await send_signal(
+                    tier = classify_tier(formatted)
+                    result = await send_signal(
                         formatted, human_text=human_text,
-                        buy_price=buy_price, http=ctx.http,
+                        buy_price=buy_price, tier=tier, http=ctx.http,
                     )
+                    sent = result.get("sent", False)
+                    # Persist tier + message_id for GUI lookup
+                    try:
+                        if sent and hasattr(ctx, "db") and ctx.db:
+                            await ctx.db.mark_telegram_sent(
+                                item.item_id, tier=tier,
+                                chat_id=str(result.get("chat_id") or ""),
+                                message_id=int(result.get("message_id") or 0) or None,
+                            )
+                    except Exception:
+                        pass
                     if sent:
                         stats["sent"] += 1
                         logger.info(

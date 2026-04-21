@@ -164,7 +164,7 @@ class EdgarFeedAdapter(BaseFeedAdapter):
         self,
         http: httpx.AsyncClient,
         *,
-        user_agent: str = "FeedApp/1.0 (feedapp@example.com)",
+        user_agent: str = "Regfeed/1.0 (regfeed@example.com)",
         days_back: int = 1,
         forms: str = "8-K,6-K",
         page_size: int = 50,

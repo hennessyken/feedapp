@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Regfeed — dashboard</title>
+<link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+<header>
+  <h1>Regfeed</h1>
+  <span id="clock" class="muted"></span>
+</header>
+
+<main>
+  <section class="card">
+    <h2>Sources</h2>
+    <p class="muted">Green = data in last 24 h · Amber = stale · Red = no data.
+      Click a source to view the last 20 Telegram messages.</p>
+    <div id="sources" class="grid"></div>
+  </section>
+
+  <section class="card">
+    <h2>Telegram channels</h2>
+    <div id="channels" class="grid"></div>
+  </section>
+
+  <section class="card" id="messages-card" hidden>
+    <h2>Last messages — <span id="messages-source"></span></h2>
+    <ol id="messages" class="messages"></ol>
+  </section>
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
