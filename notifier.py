@@ -345,6 +345,16 @@ def _format_telegram_message(
     return "\n".join(lines)
 
 
+_UPSELL_LINKS: Dict[str, str] = {
+    "sec": "https://im.page/catalyst-wire-sec",
+    "fda": "https://im.page/catalyst-wire-fda",
+}
+_UPSELL_LABELS: Dict[str, str] = {
+    "sec": "Live SEC feed →",
+    "fda": "Live FDA / EMA / Clinical Trials feed →",
+}
+
+
 def _format_free_tier_delayed_message(
     signal: FormattedSignal,
     *,
@@ -353,6 +363,7 @@ def _format_free_tier_delayed_message(
     price_24h: Optional[float],
     fundamentals: Optional[Dict[str, Any]] = None,
     flagged_at_iso: Optional[str] = None,
+    channel: str = "sec",
 ) -> str:
     """Format the 24h-delayed free-tier post.
 
@@ -401,7 +412,9 @@ def _format_free_tier_delayed_message(
         lines.append("")
 
     # Upsell
-    lines.append("🔓 Real-time alerts + source filings on pro")
+    upsell_url = _UPSELL_LINKS.get(channel, _UPSELL_LINKS["sec"])
+    upsell_label = _UPSELL_LABELS.get(channel, _UPSELL_LABELS["sec"])
+    lines.append(f'🔓 Get real-time alerts: <a href="{upsell_url}">{upsell_label}</a>')
     lines.append("")
 
     # Footer — show the original trigger time (yesterday) so subscribers
@@ -529,6 +542,7 @@ async def send_free_tier_delayed(
         price_24h=price_24h,
         fundamentals=fundamentals,
         flagged_at_iso=flagged_at_iso,
+        channel=channel,
     )
     payload = {
         "chat_id": chat_id,

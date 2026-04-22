@@ -544,6 +544,7 @@ class TelegramSubscriber(BaseSubscriber):
                             "[telegram] QUEUED for free-tier +24h: %s %s channel=%s",
                             ticker, event_type, channel,
                         )
+                        await ctx.db.update_price_at_flag(item.item_id, buy_price)
                         await ctx.db.write_signal_log(
                             item_id=item.item_id,
                             feed_source=item.feed_source,

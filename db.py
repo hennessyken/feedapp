@@ -80,6 +80,20 @@ CREATE INDEX IF NOT EXISTS idx_feed_items_status    ON feed_items(status);
 CREATE INDEX IF NOT EXISTS idx_feed_items_published ON feed_items(published_at);
 CREATE INDEX IF NOT EXISTS idx_feed_items_tweeted   ON feed_items(tweeted, status);
 
+-- API key auth
+CREATE TABLE IF NOT EXISTS api_keys (
+    key          TEXT PRIMARY KEY,
+    email        TEXT NOT NULL,
+    plan         TEXT NOT NULL DEFAULT 'free',
+    rpm          INTEGER NOT NULL DEFAULT 10,
+    rpd          INTEGER NOT NULL DEFAULT 100,
+    active       INTEGER NOT NULL DEFAULT 1,
+    created_at   TEXT NOT NULL,
+    last_used_at TEXT,
+    telegram_id  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_api_keys_email ON api_keys(email);
+
 -- Strategy analyzer tables
 CREATE TABLE IF NOT EXISTS backtest_signals (
     signal_id        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -305,6 +319,7 @@ class FeedDatabase:
         await self._migrate_company_ticker_cache()
         await self._migrate_signal_log()
         await self._migrate_signal_log_channel()
+        await self._migrate_api_keys()
         logger.info("Database connected: %s", self._db_path)
 
     async def _migrate_fundamentals_columns(self) -> None:
@@ -489,6 +504,98 @@ class FeedDatabase:
                 logger.info("Migrated signal_log: added 'channel' column")
         except Exception as e:
             logger.warning("signal_log channel migration failed: %s", e)
+
+    async def _migrate_api_keys(self) -> None:
+        """Add telegram_id column to api_keys on existing databases."""
+        assert self._db
+        try:
+            cur = await self._db.execute("PRAGMA table_info(api_keys)")
+            cols = {row[1] for row in await cur.fetchall()}
+            if not cols:
+                return  # Table doesn't exist yet — SCHEMA handles new DBs
+            if "telegram_id" not in cols:
+                await self._db.execute("ALTER TABLE api_keys ADD COLUMN telegram_id TEXT")
+                await self._db.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_api_keys_telegram_id ON api_keys(telegram_id)"
+                )
+                await self._db.commit()
+                logger.info("Migrated api_keys: added telegram_id column")
+        except Exception as e:
+            logger.warning("api_keys migration failed: %s", e)
+
+    # ── API key management ────────────────────────────────────────────────────
+
+    async def get_api_key(self, key: str) -> Optional[Dict[str, Any]]:
+        assert self._db
+        cur = await self._db.execute(
+            "SELECT * FROM api_keys WHERE key = ? AND active = 1", (key,)
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def create_api_key(
+        self,
+        key: str,
+        email: str,
+        plan: str = "free",
+        telegram_id: Optional[str] = None,
+    ) -> None:
+        assert self._db
+        rpm, rpd = {"free": (10, 100), "pro": (60, 2000), "enterprise": (300, 50000)}.get(
+            plan, (10, 100)
+        )
+        now = datetime.now(timezone.utc).isoformat()
+        await self._db.execute(
+            """INSERT INTO api_keys (key, email, plan, rpm, rpd, active, created_at, telegram_id)
+               VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+               ON CONFLICT(key) DO NOTHING""",
+            (key, email, plan, rpm, rpd, now, telegram_id),
+        )
+        await self._db.commit()
+
+    async def get_api_key_by_telegram_id(self, telegram_id: str) -> Optional[Dict[str, Any]]:
+        assert self._db
+        cur = await self._db.execute(
+            "SELECT * FROM api_keys WHERE telegram_id = ? AND active = 1", (telegram_id,)
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def upgrade_api_key_plan(self, telegram_id: str, plan: str) -> bool:
+        """Update plan + limits for the key belonging to telegram_id. Returns True if updated."""
+        assert self._db
+        rpm, rpd = {"free": (10, 100), "pro": (60, 2000), "enterprise": (300, 50000)}.get(
+            plan, (10, 100)
+        )
+        cur = await self._db.execute(
+            "UPDATE api_keys SET plan=?, rpm=?, rpd=? WHERE telegram_id=? AND active=1",
+            (plan, rpm, rpd, telegram_id),
+        )
+        await self._db.commit()
+        return (cur.rowcount or 0) > 0
+
+    async def touch_api_key(self, key: str) -> None:
+        assert self._db
+        now = datetime.now(timezone.utc).isoformat()
+        await self._db.execute(
+            "UPDATE api_keys SET last_used_at = ? WHERE key = ?", (now, key)
+        )
+        await self._db.commit()
+
+    async def list_api_keys(self) -> List[Dict[str, Any]]:
+        assert self._db
+        cur = await self._db.execute(
+            "SELECT key, email, plan, rpm, rpd, active, created_at, last_used_at "
+            "FROM api_keys ORDER BY created_at DESC"
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+    async def revoke_api_key(self, key: str) -> None:
+        assert self._db
+        await self._db.execute(
+            "UPDATE api_keys SET active = 0 WHERE key = ?", (key,)
+        )
+        await self._db.commit()
 
     async def write_signal_log(
         self,
@@ -756,6 +863,62 @@ class FeedDatabase:
         rows = await cur.fetchall()
         return [dict(r) for r in rows]
 
+    async def get_signals_v1(
+        self,
+        *,
+        feed_source: Optional[str] = None,
+        event_type: Optional[str] = None,
+        ticker: Optional[str] = None,
+        channel: Optional[str] = None,
+        action: Optional[str] = None,
+        min_impact: Optional[int] = None,
+        min_confidence: Optional[int] = None,
+        since: Optional[str] = None,
+        realtime: bool = False,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> List[Dict[str, Any]]:
+        """Signals query for the v1 API. realtime=True includes all delivered
+        signals; realtime=False restricts to free_tier_sent=1 (24h-delayed)."""
+        assert self._db
+        clauses = ["action IN ('trade', 'watch')"]
+        params: List[Any] = []
+
+        if not realtime:
+            clauses.append("free_tier_sent = 1")
+
+        if feed_source:
+            clauses.append("feed_source = ?")
+            params.append(feed_source)
+        if event_type:
+            clauses.append("event_type = ?")
+            params.append(event_type.upper())
+        if ticker:
+            clauses.append("ticker = ?")
+            params.append(ticker.upper())
+        if channel:
+            clauses.append("channel = ?")
+            params.append(channel.lower())
+        if action:
+            clauses.append("action = ?")
+            params.append(action.lower())
+        if min_impact is not None:
+            clauses.append("impact_score >= ?")
+            params.append(min_impact)
+        if min_confidence is not None:
+            clauses.append("confidence >= ?")
+            params.append(min_confidence)
+        if since:
+            clauses.append("created_at >= ?")
+            params.append(since)
+
+        where = "WHERE " + " AND ".join(clauses)
+        sql = f"SELECT * FROM feed_items {where} ORDER BY created_at DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+
+        cur = await self._db.execute(sql, params)
+        return [dict(r) for r in await cur.fetchall()]
+
     async def count_items(
         self,
         *,
@@ -874,7 +1037,7 @@ class FeedDatabase:
 
     # ── Free-tier delayed-release helpers ──────────────────────────────
 
-    async def update_price_at_flag(self, item_id: str, price: float) -> None:
+    async def update_price_at_flag(self, item_id: str, price: Optional[float]) -> None:
         """Capture the anchor price at signal-flag time (for free-tier 'since flagged' moves)."""
         assert self._db
         now = datetime.now(timezone.utc).isoformat()
