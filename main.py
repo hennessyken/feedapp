@@ -316,8 +316,7 @@ async def _run_continuous(config: RuntimeConfig) -> None:
                 ft_stats = await run_free_tier_cycle(_db, ib_client)
                 if any(ft_stats.values()):
                     logging.info(
-                        "Free-tier sweep: 1h=%d, 24h=%d, broadcast=%d, skipped=%d",
-                        ft_stats.get("captured_1h", 0),
+                        "Free-tier sweep: 24h=%d, broadcast=%d, skipped=%d",
                         ft_stats.get("captured_24h", 0),
                         ft_stats.get("broadcast", 0),
                         ft_stats.get("skipped", 0),

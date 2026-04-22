@@ -296,6 +296,10 @@ _MIGRATE_COLUMNS = [
     ("free_tier_sent",      "INTEGER DEFAULT 0"),   # 1 once delayed post emitted
     ("free_tier_sent_at",   "TEXT"),
     ("free_tier_message_id","INTEGER"),
+
+    # Plain-English 2-sentence summary generated at signal time — reused by
+    # the free-tier delayed post 24h later so we don't re-call the LLM.
+    ("human_text",          "TEXT"),
 ]
 
 
@@ -1105,6 +1109,15 @@ class FeedDatabase:
                SET price_at_flag = ?, price_at_flag_at = ?
                WHERE item_id = ?""",
             (price, now, item_id),
+        )
+        await self._db.commit()
+
+    async def update_human_text(self, item_id: str, human_text: str) -> None:
+        """Store the plain-English 2-sentence summary for reuse in the free-tier delayed post."""
+        assert self._db
+        await self._db.execute(
+            "UPDATE feed_items SET human_text = ? WHERE item_id = ?",
+            (human_text, item_id),
         )
         await self._db.commit()
 

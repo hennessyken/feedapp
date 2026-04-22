@@ -10,7 +10,6 @@ The free tier receives the same signals 24 hours later, with two value-adds:
   2. Fundamentals context (mkt cap, short interest, 52w range, sector).
 
 This module is called periodically by the main loop. Each cycle it:
-  - captures price_1h for signals between 1h and 24h old that lack it
   - captures price_24h + emits the delayed Telegram post for signals ≥24h old
 
 All operations are best-effort: if IB is unavailable or returns None
@@ -116,48 +115,26 @@ async def capture_price_milestones(
     db: FeedDatabase,
     ib_client: Any,
 ) -> Dict[str, int]:
-    """Sweep for signals that have hit the 1h or 24h mark without a price recorded.
+    """Sweep for signals that have hit the 24h mark without a price recorded.
 
-    This should be called periodically (e.g. each pipeline cycle). It is a no-op
-    if IB is unavailable — the milestones simply stay NULL until we can fill them.
+    We only capture the 24h-after price now. The baseline is set at signal
+    time to the price 1 hour BEFORE the announcement, so the displayed
+    move spans roughly 25 hours: 1h pre → 24h post.
 
-    Returns {"captured_1h": n, "captured_24h": n}.
+    Uses IB (5-min bars) first, falls back to yfinance.
+
+    Returns {"captured_24h": n}.
     """
-    stats = {"captured_1h": 0, "captured_24h": 0}
+    stats = {"captured_24h": 0}
 
-    if ib_client is None:
-        return stats
+    from price_history import get_current_price
 
-    # 1h milestone — any signal flagged ≥1h ago with no price_1h yet.
-    one_hr = await db.get_pending_price_milestones(milestone="1h", min_age_hours=1.0)
-    for row in one_hr:
-        ticker = (row.get("ticker") or "").upper().strip()
-        if not ticker:
-            continue
-        # If it's already past 24h, don't bother capturing a stale 1h
-        # (we only use price_1h alongside a real-time-ish reading)
-        price = await _safe_get_price(ib_client, ticker)
-        if price is None:
-            continue
-        # We're storing whatever the price is RIGHT NOW for items that crossed
-        # the 1h mark since our last sweep. On a 5-min cycle this is within
-        # ~5min of the true 1h price — good enough for a "since flagged" move.
-        await db.update_price_milestone(
-            row["item_id"], milestone="1h", price=float(price),
-        )
-        stats["captured_1h"] += 1
-        logger.info(
-            "[free_tier] price_1h captured: %s @ $%.4f (item=%s)",
-            ticker, price, row["item_id"],
-        )
-
-    # 24h milestone
     day = await db.get_pending_price_milestones(milestone="24h", min_age_hours=24.0)
     for row in day:
         ticker = (row.get("ticker") or "").upper().strip()
         if not ticker:
             continue
-        price = await _safe_get_price(ib_client, ticker)
+        price = await get_current_price(ticker, ib_client=ib_client)
         if price is None:
             continue
         await db.update_price_milestone(
@@ -218,13 +195,13 @@ async def broadcast_pending_free_tier(
             result = await send_free_tier_delayed(
                 signal,
                 price_at_flag=row.get("price_at_flag"),
-                price_1h=row.get("price_1h"),
                 price_24h=row.get("price_24h"),
                 fundamentals=fund,
                 flagged_at_iso=row.get("price_at_flag_at")
                                or row.get("published_at"),
                 channel=channel,
                 http=http,
+                human_text=row.get("human_text") or "",
             )
 
             if result.get("sent"):

@@ -499,7 +499,7 @@ class TelegramSubscriber(BaseSubscriber):
                     rationale=rationale,
                 )
 
-                # IB buy price + free-tier anchor price
+                # IB buy price (for real-time trading anchor)
                 buy_price: Optional[float] = None
                 if ctx.ib_client is not None:
                     try:
@@ -513,9 +513,6 @@ class TelegramSubscriber(BaseSubscriber):
                                 await ctx.db.update_buy_price(
                                     item.item_id, buy_price, signal_date,
                                 )
-                                await ctx.db.update_price_at_flag(
-                                    item.item_id, buy_price,
-                                )
                                 await ctx.db.update_current_price(ticker, buy_price)
                                 logger.info("[telegram] Buy price: %s = $%.4f", ticker, buy_price)
                             else:
@@ -525,6 +522,30 @@ class TelegramSubscriber(BaseSubscriber):
                     except Exception as ib_err:
                         logger.warning("[telegram] Buy price failed for %s: %s", ticker, ib_err)
 
+                # Free-tier anchor: price 1 hour BEFORE the announcement.
+                # This gives the delayed post a pre-announcement baseline so
+                # the 24h move captures the full impact of the news.
+                # Prefer IB (5-min bars), fall back to yfinance.
+                pre_ann_price: Optional[float] = None
+                try:
+                    from price_history import get_price_hours_before
+                    pre_ann_price = await get_price_hours_before(
+                        ticker, hours=1.0, ib_client=ctx.ib_client,
+                    )
+                    if pre_ann_price is not None:
+                        await ctx.db.update_price_at_flag(item.item_id, pre_ann_price)
+                        logger.info(
+                            "[telegram] pre-announcement price captured: %s = $%.4f (1h before)",
+                            ticker, pre_ann_price,
+                        )
+                    elif buy_price is not None:
+                        # Last resort: use current buy_price so we at least have a baseline
+                        await ctx.db.update_price_at_flag(item.item_id, buy_price)
+                except Exception as pf_err:
+                    logger.debug("[telegram] pre-announcement fetch failed: %s", pf_err)
+                    if buy_price is not None:
+                        await ctx.db.update_price_at_flag(item.item_id, buy_price)
+
                 try:
                     formatted = format_signal(sig)
                     human_text = await format_signal_text(
@@ -533,18 +554,31 @@ class TelegramSubscriber(BaseSubscriber):
                         http_client=ctx.http,
                         api_key=config.openai_api_key,
                     )
+                    # Persist human_text so the 24h-delayed free-tier post
+                    # can reuse it without another LLM call.
+                    try:
+                        await ctx.db.update_human_text(item.item_id, human_text or "")
+                    except Exception as ht_err:
+                        logger.debug("[telegram] human_text persist failed: %s", ht_err)
+
                     tier = classify_tier(formatted)
                     channel = classify_channel(item.feed_source, event_type)
                     fundamentals = await ctx.db.get_fundamentals(ticker)
+
+                    # Free-tier anchor defaults to the pre-announcement price
+                    # (captured above via yfinance); fall back to buy_price.
+                    anchor_price = pre_ann_price if pre_ann_price is not None else buy_price
 
                     # ── Free tier: defer ─────────────────────────────────
                     if tier == "free":
                         stats["sent"] += 1
                         logger.info(
-                            "[telegram] QUEUED for free-tier +24h: %s %s channel=%s",
+                            "[telegram] QUEUED for free-tier +24h: %s %s channel=%s anchor=$%s",
                             ticker, event_type, channel,
+                            f"{anchor_price:.2f}" if anchor_price else "N/A",
                         )
-                        await ctx.db.update_price_at_flag(item.item_id, buy_price)
+                        if anchor_price is not None:
+                            await ctx.db.update_price_at_flag(item.item_id, anchor_price)
                         await ctx.db.write_signal_log(
                             item_id=item.item_id,
                             feed_source=item.feed_source,
@@ -565,7 +599,7 @@ class TelegramSubscriber(BaseSubscriber):
                             disposition="queued_free",
                             tier="free",
                             channel=channel,
-                            price_at_flag=buy_price,
+                            price_at_flag=anchor_price,
                             market_cap=fundamentals.get("market_cap") if fundamentals else None,
                             short_pct=fundamentals.get("short_pct_of_float") if fundamentals else None,
                         )
