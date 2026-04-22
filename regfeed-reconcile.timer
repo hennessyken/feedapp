@@ -1,0 +1,11 @@
+[Unit]
+Description=Regfeed — nightly API key membership reconcile
+Requires=regfeed-reconcile.service
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+Persistent=true
+RandomizedDelaySec=5m
+
+[Install]
+WantedBy=timers.target

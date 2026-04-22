@@ -92,6 +92,19 @@ async def _require_api_key(
     return row
 
 
+def _allowed_channels(key_row: Dict[str, Any]) -> List[str]:
+    raw = key_row.get("allowed_channels") or ""
+    return [c.strip().lower() for c in raw.split(",") if c.strip()]
+
+
+def _reauth_hint() -> str:
+    return (
+        "No channels authorized on this key. "
+        "Run /mykey in @CatalystWireSECApiBot or @CatalystWireFDAApiBot "
+        "to authorize the feeds you are subscribed to."
+    )
+
+
 _ADMIN_KEY = os.environ.get("ADMIN_API_KEY", "")
 
 
@@ -547,11 +560,20 @@ async def v1_signals(
     """Scored regulatory signals. Pro keys receive real-time data; free keys
     receive the same signals with a 24h delay."""
     realtime = key_row["plan"] in ("pro", "enterprise")
+    allowed = _allowed_channels(key_row)
+    if not allowed:
+        raise HTTPException(status_code=403, detail=_reauth_hint())
+    if channel and channel.lower() not in allowed:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Key not authorized for channel '{channel}'. Authorized: {','.join(allowed)}",
+        )
     rows = await _db.get_signals_v1(
         feed_source=source,
         event_type=event_type,
         ticker=ticker,
         channel=channel,
+        channels=None if channel else allowed,
         action=action,
         min_impact=min_impact,
         min_confidence=min_confidence,
@@ -563,6 +585,7 @@ async def v1_signals(
     return {
         "plan":    key_row["plan"],
         "realtime": realtime,
+        "authorized_channels": allowed,
         "count":   len(rows),
         "offset":  offset,
         "signals": [_shape_signal(r) for r in rows],
@@ -575,6 +598,9 @@ async def v1_signal_detail(
     key_row: Dict[str, Any] = Depends(_require_api_key),
 ) -> Dict[str, Any]:
     assert _db._db
+    allowed = _allowed_channels(key_row)
+    if not allowed:
+        raise HTTPException(status_code=403, detail=_reauth_hint())
     cur = await _db._db.execute(
         "SELECT * FROM feed_items WHERE item_id = ?", (item_id,)
     )
@@ -582,6 +608,10 @@ async def v1_signal_detail(
     if not row:
         raise HTTPException(status_code=404, detail="Signal not found")
     row = dict(row)
+    # Channel authorization — 404 (not 403) to avoid leaking signal existence
+    row_channel = (row.get("channel") or "").lower()
+    if row_channel and row_channel not in allowed:
+        raise HTTPException(status_code=404, detail="Signal not found")
     realtime = key_row["plan"] in ("pro", "enterprise")
     # Free keys only see signals that have been publicly released
     if not realtime and not row.get("free_tier_sent"):

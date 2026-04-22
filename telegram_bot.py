@@ -2,8 +2,8 @@ from __future__ import annotations
 
 """Inbound Telegram bot handler — /start, /mykey commands and DM delivery.
 
-Uses the dedicated membership bots (TELEGRAM_BOT_TOKEN_SEC_MEMBERSHIP /
-TELEGRAM_BOT_TOKEN_FDA_MEMBERSHIP) so InviteMember and signal delivery
+Uses the dedicated membership bots (TELEGRAM_BOT_TOKEN_SEC_CMD /
+TELEGRAM_BOT_TOKEN_FDA_CMD) so InviteMember and signal delivery
 never share a token.
 
 On /mykey the bot verifies the user is an active member of the pro channel
@@ -28,7 +28,7 @@ _TIMEOUT = 10
 
 def _membership_token(channel: str) -> Optional[str]:
     """Return the membership bot token for a channel (used for DMs + commands)."""
-    return (os.environ.get(f"TELEGRAM_BOT_TOKEN_{channel.upper()}_MEMBERSHIP") or "").strip() or None
+    return (os.environ.get(f"TELEGRAM_BOT_TOKEN_{channel.upper()}_CMD") or "").strip() or None
 
 
 def _signal_token(channel: str) -> Optional[str]:
@@ -120,23 +120,33 @@ async def send_dm(
 
 # ── Message templates ─────────────────────────────────────────────────────────
 
-_WELCOME = (
-    "👋 <b>Welcome to Catalyst Wire</b>\n\n"
-    "Real-time regulatory signals from SEC, FDA, EMA, and ClinicalTrials.\n\n"
-    "<b>Commands</b>\n"
-    "/mykey — get your API key (pro subscribers)\n"
-    "/help  — show this message\n\n"
-    "Subscribe:\n"
-    "• <a href=\"https://im.page/catalyst-wire-sec\">Catalyst Wire SEC Pro →</a>\n"
-    "• <a href=\"https://im.page/catalyst-wire-fda\">Catalyst Wire FDA Pro →</a>"
-)
+_PRODUCT_LINKS = {
+    "sec": ("Catalyst Wire SEC Pro", "https://im.page/catalyst-wire-sec",
+            "Real-time SEC regulatory signals — 8-K, S-1, Form 4, and more."),
+    "fda": ("Catalyst Wire FDA Pro", "https://im.page/catalyst-wire-fda",
+            "Real-time FDA, EMA, and ClinicalTrials.gov signals."),
+}
 
-_NOT_SUBSCRIBER = (
-    "🔒 <b>Pro subscription required</b>\n\n"
-    "API access is included with a paid subscription.\n\n"
-    "• <a href=\"https://im.page/catalyst-wire-sec\">Catalyst Wire SEC Pro →</a>\n"
-    "• <a href=\"https://im.page/catalyst-wire-fda\">Catalyst Wire FDA Pro →</a>"
-)
+
+def _welcome(channel: str) -> str:
+    label, url, blurb = _PRODUCT_LINKS.get(channel, _PRODUCT_LINKS["sec"])
+    return (
+        f"👋 <b>Welcome to {label}</b>\n\n"
+        f"{blurb}\n\n"
+        "<b>Commands</b>\n"
+        "/mykey — get your API key (pro subscribers)\n"
+        "/help  — show this message\n\n"
+        f"Not subscribed yet? <a href=\"{url}\">Subscribe →</a>"
+    )
+
+
+def _not_subscriber(channel: str) -> str:
+    label, url, _ = _PRODUCT_LINKS.get(channel, _PRODUCT_LINKS["sec"])
+    return (
+        "🔒 <b>Pro subscription required</b>\n\n"
+        "API access is included with a paid subscription.\n\n"
+        f"<a href=\"{url}\">{label} →</a>"
+    )
 
 
 def _key_message(row: Dict[str, Any], *, new: bool = False) -> str:
@@ -144,15 +154,44 @@ def _key_message(row: Dict[str, Any], *, new: bool = False) -> str:
     key = row.get("key", "")
     rpm = row.get("rpm", 0)
     rpd = row.get("rpd", 0)
+    raw = row.get("allowed_channels") or ""
+    channels = [c.strip().upper() for c in raw.split(",") if c.strip()]
+    channels_line = ", ".join(channels) if channels else "none"
     header = "🎉 <b>Your Catalyst Wire API key is ready!</b>" if new else "🔑 <b>Your Catalyst Wire API key</b>"
     return (
         f"{header}\n\n"
         f"Plan: <b>{plan}</b>\n"
         f"<code>{key}</code>\n\n"
+        f"Authorized feeds: <b>{channels_line}</b>\n"
         f"Rate limits: {rpm} req/min · {rpd} req/day\n\n"
         f"<b>Example</b>\n"
-        f"<code>GET /v1/signals\n"
+        f"<code>GET /v1/signals?channel={(channels[0].lower() if channels else 'sec')}\n"
         f"X-API-Key: {key}</code>\n\n"
+        f"Questions? Message @CatalystWireSupport"
+    )
+
+
+def _onboarding_message(channel: str) -> str:
+    """Message sent to new members joining the paid channel."""
+    if channel.lower() == "fda":
+        bot_handle = "@CatalystWireFDAApiBot"
+        feed_desc = "FDA, EMA, and ClinicalTrials.gov signals"
+    else:
+        bot_handle = "@CatalystWireSECApiBot"
+        feed_desc = "SEC regulatory signals — 8-K, S-1, Form 4"
+
+    return (
+        f"🔑 <b>Getting Your API Key</b>\n\n"
+        f"Welcome to Catalyst Wire {channel.upper()} Pro! Real-time {feed_desc}.\n\n"
+        f"<b>How to get your API key:</b>\n"
+        f"1. Open this bot: <code>{bot_handle}</code>\n"
+        f"2. Run: <code>/mykey</code>\n"
+        f"3. Copy your API key (starts with cw_)\n"
+        f"4. Use it in your API requests\n\n"
+        f"<b>Example</b>\n"
+        f"<code>GET /v1/signals?channel={channel.lower()}\n"
+        f"X-API-Key: your_key_here</code>\n\n"
+        f"Rate limits: 60 req/min · 2000 req/day\n\n"
         f"Questions? Message @CatalystWireSupport"
     )
 
@@ -173,6 +212,32 @@ async def handle_update(
             return
 
         chat_id = str(msg.get("chat", {}).get("id", ""))
+
+        # Handle new members joining the channel
+        new_members = msg.get("new_chat_members") or []
+        if new_members:
+            owns = http is None
+            client = http or httpx.AsyncClient(timeout=_TIMEOUT)
+            try:
+                for member in new_members:
+                    user_id = str(member.get("id", ""))
+                    # Skip bot events, only notify real users
+                    if user_id and not member.get("is_bot"):
+                        await send_dm(
+                            user_id,
+                            _onboarding_message(channel),
+                            channel=channel,
+                            http=client,
+                        )
+                        logger.info("Onboarding message sent: tg=%s channel=%s", user_id, channel)
+            finally:
+                if owns:
+                    try:
+                        await client.aclose()
+                    except Exception:
+                        pass
+            return
+
         text = (msg.get("text") or "").strip()
         if not chat_id or not text.startswith("/"):
             return
@@ -183,25 +248,37 @@ async def handle_update(
         client = http or httpx.AsyncClient(timeout=_TIMEOUT)
         try:
             if cmd in ("start", "help"):
-                await send_dm(chat_id, _WELCOME, channel=channel, http=client)
+                await send_dm(chat_id, _welcome(channel), channel=channel, http=client)
 
             elif cmd == "mykey":
-                # Return existing key first (no membership re-check needed)
-                existing = await db.get_api_key_by_telegram_id(chat_id)
-                if existing:
-                    await send_dm(chat_id, _key_message(existing), channel=channel, http=client)
-                    return
-
-                # New request — verify they're in the pro channel
+                # Always re-verify membership in THIS channel; grant or revoke
+                # per-channel access so the key reflects current subscription state.
                 is_member = await _is_pro_member(chat_id, channel, client)
-                if not is_member:
-                    await send_dm(chat_id, _NOT_SUBSCRIBER, channel=channel, http=client)
+                existing = await db.get_api_key_by_telegram_id(chat_id)
+
+                if existing:
+                    if is_member:
+                        await db.grant_channel(existing["key"], channel)
+                    else:
+                        await db.revoke_channel(existing["key"], channel)
+                    row = await db.get_api_key(existing["key"])
+                    if row and (row.get("allowed_channels") or ""):
+                        await send_dm(chat_id, _key_message(row), channel=channel, http=client)
+                    else:
+                        await send_dm(chat_id, _not_subscriber(channel), channel=channel, http=client)
+                    logger.info("API key refreshed via /mykey: tg=%s channel=%s member=%s", chat_id, channel, is_member)
                     return
 
-                # Confirmed subscriber — create and deliver key
+                if not is_member:
+                    await send_dm(chat_id, _not_subscriber(channel), channel=channel, http=client)
+                    return
+
+                # Confirmed subscriber — create and deliver key scoped to this channel
                 key = "cw_" + secrets.token_urlsafe(32)
                 email = f"tg_{chat_id}@catalystwire"
-                await db.create_api_key(key, email=email, plan="pro", telegram_id=chat_id)
+                await db.create_api_key(
+                    key, email=email, plan="pro", telegram_id=chat_id, allowed_channels=channel
+                )
                 row = await db.get_api_key(key)
                 await send_dm(chat_id, _key_message(row, new=True), channel=channel, http=client)
                 logger.info("API key auto-issued via /mykey: tg=%s channel=%s", chat_id, channel)
@@ -234,7 +311,7 @@ async def register_webhook(base_url: str) -> None:
     """Point each membership bot's webhook at /webhooks/telegram/{channel}."""
     tokens = _membership_tokens()
     if not tokens:
-        print("No membership tokens found. Set TELEGRAM_BOT_TOKEN_SEC_MEMBERSHIP and/or TELEGRAM_BOT_TOKEN_FDA_MEMBERSHIP in .env")
+        print("No membership tokens found. Set TELEGRAM_BOT_TOKEN_SEC_CMD and/or TELEGRAM_BOT_TOKEN_FDA_CMD in .env")
         return
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         for channel, token in tokens.items():

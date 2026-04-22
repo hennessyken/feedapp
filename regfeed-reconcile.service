@@ -1,0 +1,13 @@
+[Unit]
+Description=Regfeed — reconcile API key channel memberships
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ken
+WorkingDirectory=/home/ken/Regfeed
+EnvironmentFile=/home/ken/Regfeed/.env
+ExecStart=/home/ken/Regfeed/.venv/bin/python reconcile_memberships.py
+StandardOutput=journal
+StandardError=journal

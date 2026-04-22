@@ -82,15 +82,16 @@ CREATE INDEX IF NOT EXISTS idx_feed_items_tweeted   ON feed_items(tweeted, statu
 
 -- API key auth
 CREATE TABLE IF NOT EXISTS api_keys (
-    key          TEXT PRIMARY KEY,
-    email        TEXT NOT NULL,
-    plan         TEXT NOT NULL DEFAULT 'free',
-    rpm          INTEGER NOT NULL DEFAULT 10,
-    rpd          INTEGER NOT NULL DEFAULT 100,
-    active       INTEGER NOT NULL DEFAULT 1,
-    created_at   TEXT NOT NULL,
-    last_used_at TEXT,
-    telegram_id  TEXT
+    key              TEXT PRIMARY KEY,
+    email            TEXT NOT NULL,
+    plan             TEXT NOT NULL DEFAULT 'free',
+    rpm              INTEGER NOT NULL DEFAULT 10,
+    rpd              INTEGER NOT NULL DEFAULT 100,
+    active           INTEGER NOT NULL DEFAULT 1,
+    created_at       TEXT NOT NULL,
+    last_used_at     TEXT,
+    telegram_id      TEXT,
+    allowed_channels TEXT  -- comma-separated: e.g. "sec,fda". NULL = no channels authorized.
 );
 CREATE INDEX IF NOT EXISTS idx_api_keys_email ON api_keys(email);
 
@@ -520,6 +521,10 @@ class FeedDatabase:
                 )
                 await self._db.commit()
                 logger.info("Migrated api_keys: added telegram_id column")
+            if "allowed_channels" not in cols:
+                await self._db.execute("ALTER TABLE api_keys ADD COLUMN allowed_channels TEXT")
+                await self._db.commit()
+                logger.info("Migrated api_keys: added allowed_channels column")
         except Exception as e:
             logger.warning("api_keys migration failed: %s", e)
 
@@ -539,6 +544,7 @@ class FeedDatabase:
         email: str,
         plan: str = "free",
         telegram_id: Optional[str] = None,
+        allowed_channels: Optional[str] = None,
     ) -> None:
         assert self._db
         rpm, rpd = {"free": (10, 100), "pro": (60, 2000), "enterprise": (300, 50000)}.get(
@@ -546,12 +552,60 @@ class FeedDatabase:
         )
         now = datetime.now(timezone.utc).isoformat()
         await self._db.execute(
-            """INSERT INTO api_keys (key, email, plan, rpm, rpd, active, created_at, telegram_id)
-               VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+            """INSERT INTO api_keys (key, email, plan, rpm, rpd, active, created_at, telegram_id, allowed_channels)
+               VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)
                ON CONFLICT(key) DO NOTHING""",
-            (key, email, plan, rpm, rpd, now, telegram_id),
+            (key, email, plan, rpm, rpd, now, telegram_id, allowed_channels),
         )
         await self._db.commit()
+
+    @staticmethod
+    def _parse_allowed_channels(raw: Optional[str]) -> List[str]:
+        if not raw:
+            return []
+        return [c.strip().lower() for c in raw.split(",") if c.strip()]
+
+    async def grant_channel(self, key: str, channel: str) -> List[str]:
+        """Add `channel` to a key's allowed_channels set. Returns the updated list."""
+        assert self._db
+        channel = channel.strip().lower()
+        if not channel:
+            return []
+        cur = await self._db.execute(
+            "SELECT allowed_channels FROM api_keys WHERE key = ?", (key,)
+        )
+        row = await cur.fetchone()
+        if not row:
+            return []
+        current = self._parse_allowed_channels(row[0])
+        if channel not in current:
+            current.append(channel)
+            await self._db.execute(
+                "UPDATE api_keys SET allowed_channels = ? WHERE key = ?",
+                (",".join(current), key),
+            )
+            await self._db.commit()
+        return current
+
+    async def revoke_channel(self, key: str, channel: str) -> List[str]:
+        """Remove `channel` from a key's allowed_channels set. Returns the updated list."""
+        assert self._db
+        channel = channel.strip().lower()
+        cur = await self._db.execute(
+            "SELECT allowed_channels FROM api_keys WHERE key = ?", (key,)
+        )
+        row = await cur.fetchone()
+        if not row:
+            return []
+        current = self._parse_allowed_channels(row[0])
+        if channel in current:
+            current.remove(channel)
+            await self._db.execute(
+                "UPDATE api_keys SET allowed_channels = ? WHERE key = ?",
+                (",".join(current) if current else None, key),
+            )
+            await self._db.commit()
+        return current
 
     async def get_api_key_by_telegram_id(self, telegram_id: str) -> Optional[Dict[str, Any]]:
         assert self._db
@@ -585,7 +639,7 @@ class FeedDatabase:
     async def list_api_keys(self) -> List[Dict[str, Any]]:
         assert self._db
         cur = await self._db.execute(
-            "SELECT key, email, plan, rpm, rpd, active, created_at, last_used_at "
+            "SELECT key, email, plan, rpm, rpd, active, created_at, last_used_at, telegram_id, allowed_channels "
             "FROM api_keys ORDER BY created_at DESC"
         )
         return [dict(r) for r in await cur.fetchall()]
@@ -870,6 +924,7 @@ class FeedDatabase:
         event_type: Optional[str] = None,
         ticker: Optional[str] = None,
         channel: Optional[str] = None,
+        channels: Optional[List[str]] = None,
         action: Optional[str] = None,
         min_impact: Optional[int] = None,
         min_confidence: Optional[int] = None,
@@ -899,6 +954,10 @@ class FeedDatabase:
         if channel:
             clauses.append("channel = ?")
             params.append(channel.lower())
+        elif channels:
+            placeholders = ",".join("?" for _ in channels)
+            clauses.append(f"channel IN ({placeholders})")
+            params.extend(c.lower() for c in channels)
         if action:
             clauses.append("action = ?")
             params.append(action.lower())
