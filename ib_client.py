@@ -19,8 +19,6 @@ get_prices(tickers)    async — {ticker: price_or_None} batch lookup
 get_historical(...)    async — list of OHLCV bar dicts or None
 """
 
-from __future__ import annotations
-
 import asyncio
 import concurrent.futures
 import logging
