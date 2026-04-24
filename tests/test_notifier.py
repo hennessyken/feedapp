@@ -251,14 +251,14 @@ def test_free_tier_sec_upsell_link():
     assert "catalyst-wire-fda" not in msg
 
 
-def test_free_tier_price_before_after_shown():
+def test_free_tier_price_before_after_not_shown():
+    """The before/after price line is removed — only the % change is shown."""
     sig = make_signal()
     msg = _format_free_tier_delayed_message(
         sig, price_at_flag=190.0, price_now=200.0, channel="sec",
     )
-    assert "Price before news:" in msg
-    assert "$190.00" in msg
-    assert "$200.00" in msg
+    assert "Price before news:" not in msg
+    assert "% Change since news broke" in msg
 
 
 def test_free_tier_delayed_banner_present():

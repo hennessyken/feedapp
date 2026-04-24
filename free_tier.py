@@ -172,6 +172,12 @@ async def broadcast_pending_free_tier(
 
         try:
             fund = await db.get_fundamentals(ticker)
+            if not fund:
+                try:
+                    from fetch_fundamentals import ensure_fundamentals
+                    fund = await ensure_fundamentals(db, ticker)
+                except Exception as _fe:
+                    logger.debug("[free_tier] ensure_fundamentals failed for %s: %s", ticker, _fe)
             signal = _row_to_formatted_signal(row)
             channel = classify_channel(
                 row.get("feed_source") or "",

@@ -276,6 +276,7 @@ _MIGRATE_COLUMNS = [
     # ── IB price tracking ──
     ("buy_price",        "REAL"),
     ("buy_price_at",     "TEXT"),
+    ("buy_price_source", "TEXT"),     # ib_quote / ib_price / ib_pending / fundamentals_cache
     ("sell_price",       "REAL"),
     ("sell_price_at",    "TEXT"),
     ("signal_date",      "TEXT"),     # YYYY-MM-DD (ET) — groups signals by trading day
@@ -1074,16 +1075,28 @@ class FeedDatabase:
         await self._db.commit()
 
     async def update_buy_price(
-        self, item_id: str, price: float, signal_date: str,
+        self,
+        item_id: str,
+        price: float,
+        signal_date: str,
+        *,
+        source: Optional[str] = None,
     ) -> None:
-        """Record the IB buy price."""
+        """Record the IB buy price and where it came from.
+
+        source values:
+          "ib_quote"          — live IB get_quote() during market hours (bid/ask + price)
+          "ib_price"          — live IB get_price() only (no bid/ask)
+          "ib_pending"        — filled by the overnight pending-price sweep on next open
+          "fundamentals_cache"— taken from ticker_fundamentals.current_price (not live)
+        """
         assert self._db
         now = datetime.now(timezone.utc).isoformat()
         await self._db.execute(
             """UPDATE feed_items
-               SET buy_price = ?, buy_price_at = ?, signal_date = ?
+               SET buy_price = ?, buy_price_at = ?, buy_price_source = ?, signal_date = ?
                WHERE item_id = ?""",
-            (price, now, signal_date, item_id),
+            (price, now, source, signal_date, item_id),
         )
         await self._db.commit()
 

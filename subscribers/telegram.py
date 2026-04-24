@@ -535,12 +535,15 @@ class TelegramSubscriber(BaseSubscriber):
                             if raw_quote and raw_quote.get("price"):
                                 ib_quote = raw_quote
                                 buy_price = float(raw_quote["price"])
+                                buy_price_source = "ib_quote"
                             else:
                                 buy_price = await ctx.ib_client.get_price(ticker)
+                                buy_price_source = "ib_price" if buy_price is not None else None
 
                             if buy_price is not None:
                                 await ctx.db.update_buy_price(
                                     item.item_id, buy_price, signal_date,
+                                    source=buy_price_source,
                                 )
                                 await ctx.db.update_current_price(ticker, buy_price)
                                 logger.info("[telegram] Buy price: %s = $%.4f bid=%s ask=%s vol=%s",
@@ -597,6 +600,12 @@ class TelegramSubscriber(BaseSubscriber):
 
                     channel = classify_channel(item.feed_source, event_type)
                     fundamentals = await ctx.db.get_fundamentals(ticker)
+                    if not fundamentals:
+                        try:
+                            from fetch_fundamentals import ensure_fundamentals
+                            fundamentals = await ensure_fundamentals(ctx.db, ticker)
+                        except Exception as _fe:
+                            logger.debug("[telegram] ensure_fundamentals failed for %s: %s", ticker, _fe)
                     market_cap = fundamentals.get("market_cap") if fundamentals else None
                     tier = classify_tier(formatted, market_cap=market_cap)
 

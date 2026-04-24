@@ -223,7 +223,9 @@ class FeedPipeline:
                 price = await self._ib_client.get_price(ticker)
                 if price is not None:
                     signal_date = item.get("signal_date") or now_et.strftime("%Y-%m-%d")
-                    await self._db.update_buy_price(item["item_id"], price, signal_date)
+                    await self._db.update_buy_price(
+                        item["item_id"], price, signal_date, source="ib_pending",
+                    )
                     stats["filled"] += 1
                     logger.info("Pending buy_price filled: %s = $%.4f", ticker, price)
                 else:

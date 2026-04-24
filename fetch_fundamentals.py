@@ -421,6 +421,77 @@ async def run(refetch: bool = False, ib_backfill: bool = False):
         await db.close()
 
 
+async def ensure_fundamentals(
+    db: "FeedDatabase",
+    ticker: str,
+    *,
+    loop: Any = None,
+) -> Optional[Dict[str, Any]]:
+    """Return fundamentals for *ticker*, fetching from yfinance if not yet cached.
+
+    Called by the live pipeline whenever it encounters a ticker with no stored
+    fundamentals.  The yfinance call is run in a thread executor so it never
+    blocks the async event loop.  On failure the result is None (caller must
+    handle gracefully).
+
+    The DB row is inserted/updated so subsequent calls are instant cache hits.
+    """
+    import asyncio as _asyncio
+    import concurrent.futures
+
+    # Fast path — already in DB
+    existing = await db.get_fundamentals(ticker)
+    if existing:
+        return existing
+
+    # Slow path — fetch from yfinance in a thread (blocking I/O)
+    _loop = loop or _asyncio.get_event_loop()
+    try:
+        info = await _asyncio.wait_for(
+            _loop.run_in_executor(None, _fetch_info, ticker),
+            timeout=15,
+        )
+    except Exception as e:
+        logger.debug("ensure_fundamentals: yfinance fetch failed for %s: %s", ticker, e)
+        return None
+
+    if not info:
+        logger.debug("ensure_fundamentals: no data returned for %s", ticker)
+        return None
+
+    now_str = datetime.now(timezone.utc).isoformat()
+    try:
+        await db._db.execute(
+            """INSERT OR REPLACE INTO ticker_fundamentals
+               (ticker, company_name, sector, industry, market_cap, cap_bucket,
+                pe_ratio, forward_pe, shares_out, float_shares, avg_volume,
+                beta, dividend_yield, exchange, currency, country, fetched_at,
+                short_pct_of_float, week52_high, week52_low, current_price)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                       ?, ?, ?, ?)""",
+            (
+                ticker, info["company_name"], info["sector"], info["industry"],
+                info["market_cap"], info["cap_bucket"],
+                info["pe_ratio"], info["forward_pe"],
+                info["shares_out"], info["float_shares"], info["avg_volume"],
+                info["beta"], info["dividend_yield"],
+                info["exchange"], info["currency"], info["country"],
+                now_str,
+                info.get("short_pct_of_float"),
+                info.get("week52_high"),
+                info.get("week52_low"),
+                info.get("current_price"),
+            ),
+        )
+        await db._db.commit()
+        logger.info("ensure_fundamentals: cached fundamentals for %s", ticker)
+    except Exception as e:
+        logger.warning("ensure_fundamentals: DB write failed for %s: %s", ticker, e)
+        return None
+
+    return info
+
+
 if __name__ == "__main__":
     import sys
     refetch = "--refetch" in sys.argv

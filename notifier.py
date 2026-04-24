@@ -428,8 +428,6 @@ def _format_telegram_message(
             lines.append(f"💰 Share price when we spotted this: <b>${buy_price:.2f}</b>")
         elif fundamentals and fundamentals.get("current_price") is not None:
             lines.append(f"💰 Current share price: <b>${float(fundamentals['current_price']):.2f}</b>")
-        else:
-            lines.append("💰 Share price: market is closed right now — check again when it reopens")
 
         # Live IB quote enrichment (bid/ask spread + today's volume vs average)
         if ib_quote:
@@ -549,8 +547,6 @@ def _format_free_tier_delayed_message(
         if s:
             dot = "🟢" if pct > 0 else ("🔴" if pct < 0 else "⚪")
             lines.append(f"% Change since news broke: {dot} <b>{s}</b>")
-            if price_at_flag:
-                lines.append(f"  Price before news: <b>${float(price_at_flag):.2f}</b>  →  Now: <b>${float(price_now):.2f}</b>")
             lines.append("")
 
     # ── About the company ────────────────────────────────────────────────
