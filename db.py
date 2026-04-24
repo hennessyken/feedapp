@@ -1170,9 +1170,11 @@ class FeedDatabase:
     async def get_pending_free_tier(self) -> List[Dict[str, Any]]:
         """Find signals ready for free-tier delayed release (>=24h old, not yet sent).
 
-        Requires a valid (non-UNKNOWN_) ticker AND a captured pre-announcement
-        anchor price so the delayed post always has both a tradeable symbol
-        and a real price move to display.
+        Includes ALL paid-tier signals (pro / pro_smallcap) that were broadcast
+        in real-time but have not yet been posted to the free channel.
+        price_at_flag is NOT required — if it is NULL the message formatter
+        simply omits the price-move line.  Falls back to published_at for the
+        24-hour gate when price_at_flag_at is missing.
         """
         assert self._db
         cur = await self._db.execute(
@@ -1182,11 +1184,15 @@ class FeedDatabase:
                  AND ticker NOT LIKE 'UNKNOWN_%'
                  AND action IN ('trade', 'watch')
                  AND free_tier_sent = 0
-                 AND price_at_flag IS NOT NULL
-                 AND price_at_flag > 0
-                 AND price_at_flag_at IS NOT NULL
-                 AND (julianday('now') - julianday(price_at_flag_at)) * 24.0 >= 24.0
-               ORDER BY price_at_flag_at"""
+                 AND (
+                   (price_at_flag_at IS NOT NULL
+                    AND (julianday('now') - julianday(price_at_flag_at)) * 24.0 >= 24.0)
+                   OR
+                   (price_at_flag_at IS NULL
+                    AND published_at IS NOT NULL
+                    AND (julianday('now') - julianday(published_at)) * 24.0 >= 24.0)
+                 )
+               ORDER BY COALESCE(price_at_flag_at, published_at)"""
         )
         rows = await cur.fetchall()
         return [dict(r) for r in rows]

@@ -89,10 +89,11 @@ def test_free_tier_message_snapshot_has_expected_structure():
     anchors = [
         "🟢 GOOD NEWS  ↑  ACME — Acme Corp",
         "Two-sentence human summary.",
-        "% change: +7.3%",
+        "🔴 <b>24hr DELAYED FEED</b>",
+        "% Change since news broke: 🟢 <b>+7.3%</b>",
         "🔓 Get the news the moment it happens",
         "🔑 Paid subscribers also get API access",
-        "For information only. Not advice.",
+        "Delayed Feed. For information only. Not advice.",
     ]
     for anchor in anchors:
         assert anchor in msg, f"Missing: {anchor!r}\n\nFull message:\n{msg}"
@@ -120,7 +121,7 @@ def test_free_tier_bad_news_negative_pct():
         channel="fda",
     )
     assert "🔴 BAD NEWS" in msg
-    assert "% change: -8.5%" in msg
+    assert "% Change since news broke: 🔴 <b>-8.5%</b>" in msg
 
 
 # ── Tier-specific badges snapshot ──────────────────────────────────────────

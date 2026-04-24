@@ -149,7 +149,7 @@ def test_free_tier_shows_single_pct_change_label():
     msg = _format_free_tier_delayed_message(
         sig, price_at_flag=10.0, price_now=10.73, channel="fda",
     )
-    assert "% change: +7.3%" in msg
+    assert "% Change since news broke: 🟢 <b>+7.3%</b>" in msg
     # Should NOT dump the underlying prices — label only.
     assert "Share price an hour before" not in msg
     assert "Share price a day later" not in msg
@@ -160,7 +160,7 @@ def test_free_tier_negative_move_shows_minus():
     msg = _format_free_tier_delayed_message(
         sig, price_at_flag=100.0, price_now=92.5, channel="sec",
     )
-    assert "% change: -7.5%" in msg
+    assert "% Change since news broke: 🔴 <b>-7.5%</b>" in msg
 
 
 def test_free_tier_omits_move_line_when_missing_baseline():
@@ -168,7 +168,7 @@ def test_free_tier_omits_move_line_when_missing_baseline():
     msg = _format_free_tier_delayed_message(
         sig, price_at_flag=None, price_now=10.0, channel="sec",
     )
-    assert "% change:" not in msg
+    assert "% Change since news broke" not in msg
 
 
 def test_free_tier_omits_move_line_when_missing_current():
@@ -176,7 +176,7 @@ def test_free_tier_omits_move_line_when_missing_current():
     msg = _format_free_tier_delayed_message(
         sig, price_at_flag=10.0, price_now=None, channel="sec",
     )
-    assert "% change:" not in msg
+    assert "% Change since news broke" not in msg
 
 
 def test_free_tier_contains_api_key_upsell():

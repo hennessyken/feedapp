@@ -86,64 +86,130 @@ def _range_position(price: Optional[float], low: Optional[float], hi: Optional[f
         return None
 
 
+def _fmt_avg_volume(v: Optional[float]) -> Optional[str]:
+    """Describe average daily trading volume in plain language."""
+    if v is None or v <= 0:
+        return None
+    try:
+        x = float(v)
+    except (TypeError, ValueError):
+        return None
+    if x >= 10_000_000:
+        return f"~{x / 1_000_000:.0f}M shares/day — very heavily traded"
+    if x >= 1_000_000:
+        return f"~{x / 1_000_000:.1f}M shares/day — heavily traded"
+    if x >= 100_000:
+        return f"~{x / 1_000:.0f}K shares/day — moderately traded"
+    return f"~{int(x):,} shares/day — lightly traded"
+
+
+def _fmt_beta(b: Optional[float]) -> Optional[str]:
+    """Describe beta (price volatility vs market) in plain language."""
+    if b is None:
+        return None
+    try:
+        x = float(b)
+    except (TypeError, ValueError):
+        return None
+    if x > 2.0:
+        desc = "swings very sharply — much more than the market"
+    elif x > 1.3:
+        desc = "tends to move more than the broader market"
+    elif x > 0.8:
+        desc = "moves roughly in line with the broader market"
+    elif x > 0.3:
+        desc = "less jumpy than average — more stable than most"
+    else:
+        desc = "very stable — barely moves with the market"
+    return desc
+
+
 def _format_fundamentals_block(
     fund: Optional[Dict[str, Any]],
     *,
     reference_price: Optional[float] = None,
 ) -> List[str]:
-    """Build the fundamentals lines shared by paid and free posts.
+    """Build the 'About this company' block shared by paid and free posts.
 
-    `reference_price` is used to compute the 52-week-range position.
-    For paid posts pass the current price; for free posts pass price_at_flag.
-    Returns [] if nothing useful is known.
+    `reference_price` is used to show where the current price sits inside
+    the 52-week range.  Pass the current price for paid posts, price_at_flag
+    for free posts.  Returns [] if nothing useful is known.
     """
     if not fund:
         return []
 
     lines: List[str] = []
 
-    # Line 1: company size + what they do
-    cap_str = _fmt_market_cap(fund.get("market_cap"))
+    # ── Where it lists + country ─────────────────────────────────────────
+    exchange = (fund.get("exchange") or "").strip()
+    country  = (fund.get("country")  or "").strip()
+    currency = (fund.get("currency") or "").strip()
+    loc_parts: List[str] = []
+    if exchange:
+        loc_parts.append(exchange)
+    if country:
+        loc_parts.append(country)
+    if currency and currency not in ("USD", ""):
+        loc_parts.append(f"currency: {currency}")
+    if loc_parts:
+        lines.append(f"Listed on: {' · '.join(loc_parts)}")
+
+    # ── Company size + what they do ──────────────────────────────────────
+    cap_str    = _fmt_market_cap(fund.get("market_cap"))
     cap_bucket = (fund.get("cap_bucket") or "").strip()
-    cap_parts: List[str] = []
+    size_word  = {
+        "mega":  " — one of the world's largest companies",
+        "large": " — a large, established company",
+        "mid":   " — a mid-sized company",
+        "small": " — a smaller company",
+        "micro": " — a very small company",
+    }.get(cap_bucket, "")
     if cap_str:
-        # "Mkt cap" → "Company size" — more readable for non-traders
-        size_word = {
-            "mega": " (one of the largest)",
-            "large": " (large company)",
-            "mid": " (mid-size company)",
-            "small": " (small company)",
-            "micro": " (very small company)",
-        }.get(cap_bucket, "")
-        cap_parts.append(f"Company size: {cap_str}{size_word}")
-    sector = (fund.get("sector") or "").strip()
+        lines.append(f"Company size: {cap_str}{size_word}")
+
+    sector   = (fund.get("sector")   or "").strip()
     industry = (fund.get("industry") or "").strip()
     if sector and industry and industry != sector:
-        cap_parts.append(f"Industry: {sector} / {industry}")
+        lines.append(f"What they do: {sector} / {industry}")
     elif sector:
-        cap_parts.append(f"Industry: {sector}")
-    if cap_parts:
-        lines.append("  |  ".join(cap_parts))
+        lines.append(f"What they do: {sector}")
 
-    # Line 2: how many investors are betting against it + past-year price range
+    # ── How the stock normally behaves ───────────────────────────────────
+    beta_desc = _fmt_beta(fund.get("beta"))
+    if beta_desc:
+        lines.append(f"How it tends to move: {beta_desc}")
+
+    vol_desc = _fmt_avg_volume(fund.get("avg_volume"))
+    if vol_desc:
+        lines.append(f"Daily trading activity: {vol_desc}")
+
+    # ── Investors currently betting the price will fall ──────────────────
     short_str = _fmt_pct(fund.get("short_pct_of_float"))
+    if short_str:
+        lines.append(f"Investors betting it will fall: {short_str}")
+
+    # ── Past-year price range ────────────────────────────────────────────
     wk_hi = fund.get("week52_high")
     wk_lo = fund.get("week52_low")
-    range_parts: List[str] = []
-    if short_str:
-        # "Short: X% of float" → plain-language equivalent
-        range_parts.append(f"Investors betting against it: {short_str}")
     if wk_hi and wk_lo:
         try:
-            range_str = f"Past year: ${float(wk_lo):.2f}–${float(wk_hi):.2f}"
+            range_str = f"Price over the past year: ${float(wk_lo):.2f} – ${float(wk_hi):.2f}"
             pos = _range_position(reference_price, wk_lo, wk_hi)
             if pos is not None:
-                range_str += f" (now around {pos}% up that range)"
-            range_parts.append(range_str)
+                range_str += f"  (now about {pos}% up that range)"
+            lines.append(range_str)
         except (TypeError, ValueError):
             pass
-    if range_parts:
-        lines.append("  |  ".join(range_parts))
+
+    # ── Dividend ─────────────────────────────────────────────────────────
+    div = fund.get("dividend_yield")
+    if div:
+        try:
+            d = float(div)
+            if d > 0:
+                lines.append(f"Pays a dividend: {d * 100:.1f}% per year")
+        except (TypeError, ValueError):
+            pass
 
     return lines
 
@@ -294,6 +360,27 @@ _API_BOT_HANDLE = {
 }
 
 
+def _fmt_impact_explanation(impact: str) -> str:
+    """Plain-language explanation of expected price impact."""
+    return {
+        "critical": "VERY HIGH — this type of news can move a share price dramatically",
+        "high":     "HIGH — this type of news often moves the share price significantly",
+        "medium":   "MODERATE — there's a reasonable chance this will move the price",
+        "low":      "LOW — the price effect may be limited, but worth monitoring",
+    }.get(impact.lower(), impact.upper())
+
+
+def _fmt_confidence_explanation(conf_pct: int) -> str:
+    """Plain-language explanation of our confidence in the signal."""
+    if conf_pct >= 85:
+        return f"{conf_pct}% — we're very confident this is genuine, relevant news"
+    if conf_pct >= 70:
+        return f"{conf_pct}% — we're fairly confident this is real and worth watching"
+    if conf_pct >= 55:
+        return f"{conf_pct}% — reasonable confidence, but treat with some caution"
+    return f"{conf_pct}% — early/uncertain — do your own research before acting"
+
+
 def _format_telegram_message(
     signal: FormattedSignal,
     human_text: Optional[str] = None,
@@ -302,6 +389,7 @@ def _format_telegram_message(
     tier: Tier = "free",
     channel: str = "sec",
     fundamentals: Optional[Dict[str, Any]] = None,
+    ib_quote: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Format a real-time signal post (paid tiers only in the new tiering).
 
@@ -321,39 +409,77 @@ def _format_telegram_message(
 
     # ── Paid tiers: full detail ──────────────────────────────────────────
     if tier in ("pro", "pro_smallcap"):
-        # Plain-language labels:
-        #   "How big" replaces "Impact" (potential size of the move)
-        #   "How sure" replaces "Reliability" (confidence this is real)
-        #   "How fresh" replaces "Timing" (how recent the news is)
+
+        # ── Signal quality — expanded, plain language ────────────────────
         freshness_plain = {
-            "early": "fresh (just out)",
-            "mid":   "recent (within a day)",
-            "late":  "older (more than a day)",
+            "early": "just published — you're seeing this as it happens",
+            "mid":   "published within the last day",
+            "late":  "published more than a day ago",
         }.get(signal.latency_class, signal.latency_class)
-        lines.append(
-            f"How big: {signal.expected_impact.upper()}  |  "
-            f"How sure: {signal.confidence:.0%}  |  "
-            f"How fresh: {freshness_plain}"
-        )
+        conf_pct = int(float(signal.confidence or 0) * 100)
+        lines.append("📊 <b>Our read on this signal</b>")
+        lines.append(f"  Likely price impact: {_fmt_impact_explanation(signal.expected_impact)}")
+        lines.append(f"  How confident we are: {_fmt_confidence_explanation(conf_pct)}")
+        lines.append(f"  How fresh: {freshness_plain}")
+        lines.append("")
 
-        # Current price / buy anchor
+        # ── Current share price + live IB market data ────────────────────
         if buy_price is not None:
-            lines.append(f"Share price when we spotted this: ${buy_price:.2f}")
+            lines.append(f"💰 Share price when we spotted this: <b>${buy_price:.2f}</b>")
         elif fundamentals and fundamentals.get("current_price") is not None:
-            lines.append(f"Share price: ${float(fundamentals['current_price']):.2f}")
+            lines.append(f"💰 Current share price: <b>${float(fundamentals['current_price']):.2f}</b>")
         else:
-            lines.append("Share price: market closed — will update when it reopens")
+            lines.append("💰 Share price: market is closed right now — check again when it reopens")
 
-        # Fundamentals block (cap / sector / short / 52w range)
+        # Live IB quote enrichment (bid/ask spread + today's volume vs average)
+        if ib_quote:
+            bid = ib_quote.get("bid")
+            ask = ib_quote.get("ask")
+            vol_today = ib_quote.get("volume")
+            avg_vol = fundamentals.get("avg_volume") if fundamentals else None
+            if bid and ask and float(bid) > 0 and float(ask) > 0:
+                spread = float(ask) - float(bid)
+                mid = (float(bid) + float(ask)) / 2.0
+                spread_pct = spread / mid * 100.0
+                ease = (
+                    "easy to buy/sell right now"
+                    if spread_pct < 0.15 else (
+                        "small gap between buy and sell prices"
+                        if spread_pct < 0.5 else
+                        "wider gap — factor this in if trading"
+                    )
+                )
+                lines.append(
+                    f"  Bid / Ask: ${float(bid):.2f} / ${float(ask):.2f}"
+                    f"  (spread ${spread:.3f} — {ease})"
+                )
+            if vol_today and avg_vol and float(avg_vol) > 0:
+                ratio = float(vol_today) / float(avg_vol)
+                if ratio >= 2.0:
+                    vol_note = f"{ratio:.1f}× the usual amount — very heavy activity, market is reacting"
+                elif ratio >= 1.3:
+                    vol_note = f"{ratio:.1f}× the usual amount — above-average interest today"
+                elif ratio >= 0.7:
+                    vol_note = "typical amount for this stock"
+                else:
+                    vol_note = f"{ratio:.1f}× the usual — quieter than normal today"
+                lines.append(
+                    f"  Trading today: {int(float(vol_today)):,} shares ({vol_note})"
+                )
+
+        # ── About the company ────────────────────────────────────────────
+        company = getattr(signal, "company_name", "") or signal.ticker
         ref_price = buy_price
         if ref_price is None and fundamentals:
             ref_price = fundamentals.get("current_price")
         fund_lines = _format_fundamentals_block(fundamentals, reference_price=ref_price)
         if fund_lines:
             lines.append("")
-            lines.extend(fund_lines)
+            lines.append(f"🏢 <b>About {company}</b>")
+            for fl in fund_lines:
+                lines.append(f"  {fl}")
 
-        # Source filing link — paid only
+        # ── Source filing link — paid only ───────────────────────────────
         url = getattr(signal, "url", "") or ""
         if url:
             safe_url = html.escape(url, quote=True)
@@ -366,7 +492,7 @@ def _format_telegram_message(
     lines.append("")
     now_str = datetime.now(timezone.utc).strftime("%-d %b %Y  %H:%M UTC")
     lines.append(f"Source: {signal.source}  |  {now_str}")
-    lines.append("For information only. This is not advice. Do your own research before trading.")
+    lines.append("For information only. Not advice.")
     return "\n".join(lines)
 
 
@@ -404,6 +530,8 @@ def _format_free_tier_delayed_message(
         _polarity_header(signal),
         signal.event.replace("_", " ").title(),
         "",
+        "🔴 <b>24hr DELAYED FEED</b>",
+        "",
     ]
 
     # Plain-English explanation first, deterministic summary as fallback.
@@ -413,19 +541,27 @@ def _format_free_tier_delayed_message(
         lines.append("")
 
     # ── Price move: 1h-before-news → current price at broadcast ──────────
+    # Telegram HTML has no colour attribute, so use 🟢/🔴 as a colour proxy
+    # so the direction is obvious at a glance.
     if price_at_flag and price_now and float(price_at_flag) > 0:
         pct = (float(price_now) - float(price_at_flag)) / float(price_at_flag) * 100.0
         s = _fmt_signed_pct(pct)
         if s:
-            lines.append(f"% change: {s}")
+            dot = "🟢" if pct > 0 else ("🔴" if pct < 0 else "⚪")
+            lines.append(f"% Change since news broke: {dot} <b>{s}</b>")
+            if price_at_flag:
+                lines.append(f"  Price before news: <b>${float(price_at_flag):.2f}</b>  →  Now: <b>${float(price_now):.2f}</b>")
             lines.append("")
 
-    # ── Fundamentals (same block as paid) ────────────────────────────────
+    # ── About the company ────────────────────────────────────────────────
+    company = getattr(signal, "company_name", "") or signal.ticker
     fund_lines = _format_fundamentals_block(
         fundamentals, reference_price=price_at_flag,
     )
     if fund_lines:
-        lines.extend(fund_lines)
+        lines.append(f"🏢 <b>About {company}</b>")
+        for fl in fund_lines:
+            lines.append(f"  {fl}")
         lines.append("")
 
     # Upsell — highlight that paid subscribers also get API access
@@ -444,7 +580,7 @@ def _format_free_tier_delayed_message(
     except (ValueError, AttributeError):
         ts_str = raw_ts
     lines.append(f"Source: {signal.source}  |  News detected {ts_str}")
-    lines.append("For information only. Not advice.")
+    lines.append("Delayed Feed. For information only. Not advice.")
     return "\n".join(lines)
 
 
@@ -484,6 +620,7 @@ async def send_signal(
     channel: Channel = "sec",
     http: Optional[httpx.AsyncClient] = None,
     fundamentals: Optional[Dict[str, Any]] = None,
+    ib_quote: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Send a real-time signal to the correct product channel + tier.
 
@@ -501,7 +638,7 @@ async def send_signal(
 
     message = _format_telegram_message(
         signal, human_text, buy_price=buy_price, tier=tier,
-        channel=channel, fundamentals=fundamentals,
+        channel=channel, fundamentals=fundamentals, ib_quote=ib_quote,
     )
     payload = {
         "chat_id": chat_id,

@@ -162,7 +162,7 @@ async def broadcast_pending_free_tier(
 
     pending = await db.get_pending_free_tier()
 
-    from price_history import get_current_price
+    from price_history import get_current_price, get_price_hours_before
 
     for row in pending:
         ticker = (row.get("ticker") or "").upper().strip()
@@ -181,9 +181,41 @@ async def broadcast_pending_free_tier(
             # Fetch current price at publish time for the move calculation.
             price_now = await get_current_price(ticker, ib_client=ib_client)
 
+            # If price_at_flag was not captured at signal time (e.g. IB offline
+            # or market was closed), try to recover it from yfinance history so
+            # the delayed post can still show the "since news broke" move.
+            price_at_flag = row.get("price_at_flag")
+            if not price_at_flag:
+                flag_ts = row.get("price_at_flag_at") or row.get("published_at")
+                if flag_ts:
+                    try:
+                        from datetime import datetime, timezone as _tz
+                        flagged_dt = datetime.fromisoformat(
+                            flag_ts.replace("Z", "+00:00")
+                        )
+                        hours_ago = (
+                            datetime.now(_tz.utc) - flagged_dt
+                        ).total_seconds() / 3600.0
+                        # Fetch price ~1h before the announcement
+                        recovered = await get_price_hours_before(
+                            ticker, hours=hours_ago + 1.0, ib_client=ib_client,
+                        )
+                        if recovered and recovered > 0:
+                            price_at_flag = recovered
+                            await db.update_price_at_flag(row["item_id"], recovered)
+                            logger.info(
+                                "[free_tier] Recovered price_at_flag for %s: $%.2f",
+                                ticker, recovered,
+                            )
+                    except Exception as recover_err:
+                        logger.debug(
+                            "[free_tier] price_at_flag recovery failed for %s: %s",
+                            ticker, recover_err,
+                        )
+
             result = await send_free_tier_delayed(
                 signal,
-                price_at_flag=row.get("price_at_flag"),
+                price_at_flag=price_at_flag,
                 price_now=price_now,
                 fundamentals=fund,
                 flagged_at_iso=row.get("price_at_flag_at")

@@ -514,8 +514,9 @@ class TelegramSubscriber(BaseSubscriber):
                     rationale=rationale,
                 )
 
-                # IB buy price (for real-time trading anchor)
+                # IB buy price + live quote (bid/ask/volume) for real-time enrichment
                 buy_price: Optional[float] = None
+                ib_quote: Optional[dict] = None
                 if ctx.ib_client is not None:
                     try:
                         from zoneinfo import ZoneInfo
@@ -523,13 +524,31 @@ class TelegramSubscriber(BaseSubscriber):
                         signal_date = now_et.strftime("%Y-%m-%d")
 
                         if _us_market_open(now_et):
-                            buy_price = await ctx.ib_client.get_price(ticker)
+                            # Try to get a full quote (bid/ask/volume) if the IB
+                            # client supports it; fall back to price-only.
+                            raw_quote: Optional[dict] = None
+                            if hasattr(ctx.ib_client, "get_quote"):
+                                try:
+                                    raw_quote = await ctx.ib_client.get_quote(ticker)
+                                except Exception:
+                                    pass
+                            if raw_quote and raw_quote.get("price"):
+                                ib_quote = raw_quote
+                                buy_price = float(raw_quote["price"])
+                            else:
+                                buy_price = await ctx.ib_client.get_price(ticker)
+
                             if buy_price is not None:
                                 await ctx.db.update_buy_price(
                                     item.item_id, buy_price, signal_date,
                                 )
                                 await ctx.db.update_current_price(ticker, buy_price)
-                                logger.info("[telegram] Buy price: %s = $%.4f", ticker, buy_price)
+                                logger.info("[telegram] Buy price: %s = $%.4f bid=%s ask=%s vol=%s",
+                                    ticker, buy_price,
+                                    ib_quote.get("bid") if ib_quote else None,
+                                    ib_quote.get("ask") if ib_quote else None,
+                                    ib_quote.get("volume") if ib_quote else None,
+                                )
                             else:
                                 await ctx.db.mark_signal_pending(item.item_id, signal_date)
                         else:
@@ -576,9 +595,10 @@ class TelegramSubscriber(BaseSubscriber):
                     except Exception as ht_err:
                         logger.debug("[telegram] human_text persist failed: %s", ht_err)
 
-                    tier = classify_tier(formatted)
                     channel = classify_channel(item.feed_source, event_type)
                     fundamentals = await ctx.db.get_fundamentals(ticker)
+                    market_cap = fundamentals.get("market_cap") if fundamentals else None
+                    tier = classify_tier(formatted, market_cap=market_cap)
 
                     # Free-tier anchor defaults to the pre-announcement price
                     # (captured above via yfinance); fall back to buy_price.
@@ -621,10 +641,17 @@ class TelegramSubscriber(BaseSubscriber):
                         continue
 
                     # ── Paid tiers: send real-time ───────────────────────
+                    # Also store anchor price so the 24h-delayed free-tier post
+                    # always has a "% change since news broke" baseline.
+                    anchor_price = pre_ann_price if pre_ann_price is not None else buy_price
+                    if anchor_price is not None:
+                        await ctx.db.update_price_at_flag(item.item_id, anchor_price)
+
                     result = await send_signal(
                         formatted, human_text=human_text,
                         buy_price=buy_price, tier=tier, channel=channel,
                         http=ctx.http, fundamentals=fundamentals,
+                        ib_quote=ib_quote,
                     )
                     sent = result.get("sent", False)
                     try:
