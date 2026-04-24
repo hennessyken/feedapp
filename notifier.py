@@ -102,35 +102,43 @@ def _format_fundamentals_block(
 
     lines: List[str] = []
 
-    # Line 1: cap + sector
+    # Line 1: company size + what they do
     cap_str = _fmt_market_cap(fund.get("market_cap"))
     cap_bucket = (fund.get("cap_bucket") or "").strip()
     cap_parts: List[str] = []
     if cap_str:
-        label = f"{cap_str} ({cap_bucket}-cap)" if cap_bucket and cap_bucket != "unknown" else cap_str
-        cap_parts.append(f"Mkt cap: {label}")
+        # "Mkt cap" → "Company size" — more readable for non-traders
+        size_word = {
+            "mega": " (one of the largest)",
+            "large": " (large company)",
+            "mid": " (mid-size company)",
+            "small": " (small company)",
+            "micro": " (very small company)",
+        }.get(cap_bucket, "")
+        cap_parts.append(f"Company size: {cap_str}{size_word}")
     sector = (fund.get("sector") or "").strip()
     industry = (fund.get("industry") or "").strip()
     if sector and industry and industry != sector:
-        cap_parts.append(f"Sector: {sector} / {industry}")
+        cap_parts.append(f"Industry: {sector} / {industry}")
     elif sector:
-        cap_parts.append(f"Sector: {sector}")
+        cap_parts.append(f"Industry: {sector}")
     if cap_parts:
         lines.append("  |  ".join(cap_parts))
 
-    # Line 2: short interest + 52w range
+    # Line 2: how many investors are betting against it + past-year price range
     short_str = _fmt_pct(fund.get("short_pct_of_float"))
     wk_hi = fund.get("week52_high")
     wk_lo = fund.get("week52_low")
     range_parts: List[str] = []
     if short_str:
-        range_parts.append(f"Short: {short_str} of float")
+        # "Short: X% of float" → plain-language equivalent
+        range_parts.append(f"Investors betting against it: {short_str}")
     if wk_hi and wk_lo:
         try:
-            range_str = f"52w: ${float(wk_lo):.2f}–${float(wk_hi):.2f}"
+            range_str = f"Past year: ${float(wk_lo):.2f}–${float(wk_hi):.2f}"
             pos = _range_position(reference_price, wk_lo, wk_hi)
             if pos is not None:
-                range_str += f" ({pos}% of range)"
+                range_str += f" (now around {pos}% up that range)"
             range_parts.append(range_str)
         except (TypeError, ValueError):
             pass
@@ -258,11 +266,11 @@ def classify_tier(signal: FormattedSignal, *, market_cap: Optional[float] = None
 
 # ── Message formatting ────────────────────────────────────────────────────────
 
-# Polarity badges — the very first thing a reader sees.
+# Plain-language badges so non-trader readers understand instantly.
 _POLARITY_BADGE = {
-    "positive": "🟢 BULLISH",
-    "negative": "🔴 BEARISH",
-    "neutral":  "⚪ NEUTRAL",
+    "positive": "🟢 GOOD NEWS",
+    "negative": "🔴 BAD NEWS",
+    "neutral":  "⚪ MIXED",
 }
 # Direction arrow used inline with the ticker
 _POLARITY_ARROW = {
@@ -280,12 +288,19 @@ def _polarity_header(signal: FormattedSignal) -> str:
     return f"{badge}  {arrow}  {signal.ticker} — {company}"
 
 
+_API_BOT_HANDLE = {
+    "sec": "@CatalystWireSECApiBot",
+    "fda": "@CatalystWireFDAApiBot",
+}
+
+
 def _format_telegram_message(
     signal: FormattedSignal,
     human_text: Optional[str] = None,
     buy_price: Optional[float] = None,
     *,
     tier: Tier = "free",
+    channel: str = "sec",
     fundamentals: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Format a real-time signal post (paid tiers only in the new tiering).
@@ -306,19 +321,28 @@ def _format_telegram_message(
 
     # ── Paid tiers: full detail ──────────────────────────────────────────
     if tier in ("pro", "pro_smallcap"):
+        # Plain-language labels:
+        #   "How big" replaces "Impact" (potential size of the move)
+        #   "How sure" replaces "Reliability" (confidence this is real)
+        #   "How fresh" replaces "Timing" (how recent the news is)
+        freshness_plain = {
+            "early": "fresh (just out)",
+            "mid":   "recent (within a day)",
+            "late":  "older (more than a day)",
+        }.get(signal.latency_class, signal.latency_class)
         lines.append(
-            f"Impact: {signal.expected_impact.upper()}  |  "
-            f"Confidence: {signal.confidence:.0%}  |  "
-            f"Timing: {signal.latency_class}"
+            f"How big: {signal.expected_impact.upper()}  |  "
+            f"How sure: {signal.confidence:.0%}  |  "
+            f"How fresh: {freshness_plain}"
         )
 
         # Current price / buy anchor
         if buy_price is not None:
-            lines.append(f"Price at alert: ${buy_price:.2f}")
+            lines.append(f"Share price when we spotted this: ${buy_price:.2f}")
         elif fundamentals and fundamentals.get("current_price") is not None:
-            lines.append(f"Price: ${float(fundamentals['current_price']):.2f}")
+            lines.append(f"Share price: ${float(fundamentals['current_price']):.2f}")
         else:
-            lines.append("Price: market closed — will update at next open")
+            lines.append("Share price: market closed — will update when it reopens")
 
         # Fundamentals block (cap / sector / short / 52w range)
         ref_price = buy_price
@@ -334,15 +358,15 @@ def _format_telegram_message(
         if url:
             safe_url = html.escape(url, quote=True)
             lines.append("")
-            lines.append(f'<a href="{safe_url}">→ View source filing</a>')
+            lines.append(f'<a href="{safe_url}">→ Read the original filing</a>')
     else:
         # Legacy free-tier path (kept for back-compat only)
-        lines.append("🔓 Real-time alerts + source filings on pro")
+        lines.append("🔓 Get these the moment they happen on pro")
 
     lines.append("")
     now_str = datetime.now(timezone.utc).strftime("%-d %b %Y  %H:%M UTC")
     lines.append(f"Source: {signal.source}  |  {now_str}")
-    lines.append("For informational purposes only. Not financial advice. Do your own research.")
+    lines.append("For information only. This is not advice. Do your own research before trading.")
     return "\n".join(lines)
 
 
@@ -360,7 +384,7 @@ def _format_free_tier_delayed_message(
     signal: FormattedSignal,
     *,
     price_at_flag: Optional[float],
-    price_24h: Optional[float],
+    price_now: Optional[float],
     fundamentals: Optional[Dict[str, Any]] = None,
     flagged_at_iso: Optional[str] = None,
     channel: str = "sec",
@@ -388,15 +412,13 @@ def _format_free_tier_delayed_message(
         lines.append(body)
         lines.append("")
 
-    # ── Price move from pre-announcement baseline to 24h after ───────────
-    if price_at_flag is not None:
-        lines.append(f"Price 1h before announcement: ${float(price_at_flag):.2f}")
-        if price_24h is not None and price_at_flag:
-            pct_24h = (float(price_24h) - float(price_at_flag)) / float(price_at_flag) * 100.0
-            s = _fmt_signed_pct(pct_24h)
-            if s:
-                lines.append(f"Price 24h after: ${float(price_24h):.2f} ({s})")
-        lines.append("")
+    # ── Price move: 1h-before-news → current price at broadcast ──────────
+    if price_at_flag and price_now and float(price_at_flag) > 0:
+        pct = (float(price_now) - float(price_at_flag)) / float(price_at_flag) * 100.0
+        s = _fmt_signed_pct(pct)
+        if s:
+            lines.append(f"% change: {s}")
+            lines.append("")
 
     # ── Fundamentals (same block as paid) ────────────────────────────────
     fund_lines = _format_fundamentals_block(
@@ -406,22 +428,23 @@ def _format_free_tier_delayed_message(
         lines.extend(fund_lines)
         lines.append("")
 
-    # Upsell
+    # Upsell — highlight that paid subscribers also get API access
     upsell_url = _UPSELL_LINKS.get(channel, _UPSELL_LINKS["sec"])
     upsell_label = _UPSELL_LABELS.get(channel, _UPSELL_LABELS["sec"])
-    lines.append(f'🔓 Get real-time alerts: <a href="{upsell_url}">{upsell_label}</a>')
+    lines.append(f'🔓 Get the news the moment it happens: <a href="{upsell_url}">{upsell_label}</a>')
+    lines.append("🔑 Paid subscribers also get API access for their own tools and models.")
     lines.append("")
 
     # Footer — show the original trigger time (yesterday) so subscribers
-    # understand when the signal was detected, not when this post fired.
+    # understand when the news was detected, not when this post fired.
     raw_ts = flagged_at_iso or signal.timestamp or ""
     try:
         triggered_dt = datetime.fromisoformat(raw_ts.replace("Z", "+00:00"))
         ts_str = triggered_dt.strftime("%-d %b %Y  %H:%M UTC")
     except (ValueError, AttributeError):
         ts_str = raw_ts
-    lines.append(f"Source: {signal.source}  |  Triggered {ts_str}")
-    lines.append("Past performance not indicative. Not financial advice.")
+    lines.append(f"Source: {signal.source}  |  News detected {ts_str}")
+    lines.append("For information only. Not advice.")
     return "\n".join(lines)
 
 
@@ -478,7 +501,7 @@ async def send_signal(
 
     message = _format_telegram_message(
         signal, human_text, buy_price=buy_price, tier=tier,
-        fundamentals=fundamentals,
+        channel=channel, fundamentals=fundamentals,
     )
     payload = {
         "chat_id": chat_id,
@@ -508,7 +531,7 @@ async def send_free_tier_delayed(
     signal: FormattedSignal,
     *,
     price_at_flag: Optional[float],
-    price_24h: Optional[float],
+    price_now: Optional[float],
     fundamentals: Optional[Dict[str, Any]] = None,
     flagged_at_iso: Optional[str] = None,
     channel: Channel = "sec",
@@ -533,7 +556,7 @@ async def send_free_tier_delayed(
     message = _format_free_tier_delayed_message(
         signal,
         price_at_flag=price_at_flag,
-        price_24h=price_24h,
+        price_now=price_now,
         fundamentals=fundamentals,
         flagged_at_iso=flagged_at_iso,
         channel=channel,

@@ -116,15 +116,32 @@ class TelegramSubscriber(BaseSubscriber):
                     meta.get("company_name") or meta.get("entity_name") or ""
                 ).strip()
 
-                # ── Ticker resolution: cache → LLM ──────────────────────
+                # ── Ticker resolution: metadata → cache → LLM ───────────
+                # A valid ticker is 1-5 uppercase letters (optionally followed
+                # by .X for share class, e.g. BRK.B). Reject LLM/cache
+                # placeholders like UNKNOWN_COMPANY_NAME so FDA items without
+                # a real ticker are not published.
+                import re as _re
+                _TICKER_RE = _re.compile(r"[A-Z]{1,5}(?:\.[A-Z])?")
+
+                def _valid_ticker(t: str) -> bool:
+                    if not t:
+                        return False
+                    u = t.upper().strip()
+                    if u.startswith("UNKNOWN"):
+                        return False
+                    return bool(_TICKER_RE.fullmatch(u))
+
                 ticker_source = "none"
-                if ticker:
+                if ticker and _valid_ticker(ticker):
                     ticker_source = "metadata"
+                else:
+                    ticker = ""
 
                 if not ticker and company_name:
                     cached = await ctx.db.lookup_ticker_by_company(company_name)
-                    if cached:
-                        ticker = cached
+                    if cached and _valid_ticker(cached):
+                        ticker = cached.upper().strip()
                         ticker_source = "cache"
                         logger.info(
                             "[telegram] Ticker from cache: %s → %s",
@@ -140,9 +157,7 @@ class TelegramSubscriber(BaseSubscriber):
                         )
                         if resolved:
                             raw_ticker = resolved["ticker"] or ""
-                            # Reject LLM placeholders like UNKNOWN_COMPANY_NAME
-                            import re as _re
-                            if raw_ticker and not raw_ticker.upper().startswith("UNKNOWN") and _re.fullmatch(r"[A-Z]{1,5}(?:\.[A-Z])?", raw_ticker.upper()):
+                            if _valid_ticker(raw_ticker):
                                 ticker = raw_ticker.upper()
                                 ticker_source = "llm"
                                 if not company_name:

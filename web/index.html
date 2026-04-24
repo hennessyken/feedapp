@@ -13,6 +13,25 @@
 </header>
 
 <main>
+  <section class="card" id="tests-card">
+    <div class="tests-head">
+      <h2>Platform tests</h2>
+      <div class="tests-actions">
+        <label class="muted tests-toggle">
+          <input type="checkbox" id="tests-quick" checked />
+          Quick mode (skip network)
+        </label>
+        <button id="run-tests-btn" class="btn-primary">🧪 Run all tests</button>
+      </div>
+    </div>
+    <p class="muted">Runs pytest suite, health check, module-import sanity, env-var check,
+      and a latest-signal render against the live DB.</p>
+    <div id="tests-results" hidden>
+      <div id="tests-summary"></div>
+      <ol id="tests-stages"></ol>
+    </div>
+  </section>
+
   <section class="card">
     <h2>Sources</h2>
     <p class="muted">Green = data in last 24 h · Amber = stale · Red = no data.

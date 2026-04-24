@@ -1168,13 +1168,22 @@ class FeedDatabase:
         return [dict(r) for r in rows]
 
     async def get_pending_free_tier(self) -> List[Dict[str, Any]]:
-        """Find signals ready for free-tier delayed release (>=24h old, not yet sent)."""
+        """Find signals ready for free-tier delayed release (>=24h old, not yet sent).
+
+        Requires a valid (non-UNKNOWN_) ticker AND a captured pre-announcement
+        anchor price so the delayed post always has both a tradeable symbol
+        and a real price move to display.
+        """
         assert self._db
         cur = await self._db.execute(
             """SELECT * FROM feed_items
                WHERE ticker IS NOT NULL
+                 AND ticker != ''
+                 AND ticker NOT LIKE 'UNKNOWN_%'
                  AND action IN ('trade', 'watch')
                  AND free_tier_sent = 0
+                 AND price_at_flag IS NOT NULL
+                 AND price_at_flag > 0
                  AND price_at_flag_at IS NOT NULL
                  AND (julianday('now') - julianday(price_at_flag_at)) * 24.0 >= 24.0
                ORDER BY price_at_flag_at"""

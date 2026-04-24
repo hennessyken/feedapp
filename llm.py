@@ -1003,7 +1003,12 @@ class OpenAiRegulatoryLlmGateway:
             model=self._models.ranker,
             system=_build_ranker_prompt(doc_source=req.doc_source, base_form_type=base_form_type),
             user=user,
-            max_tokens=350,
+            # Bumped 350 → 800: pharma ranker needs ~600 tokens for long
+            # evidence_spans quotes; at 350 the JSON was being truncated
+            # mid-string and the fallback parser picked up nested risk_flags
+            # objects instead of failing clearly, causing false PARSE_ERRORs
+            # for major tickers (GSK, BMY, DAWN).
+            max_tokens=800,
             api_key=self._api_key,
             decision_id=decision_id,
             trace_id=trace_id,
@@ -1094,20 +1099,23 @@ class OpenAiRegulatoryLlmGateway:
             try:
                 obj = json.loads(cleaned)
             except Exception:
+                # Fallback: only try the OUTER JSON object (starting at the
+                # first '{'). Previously we walked every '{' and picked the
+                # first parseable nested object — on truncated responses this
+                # returned risk_flags={...} and produced bogus "missing keys"
+                # errors for tickers whose top-level JSON had a cut-off string.
                 decoder = json.JSONDecoder()
                 obj = None
-                for i, ch in enumerate(cleaned):
-                    if ch != "{":
-                        continue
+                first_brace = cleaned.find("{")
+                if first_brace != -1:
                     try:
-                        candidate, _end = decoder.raw_decode(cleaned[i:])
+                        candidate, _end = decoder.raw_decode(cleaned[first_brace:])
                         if isinstance(candidate, dict):
                             obj = candidate
-                            break
                     except Exception:
-                        continue
+                        pass
                 if obj is None:
-                    raise ValueError("Ranker returned non-JSON output")
+                    raise ValueError("Ranker returned non-JSON output (likely truncated)")
 
             if not isinstance(obj, dict):
                 raise TypeError("Ranker JSON is not an object")

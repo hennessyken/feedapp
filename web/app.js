@@ -127,6 +127,59 @@ async function loadMessages(source, tile) {
   }
 }
 
+// ── Tests ─────────────────────────────────────────────────────────────
+async function runTests() {
+  const btn = $("#run-tests-btn");
+  const resultsDiv = $("#tests-results");
+  const summary = $("#tests-summary");
+  const stagesOl = $("#tests-stages");
+  const quick = $("#tests-quick").checked;
+
+  btn.disabled = true;
+  btn.textContent = "⏳ Running…";
+  resultsDiv.hidden = false;
+  summary.innerHTML = "<span class='muted'>Running tests…</span>";
+  stagesOl.innerHTML = "";
+
+  try {
+    const r = await fetch(`/gui/tests/run?quick=${quick}`, { method: "POST" });
+    if (!r.ok) {
+      const txt = await r.text();
+      throw new Error(`${r.status}: ${txt.slice(0, 200)}`);
+    }
+    const data = await r.json();
+
+    const icon = data.ok ? "✅" : "❌";
+    const cls = data.ok ? "tests-ok" : "tests-fail";
+    summary.innerHTML = `<div class="tests-summary ${cls}">
+      <b>${icon} ${data.ok ? "ALL PASSED" : "FAILURES"}</b>
+      · ${data.stages.length} stages
+      · ${data.elapsed_s}s total</div>`;
+
+    for (const stage of data.stages) {
+      const li = el("li", `stage ${stage.ok ? "stage-ok" : "stage-fail"}`);
+      let extra = "";
+      if (!stage.ok) {
+        if (stage.failures) extra += `<div class="stage-detail">${stage.failures.join("<br>")}</div>`;
+        if (stage.missing) extra += `<div class="stage-detail">Missing: ${stage.missing.join(", ")}</div>`;
+        if (stage.stdout_tail) extra += `<pre class="stage-detail">${stage.stdout_tail}</pre>`;
+      }
+      li.innerHTML = `
+        <div class="stage-head">
+          <span class="stage-icon">${stage.ok ? "✓" : "✗"}</span>
+          <b>${stage.name}</b>
+          <span class="muted"> · ${stage.summary} · ${stage.elapsed_s}s</span>
+        </div>${extra}`;
+      stagesOl.appendChild(li);
+    }
+  } catch (e) {
+    summary.innerHTML = `<div class="tests-summary tests-fail"><b>❌ Runner crashed:</b> ${e.message}</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "🧪 Run all tests";
+  }
+}
+
 // ── Refresh ───────────────────────────────────────────────────────────
 function updateClock() {
   $("#clock").textContent = new Date().toLocaleTimeString();
@@ -140,3 +193,12 @@ updateClock();
 setInterval(updateClock, 1000);
 refresh();
 setInterval(refresh, 30_000);  // 30-second auto-refresh
+
+// Wire up the test button
+document.addEventListener("DOMContentLoaded", () => {
+  const btn = document.getElementById("run-tests-btn");
+  if (btn) btn.addEventListener("click", runTests);
+});
+// Fallback in case DOMContentLoaded already fired
+const _btn = document.getElementById("run-tests-btn");
+if (_btn) _btn.addEventListener("click", runTests);

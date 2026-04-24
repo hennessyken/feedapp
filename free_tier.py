@@ -61,9 +61,12 @@ def _build_summary_from_row(row: Dict[str, Any]) -> str:
     event_readable = event_type.replace("_", " ").title()
     impact = int(row.get("impact_score") or 0)
     conf = int(row.get("confidence") or 0)
+    pol_text = {"positive": "looks good", "negative": "looks bad"}.get(polarity, "mixed")
     return (
-        f"{company}: {event_readable}{pol_str}. "
-        f"Impact {impact}/100, confidence {conf}/100."
+        f"{company} — {event_readable}. "
+        f"This news {pol_text} for the company. "
+        f"Size of likely price move: {impact}/100. "
+        f"How sure we are this is real: {conf}/100."
     )
 
 
@@ -115,38 +118,14 @@ async def capture_price_milestones(
     db: FeedDatabase,
     ib_client: Any,
 ) -> Dict[str, int]:
-    """Sweep for signals that have hit the 24h mark without a price recorded.
+    """No-op.
 
-    We only capture the 24h-after price now. The baseline is set at signal
-    time to the price 1 hour BEFORE the announcement, so the displayed
-    move spans roughly 25 hours: 1h pre → 24h post.
-
-    Uses IB (5-min bars) first, falls back to yfinance.
-
-    Returns {"captured_24h": n}.
+    Previously this captured a 24h-after price snapshot, but the free-tier
+    post now computes the move using the CURRENT price at broadcast time
+    (fetched inside broadcast_pending_free_tier) — no pre-capture needed.
+    Kept as a shim so existing callers in main.py don't break.
     """
-    stats = {"captured_24h": 0}
-
-    from price_history import get_current_price
-
-    day = await db.get_pending_price_milestones(milestone="24h", min_age_hours=24.0)
-    for row in day:
-        ticker = (row.get("ticker") or "").upper().strip()
-        if not ticker:
-            continue
-        price = await get_current_price(ticker, ib_client=ib_client)
-        if price is None:
-            continue
-        await db.update_price_milestone(
-            row["item_id"], milestone="24h", price=float(price),
-        )
-        stats["captured_24h"] += 1
-        logger.info(
-            "[free_tier] price_24h captured: %s @ $%.4f (item=%s)",
-            ticker, price, row["item_id"],
-        )
-
-    return stats
+    return {"captured_24h": 0}
 
 
 # ── Delayed free-tier broadcast ───────────────────────────────────────────────
@@ -154,14 +133,19 @@ async def capture_price_milestones(
 async def broadcast_pending_free_tier(
     db: FeedDatabase,
     *,
+    ib_client: Any = None,
     http: Optional[httpx.AsyncClient] = None,
 ) -> Dict[str, int]:
     """Emit 24h-delayed free-tier posts for all signals past the 24h mark.
 
+    Fetches the CURRENT share price at broadcast time so the displayed move
+    is "1 hour before announcement → price right now" — a live comparison
+    that keeps working as time passes, rather than a stale 24h-after snapshot.
+
     A signal is eligible if:
       - free_tier_sent = 0
       - price_at_flag_at is at least 24h in the past
-      - action is 'trade' or 'watch' (ignored signals don't get posted)
+      - action is 'trade' or 'watch'
 
     Returns {"broadcast": n, "skipped": n}.
     """
@@ -178,6 +162,8 @@ async def broadcast_pending_free_tier(
 
     pending = await db.get_pending_free_tier()
 
+    from price_history import get_current_price
+
     for row in pending:
         ticker = (row.get("ticker") or "").upper().strip()
         if not ticker:
@@ -192,10 +178,13 @@ async def broadcast_pending_free_tier(
                 row.get("event_type") or "",
             )
 
+            # Fetch current price at publish time for the move calculation.
+            price_now = await get_current_price(ticker, ib_client=ib_client)
+
             result = await send_free_tier_delayed(
                 signal,
                 price_at_flag=row.get("price_at_flag"),
-                price_24h=row.get("price_24h"),
+                price_now=price_now,
                 fundamentals=fund,
                 flagged_at_iso=row.get("price_at_flag_at")
                                or row.get("published_at"),
@@ -234,10 +223,10 @@ async def run_free_tier_cycle(
     *,
     http: Optional[httpx.AsyncClient] = None,
 ) -> Dict[str, int]:
-    """Run one sweep: capture milestones then broadcast anything past 24h.
-
-    Call this from main's continuous loop alongside other periodic tasks.
-    """
+    """Broadcast anything past 24h. Price move is computed at broadcast time
+    using the current live price, so no pre-capture is needed."""
     cap_stats = await capture_price_milestones(db, ib_client)
-    send_stats = await broadcast_pending_free_tier(db, http=http)
+    send_stats = await broadcast_pending_free_tier(
+        db, ib_client=ib_client, http=http,
+    )
     return {**cap_stats, **send_stats}

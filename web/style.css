@@ -63,3 +63,40 @@ main { padding: 24px; max-width: 1100px; margin: 0 auto; }
 .tier-pill.free { background: #1f6feb33; color: var(--accent); }
 .tier-pill.pro { background: #d2992233; color: var(--amber); }
 .tier-pill.pro_smallcap { background: #f8514933; color: var(--red); }
+
+/* ── Tests panel ──────────────────────────────────────────────────── */
+.tests-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+}
+.tests-actions { display: flex; align-items: center; gap: 16px; }
+.tests-toggle { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.btn-primary {
+  background: var(--accent); color: #fff; border: 0;
+  padding: 8px 14px; border-radius: 4px; font: inherit; cursor: pointer;
+  font-weight: 600;
+}
+.btn-primary:hover { filter: brightness(1.1); }
+.btn-primary:disabled { opacity: 0.6; cursor: wait; }
+.tests-summary {
+  margin-top: 8px; padding: 10px; border-radius: 4px;
+  background: #0e1116; border-left: 3px solid var(--muted);
+}
+.tests-summary.tests-ok { border-left-color: var(--green); }
+.tests-summary.tests-fail { border-left-color: var(--red); }
+#tests-stages {
+  list-style: none; margin: 12px 0 0; padding: 0;
+}
+#tests-stages .stage {
+  padding: 8px 0; border-bottom: 1px solid var(--border);
+}
+#tests-stages .stage:last-child { border: 0; }
+.stage-head { display: flex; align-items: baseline; gap: 6px; }
+.stage-icon { font-weight: 700; width: 14px; }
+.stage-ok .stage-icon { color: var(--green); }
+.stage-fail .stage-icon { color: var(--red); }
+.stage-detail {
+  margin-top: 6px; font-size: 12px; color: var(--muted);
+  background: #0a0d11; padding: 8px; border-radius: 3px;
+  white-space: pre-wrap; word-break: break-word;
+  max-height: 200px; overflow-y: auto;
+}

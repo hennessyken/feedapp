@@ -479,6 +479,53 @@ async def gui_source_messages(source: str, limit: int = Query(20, ge=1, le=100))
     }
 
 
+@app.post("/gui/tests/run")
+async def gui_run_tests(quick: bool = Query(True, description="Skip network calls")) -> Dict[str, Any]:
+    """Run the unified test suite and return structured results for the GUI button.
+
+    Uses --quick by default so the dashboard stays responsive; flip to
+    ?quick=false to also verify Telegram tokens + channel membership + SEC API.
+    """
+    import asyncio as _asyncio
+    script = Path(__file__).parent / "tools" / "run_all_tests.py"
+    if not script.exists():
+        raise HTTPException(500, detail="tools/run_all_tests.py not found")
+
+    py = Path(__file__).parent / ".venv" / "bin" / "python"
+    if not py.exists():
+        import sys as _sys
+        py = Path(_sys.executable)
+
+    cmd = [str(py), str(script), "--json"]
+    if quick:
+        cmd.append("--quick")
+
+    proc = await _asyncio.create_subprocess_exec(
+        *cmd,
+        cwd=str(Path(__file__).parent),
+        stdout=_asyncio.subprocess.PIPE,
+        stderr=_asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = await _asyncio.wait_for(proc.communicate(), timeout=180)
+    except _asyncio.TimeoutError:
+        proc.kill()
+        raise HTTPException(504, detail="test run timed out after 180s")
+
+    try:
+        payload = json.loads(stdout.decode("utf-8", errors="replace"))
+    except json.JSONDecodeError:
+        raise HTTPException(
+            500,
+            detail=f"runner did not emit JSON: {stdout.decode(errors='replace')[-500:]}",
+        )
+
+    payload["exit_code"] = proc.returncode
+    if stderr:
+        payload["stderr_tail"] = stderr.decode("utf-8", errors="replace")[-1000:]
+    return payload
+
+
 @app.get("/gui/channels")
 async def gui_channels():
     """List configured Telegram channels + live subscriber counts."""

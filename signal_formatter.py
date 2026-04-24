@@ -118,13 +118,18 @@ def _classify_latency(freshness_mult: Optional[float]) -> LatencyClass:
 
 
 def _build_summary(sig: RankedSignal, event_type: str, polarity: Polarity) -> str:
-    """Deterministic one-line summary. No LLM."""
+    """Deterministic one-line summary. No LLM — used as a fallback in plain language."""
     company = sig.company_name or sig.ticker
-    pol_label = {"positive": "positive", "negative": "negative", "neutral": ""}
-    pol_str = f" ({pol_label[polarity]})" if pol_label[polarity] else ""
+    pol_label = {"positive": "looks good", "negative": "looks bad", "neutral": "mixed"}
+    pol_str = pol_label.get(polarity, "")
 
     event_readable = event_type.replace("_", " ").title()
-    return f"{company}: {event_readable}{pol_str}. Impact {sig.impact_score}/100, confidence {sig.confidence}/100."
+    return (
+        f"{company} — {event_readable}. "
+        f"This news {pol_str} for the company. "
+        f"Size of likely price move: {sig.impact_score}/100. "
+        f"How sure we are this is real: {sig.confidence}/100."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -188,23 +193,33 @@ def format_signal(sig: RankedSignal) -> FormattedSignal:
 # Optional human-readable text (controlled LLM, max 1 call)
 # ---------------------------------------------------------------------------
 
-_SIGNAL_TEXT_PROMPT = """You are a regulatory signal reporter. Given the structured signal below,
-write exactly 2 sentences: (1) what happened, (2) the expected market impact.
+_SIGNAL_TEXT_PROMPT = """You are explaining company news to everyday readers — people who do
+not know trading or finance jargon. Given the news summary below, write exactly
+4 short sentences in plain, everyday English:
+
+  (1) What happened, in the simplest words you can use.
+  (2) Why this matters for the company — its products, customers, or day-to-day business.
+  (3) How the share price has usually reacted to this kind of news in the past.
+  (4) What to keep an eye on next (an upcoming decision, report, launch, etc.).
 
 Rules:
-- No speculation, no advice, no opinions
-- No hedging language ("might", "could")
-- State facts only
-- Max 40 words total
+- Write like you're telling a friend. No trading jargon.
+- Do NOT use: "bullish", "bearish", "catalyst", "alpha", "EPS", "EBITDA",
+  "upside", "downside", "dilution", "overhang". Use everyday words instead.
+- When a technical term is unavoidable, explain it in brackets
+  (e.g. "an 8-K — a legal filing used for major company news").
+- No guessing, no hedging ("might", "could"), no opinions, no price targets.
+- State facts only.
+- Keep it under 90 words across all 4 sentences.
 
-Signal:
+News summary:
 Ticker: {ticker}
 Event: {event}
-Polarity: {polarity}
-Impact: {expected_impact}
-Confidence: {confidence:.0%}
-Timing: {latency_class}
-Title: {title}
+Direction (good/bad news): {polarity}
+How big the potential move is: {expected_impact}
+How sure we are this is real: {confidence:.0%}
+How fresh the news is: {latency_class}
+Headline: {title}
 """
 
 
@@ -256,17 +271,17 @@ async def format_signal_text(
             raw = await call_openai_responses_api(
                 client,
                 model=model,
-                system="You are a concise regulatory signal reporter. No speculation. Facts only.",
+                system="You are a plain-English regulatory signal reporter writing for non-expert investors. Explain what happened and why it matters in simple terms. No speculation. Facts only.",
                 user=prompt,
-                max_tokens=80,
-                timeout=10,
+                max_tokens=180,
+                timeout=15,
                 api_key=api_key,
             )
 
             text = str(raw).strip() if not isinstance(raw, tuple) else str(raw[0]).strip()
 
-            # Validate: must be non-empty, reasonable length
-            if not text or len(text) > 300:
+            # Validate: must be non-empty, reasonable length (≈90 words ≈ 700 chars)
+            if not text or len(text) > 800:
                 logger.warning("LLM signal text invalid (len=%d) — using fallback", len(text) if text else 0)
                 return fallback
 

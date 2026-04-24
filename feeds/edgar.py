@@ -287,18 +287,20 @@ class EdgarFeedAdapter(BaseFeedAdapter):
     async def _search_page(
         self, start_date: str, end_date: str, page: int
     ) -> List[Dict[str, Any]]:
-        # EFTS requires repeated 'forms' params, not comma-separated
+        # EFTS expects forms as a single comma-separated value.
+        # Repeated forms= params silently drop results (SEC API takes only
+        # the first one, not the union) — verified 2026-04-22.
+        forms_csv = ",".join(
+            f.strip() for f in self._forms.split(",") if f.strip()
+        )
         params: List[tuple] = [
             ("dateRange", "custom"),
             ("startdt", start_date),
             ("enddt", end_date),
             ("from", str(page * self._page_size)),
             ("size", str(self._page_size)),
+            ("forms", forms_csv),
         ]
-        for form in self._forms.split(","):
-            form = form.strip()
-            if form:
-                params.append(("forms", form))
         if self._query:
             params.append(("q", self._query))
         headers = {"User-Agent": self._user_agent}
