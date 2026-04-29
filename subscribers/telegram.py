@@ -47,7 +47,7 @@ class TelegramSubscriber(BaseSubscriber):
     ) -> Dict[str, Any]:
         from signal_formatter import format_signal, format_signal_text
         from signal_formatter import _classify_polarity, _classify_impact, _classify_latency
-        from notifier import send_signal, classify_tier, classify_channel
+        from notifier import send_signal, classify_channel
 
         stats = {"analyzed": 0, "sent": 0, "skipped": 0, "ignored": 0, "errors": 0}
         scorer = DeterministicEventScorer()
@@ -607,51 +607,17 @@ class TelegramSubscriber(BaseSubscriber):
                         except Exception as _fe:
                             logger.debug("[telegram] ensure_fundamentals failed for %s: %s", ticker, _fe)
                     market_cap = fundamentals.get("market_cap") if fundamentals else None
-                    tier = classify_tier(formatted, market_cap=market_cap)
 
-                    # Free-tier anchor defaults to the pre-announcement price
-                    # (captured above via yfinance); fall back to buy_price.
-                    anchor_price = pre_ann_price if pre_ann_price is not None else buy_price
+                    # All qualifying signals go to paid immediately.
+                    # Small-cap (<$2B) → pro_smallcap channel; everything else → pro.
+                    # The free tier always receives the same signals 24h later via
+                    # the delayed broadcast sweep — no signals are free-only.
+                    if market_cap is not None and market_cap < 2_000_000_000:
+                        tier = "pro_smallcap"
+                    else:
+                        tier = "pro"
 
-                    # ── Free tier: defer ─────────────────────────────────
-                    if tier == "free":
-                        stats["sent"] += 1
-                        logger.info(
-                            "[telegram] QUEUED for free-tier +24h: %s %s channel=%s anchor=$%s",
-                            ticker, event_type, channel,
-                            f"{anchor_price:.2f}" if anchor_price else "N/A",
-                        )
-                        if anchor_price is not None:
-                            await ctx.db.update_price_at_flag(item.item_id, anchor_price)
-                        await ctx.db.write_signal_log(
-                            item_id=item.item_id,
-                            feed_source=item.feed_source,
-                            ticker=ticker, company_name=company_name,
-                            form_type=str(meta.get("form_type") or ""),
-                            event_type=event_type, title=item.title,
-                            url=item.url or "", published_at=item.published_at or "",
-                            ticker_source=ticker_source,
-                            keyword_score=screen.score,
-                            keyword_category=screen.event_category,
-                            matched_keywords=list(screen.matched_keywords),
-                            vetoed=screen.vetoed,
-                            sentry1_company=sentry1_company_prob,
-                            sentry1_price=sentry1_price_prob,
-                            sentry1_passed=sentry1_passed,
-                            impact_score=impact_out, confidence=final_confidence,
-                            action=final_action, freshness_mult=round(freshness_mult, 4),
-                            disposition="queued_free",
-                            tier="free",
-                            channel=channel,
-                            price_at_flag=anchor_price,
-                            market_cap=fundamentals.get("market_cap") if fundamentals else None,
-                            short_pct=fundamentals.get("short_pct_of_float") if fundamentals else None,
-                        )
-                        continue
-
-                    # ── Paid tiers: send real-time ───────────────────────
-                    # Also store anchor price so the 24h-delayed free-tier post
-                    # always has a "% change since news broke" baseline.
+                    # Store anchor price for the 24h-delayed free-tier post.
                     anchor_price = pre_ann_price if pre_ann_price is not None else buy_price
                     if anchor_price is not None:
                         await ctx.db.update_price_at_flag(item.item_id, anchor_price)

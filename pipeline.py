@@ -241,6 +241,55 @@ class FeedPipeline:
         )
         return stats
 
+    async def _capture_10m_prices(self) -> Dict[str, int]:
+        """Capture the 10-minute-after-reaction price for analysis.
+
+        Only runs during market hours (9:30–16:00 ET).  For signals published
+        after hours the capture is deferred to the first market-hours poll that
+        is ≥10 minutes after the signal's price_at_flag_at timestamp — in
+        practice this means the first few minutes of the next trading session.
+
+        The price is stored in price_10m / price_10m_at for later edge analysis
+        and is never displayed to subscribers.
+        """
+        stats = {"pending": 0, "captured": 0, "failed": 0}
+        if self._ib_client is None:
+            return stats
+
+        from zoneinfo import ZoneInfo
+        now_et = datetime.now(ZoneInfo("America/New_York"))
+        if not _us_market_open(now_et):
+            return stats
+
+        pending = await self._db.get_pending_10m_prices(min_age_minutes=10.0)
+        if not pending:
+            return stats
+
+        stats["pending"] = len(pending)
+        for item in pending:
+            ticker = _extract_ticker_from_row(item)
+            if not ticker:
+                stats["failed"] += 1
+                continue
+            try:
+                price = await self._ib_client.get_price(ticker)
+                if price is not None:
+                    await self._db.update_10m_price(item["item_id"], price)
+                    stats["captured"] += 1
+                    logger.debug("10m price captured: %s = $%.4f", ticker, price)
+                else:
+                    stats["failed"] += 1
+            except Exception as e:
+                stats["failed"] += 1
+                logger.debug("10m price fetch failed for %s: %s", ticker, e)
+
+        if stats["captured"] or stats["failed"]:
+            logger.info(
+                "10m prices: %d captured, %d failed out of %d pending",
+                stats["captured"], stats["failed"], stats["pending"],
+            )
+        return stats
+
     async def _execute(self) -> Dict[str, Any]:
         started = datetime.now(timezone.utc)
         stats: Dict[str, Any] = {
@@ -258,6 +307,9 @@ class FeedPipeline:
 
         # Fill any buy prices queued from overnight signals
         stats["pending_buy_prices"] = await self._fill_pending_buy_prices()
+
+        # Capture 10-minute-after-reaction prices for edge analysis
+        stats["prices_10m"] = await self._capture_10m_prices()
 
         # Collect relevant items across all feeds for LLM analysis
         relevant_items: List[FeedResult] = []

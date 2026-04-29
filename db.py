@@ -290,6 +290,8 @@ _MIGRATE_COLUMNS = [
     # ── Free-tier delayed-release ("since flagged" move tracking) ──
     ("price_at_flag",       "REAL"),     # IB price at signal-flag time (anchor)
     ("price_at_flag_at",    "TEXT"),     # ISO-8601 UTC when anchor captured
+    ("price_10m",           "REAL"),     # IB price ~10 min after market can react (for analysis)
+    ("price_10m_at",        "TEXT"),     # ISO-8601 UTC when 10m price captured
     ("price_1h",            "REAL"),     # IB price ~1h after flag
     ("price_1h_at",         "TEXT"),
     ("price_24h",           "REAL"),     # IB price ~24h after flag
@@ -1134,6 +1136,16 @@ class FeedDatabase:
         )
         await self._db.commit()
 
+    async def update_10m_price(self, item_id: str, price: float) -> None:
+        """Store the ~10-minute-after-reaction price for later edge analysis."""
+        assert self._db
+        now = datetime.now(timezone.utc).isoformat()
+        await self._db.execute(
+            "UPDATE feed_items SET price_10m = ?, price_10m_at = ? WHERE item_id = ?",
+            (price, now, item_id),
+        )
+        await self._db.commit()
+
     async def update_price_milestone(
         self, item_id: str, *, milestone: str, price: float,
     ) -> None:
@@ -1180,14 +1192,45 @@ class FeedDatabase:
         rows = await cur.fetchall()
         return [dict(r) for r in rows]
 
-    async def get_pending_free_tier(self) -> List[Dict[str, Any]]:
-        """Find signals ready for free-tier delayed release (>=24h old, not yet sent).
+    async def get_pending_10m_prices(self, *, min_age_minutes: float = 10.0) -> List[Dict[str, Any]]:
+        """Return signals whose price_10m hasn't been captured yet and that
+        are at least `min_age_minutes` old (measured from price_at_flag_at or
+        published_at).
 
-        Includes ALL paid-tier signals (pro / pro_smallcap) that were broadcast
-        in real-time but have not yet been posted to the free channel.
-        price_at_flag is NOT required — if it is NULL the message formatter
-        simply omits the price-move line.  Falls back to published_at for the
-        24-hour gate when price_at_flag_at is missing.
+        The caller is responsible for only calling this during market hours so
+        after-hours signals are naturally held until the next trading session.
+        """
+        assert self._db
+        min_age_days = min_age_minutes / (60.0 * 24.0)
+        cur = await self._db.execute(
+            """SELECT * FROM feed_items
+               WHERE ticker IS NOT NULL
+                 AND ticker != ''
+                 AND ticker NOT LIKE 'UNKNOWN_%'
+                 AND price_10m IS NULL
+                 AND telegram_sent_at IS NOT NULL
+                 AND (
+                   (price_at_flag_at IS NOT NULL
+                    AND (julianday('now') - julianday(price_at_flag_at)) >= ?)
+                   OR
+                   (price_at_flag_at IS NULL
+                    AND published_at IS NOT NULL
+                    AND (julianday('now') - julianday(published_at)) >= ?)
+                 )
+               ORDER BY COALESCE(price_at_flag_at, published_at)""",
+            (min_age_days, min_age_days),
+        )
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+    async def get_pending_free_tier(self) -> List[Dict[str, Any]]:
+        """Find paid-tier signals ready for free-tier delayed release (>=24h old, not yet sent).
+
+        Only signals that were actually published to a paid channel (telegram_sent_at IS NOT NULL)
+        are eligible. This ensures the free feed is strictly a 24h-delayed mirror of the paid
+        feed — never showing signals that paid subscribers didn't receive.
+        price_at_flag is NOT required — if NULL the formatter simply omits the price-move line.
+        Falls back to published_at for the 24h gate when price_at_flag_at is missing.
         """
         assert self._db
         cur = await self._db.execute(
@@ -1197,6 +1240,7 @@ class FeedDatabase:
                  AND ticker NOT LIKE 'UNKNOWN_%'
                  AND action IN ('trade', 'watch')
                  AND free_tier_sent = 0
+                 AND telegram_sent_at IS NOT NULL
                  AND (
                    (price_at_flag_at IS NOT NULL
                     AND (julianday('now') - julianday(price_at_flag_at)) * 24.0 >= 24.0)
@@ -1209,6 +1253,38 @@ class FeedDatabase:
         )
         rows = await cur.fetchall()
         return [dict(r) for r in rows]
+
+    async def suppress_stale_free_tier(
+        self, *, older_than_days: float = 7.0,
+    ) -> int:
+        """Suppress free-tier items that are too old to be worth sending.
+
+        Only marks items as suppressed if they are BOTH:
+          - free_tier_sent = 0 (not yet sent)
+          - older than `older_than_days` (based on price_at_flag_at or published_at)
+
+        Items within the 24-48h window are left untouched so the normal
+        broadcast cycle can deliver them.  Returns the count suppressed.
+        """
+        assert self._db
+        now = datetime.now(timezone.utc).isoformat()
+        cur = await self._db.execute(
+            """UPDATE feed_items
+               SET free_tier_sent = 1, free_tier_sent_at = ?, free_tier_message_id = NULL
+               WHERE free_tier_sent = 0
+                 AND action IN ('trade', 'watch')
+                 AND (
+                   (price_at_flag_at IS NOT NULL
+                    AND (julianday('now') - julianday(price_at_flag_at)) > ?)
+                   OR
+                   (price_at_flag_at IS NULL
+                    AND published_at IS NOT NULL
+                    AND (julianday('now') - julianday(published_at)) > ?)
+                 )""",
+            (now, older_than_days, older_than_days),
+        )
+        await self._db.commit()
+        return cur.rowcount or 0
 
     async def mark_free_tier_sent(
         self, item_id: str, *, message_id: Optional[int] = None,
