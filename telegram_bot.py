@@ -3,11 +3,11 @@ from __future__ import annotations
 """Inbound Telegram bot handler — /start, /mykey commands and DM delivery.
 
 Uses the dedicated membership bots (TELEGRAM_BOT_TOKEN_SEC_CMD /
-TELEGRAM_BOT_TOKEN_FDA_CMD) so InviteMember and signal delivery
+TELEGRAM_BOT_TOKEN_FDA_CMD) so command handling and signal delivery
 never share a token.
 
 On /mykey the bot verifies the user is an active member of the pro channel
-before issuing a key — no InviteMember webhook needed.
+before issuing a key.
 
 Setup (run once after deploying):
     python telegram_bot.py --setup --url https://yourdomain.com
@@ -293,7 +293,7 @@ async def handle_update(
         logger.warning("handle_update error: %s", e)
 
 
-# ── Key delivery (called by InviteMember webhook if ever configured) ──────────
+# ── Key delivery ──────────────────────────────────────────────────────────────
 
 async def deliver_key(
     telegram_id: str | int,

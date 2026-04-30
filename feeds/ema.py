@@ -161,6 +161,11 @@ class EmaFeedAdapter(BaseFeedAdapter):
         if not title or not url:
             return None
 
+        # Only press releases are stock-relevant. Committee agendas,
+        # consultation notices and draft guidelines never move prices.
+        if not is_press:
+            return None
+
         published = self._parse_date(pub_date)
         if published and published < cutoff:
             return None

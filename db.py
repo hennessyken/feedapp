@@ -1241,15 +1241,8 @@ class FeedDatabase:
                  AND action IN ('trade', 'watch')
                  AND free_tier_sent = 0
                  AND telegram_sent_at IS NOT NULL
-                 AND (
-                   (price_at_flag_at IS NOT NULL
-                    AND (julianday('now') - julianday(price_at_flag_at)) * 24.0 >= 24.0)
-                   OR
-                   (price_at_flag_at IS NULL
-                    AND published_at IS NOT NULL
-                    AND (julianday('now') - julianday(published_at)) * 24.0 >= 24.0)
-                 )
-               ORDER BY COALESCE(price_at_flag_at, published_at)"""
+                 AND (julianday('now') - julianday(telegram_sent_at)) * 24.0 >= 24.0
+               ORDER BY telegram_sent_at"""
         )
         rows = await cur.fetchall()
         return [dict(r) for r in rows]

@@ -3,17 +3,13 @@ from __future__ import annotations
 """Free-tier delayed-release scheduler.
 
 Paid tiers (pro / pro_smallcap) receive signals in real time.
-The free tier receives the same signals 24 hours later, with two value-adds:
+The free tier receives the same signals exactly 24 hours later.
 
-  1. "Since flagged" price moves — +X% @ 1h, +Y% @ 24h — turning the delay
-     into an implicit testimonial for the paid feed.
-  2. Fundamentals context (mkt cap, short interest, 52w range, sector).
+The delayed post contains only information already stored in the DB at paid
+publish time — no IB price queries, no yfinance calls, no external API calls
+other than the Telegram sendMessage itself.
 
-This module is called periodically by the main loop. Each cycle it:
-  - captures price_24h + emits the delayed Telegram post for signals ≥24h old
-
-All operations are best-effort: if IB is unavailable or returns None
-(e.g. market closed) we leave the column NULL and the formatter drops it.
+This module is called periodically by the main loop.
 """
 
 import logging
@@ -101,33 +97,6 @@ def _row_to_formatted_signal(row: Dict[str, Any]) -> FormattedSignal:
     )
 
 
-# ── Price capture helpers ─────────────────────────────────────────────────────
-
-async def _safe_get_price(ib_client: Any, ticker: str) -> Optional[float]:
-    """Best-effort IB price lookup. Returns None on any failure."""
-    if ib_client is None or not ticker:
-        return None
-    try:
-        return await ib_client.get_price(ticker)
-    except Exception as e:
-        logger.debug("IB get_price failed for %s: %s", ticker, e)
-        return None
-
-
-async def capture_price_milestones(
-    db: FeedDatabase,
-    ib_client: Any,
-) -> Dict[str, int]:
-    """No-op.
-
-    Previously this captured a 24h-after price snapshot, but the free-tier
-    post now computes the move using the CURRENT price at broadcast time
-    (fetched inside broadcast_pending_free_tier) — no pre-capture needed.
-    Kept as a shim so existing callers in main.py don't break.
-    """
-    return {"captured_24h": 0}
-
-
 # ── Delayed free-tier broadcast ───────────────────────────────────────────────
 
 async def broadcast_pending_free_tier(
@@ -136,15 +105,15 @@ async def broadcast_pending_free_tier(
     ib_client: Any = None,
     http: Optional[httpx.AsyncClient] = None,
 ) -> Dict[str, int]:
-    """Emit 24h-delayed free-tier posts for all signals past the 24h mark.
+    """Emit 24h-delayed free-tier posts for signals paid-published ≥24h ago.
 
-    Fetches the CURRENT share price at broadcast time so the displayed move
-    is "1 hour before announcement → price right now" — a live comparison
-    that keeps working as time passes, rather than a stale 24h-after snapshot.
+    Makes NO external API calls — every field is read from the DB row that
+    was populated when the paid signal was published.  The only network
+    request is the Telegram sendMessage to post the delayed message.
 
     A signal is eligible if:
       - free_tier_sent = 0
-      - price_at_flag_at is at least 24h in the past
+      - telegram_sent_at is at least 24h in the past (exact paid-publish time)
       - action is 'trade' or 'watch'
 
     Returns {"broadcast": n, "skipped": n}.
@@ -153,16 +122,13 @@ async def broadcast_pending_free_tier(
 
     # Enforce quiet hours — hold posts until 7am ET, no blasts after 9pm ET.
     if not _in_delivery_window():
-        now_et = datetime.now(_ET)
         logger.debug(
             "[free_tier] Outside delivery window (%s ET) — deferring until 07:00 ET",
-            now_et.strftime("%H:%M"),
+            datetime.now(_ET).strftime("%H:%M"),
         )
         return stats
 
     pending = await db.get_pending_free_tier()
-
-    from price_history import get_current_price, get_price_hours_before
 
     for row in pending:
         ticker = (row.get("ticker") or "").upper().strip()
@@ -171,60 +137,20 @@ async def broadcast_pending_free_tier(
             continue
 
         try:
-            fund = await db.get_fundamentals(ticker)
-            if not fund:
-                try:
-                    from fetch_fundamentals import ensure_fundamentals
-                    fund = await ensure_fundamentals(db, ticker)
-                except Exception as _fe:
-                    logger.debug("[free_tier] ensure_fundamentals failed for %s: %s", ticker, _fe)
+            # All data comes from the DB — no IB, no yfinance, no HTTP.
+            fund = await db.get_fundamentals(ticker)   # cached only
             signal = _row_to_formatted_signal(row)
             channel = classify_channel(
                 row.get("feed_source") or "",
                 row.get("event_type") or "",
             )
 
-            # Fetch current price at publish time for the move calculation.
-            price_now = await get_current_price(ticker, ib_client=ib_client)
-
-            # If price_at_flag was not captured at signal time (e.g. IB offline
-            # or market was closed), try to recover it from yfinance history so
-            # the delayed post can still show the "since news broke" move.
-            price_at_flag = row.get("price_at_flag")
-            if not price_at_flag:
-                flag_ts = row.get("price_at_flag_at") or row.get("published_at")
-                if flag_ts:
-                    try:
-                        from datetime import datetime, timezone as _tz
-                        flagged_dt = datetime.fromisoformat(
-                            flag_ts.replace("Z", "+00:00")
-                        )
-                        hours_ago = (
-                            datetime.now(_tz.utc) - flagged_dt
-                        ).total_seconds() / 3600.0
-                        # Fetch price ~1h before the announcement
-                        recovered = await get_price_hours_before(
-                            ticker, hours=hours_ago + 1.0, ib_client=ib_client,
-                        )
-                        if recovered and recovered > 0:
-                            price_at_flag = recovered
-                            await db.update_price_at_flag(row["item_id"], recovered)
-                            logger.info(
-                                "[free_tier] Recovered price_at_flag for %s: $%.2f",
-                                ticker, recovered,
-                            )
-                    except Exception as recover_err:
-                        logger.debug(
-                            "[free_tier] price_at_flag recovery failed for %s: %s",
-                            ticker, recover_err,
-                        )
-
             result = await send_free_tier_delayed(
                 signal,
-                price_at_flag=price_at_flag,
-                price_now=price_now,
+                price_at_flag=row.get("price_at_flag"),
                 fundamentals=fund,
-                flagged_at_iso=row.get("price_at_flag_at")
+                flagged_at_iso=row.get("telegram_sent_at")
+                               or row.get("price_at_flag_at")
                                or row.get("published_at"),
                 channel=channel,
                 http=http,
@@ -240,9 +166,7 @@ async def broadcast_pending_free_tier(
             else:
                 stats["skipped"] += 1
         except Exception as e:
-            logger.warning(
-                "[free_tier] broadcast failed for %s: %s", ticker, e,
-            )
+            logger.warning("[free_tier] broadcast failed for %s: %s", ticker, e)
             stats["skipped"] += 1
 
     if stats["broadcast"] or stats["skipped"]:
@@ -261,10 +185,5 @@ async def run_free_tier_cycle(
     *,
     http: Optional[httpx.AsyncClient] = None,
 ) -> Dict[str, int]:
-    """Broadcast anything past 24h. Price move is computed at broadcast time
-    using the current live price, so no pre-capture is needed."""
-    cap_stats = await capture_price_milestones(db, ib_client)
-    send_stats = await broadcast_pending_free_tier(
-        db, ib_client=ib_client, http=http,
-    )
-    return {**cap_stats, **send_stats}
+    """Broadcast anything paid-published ≥24h ago. No external API calls."""
+    return await broadcast_pending_free_tier(db, http=http)

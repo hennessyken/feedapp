@@ -508,7 +508,6 @@ def _format_free_tier_delayed_message(
     signal: FormattedSignal,
     *,
     price_at_flag: Optional[float],
-    price_now: Optional[float],
     fundamentals: Optional[Dict[str, Any]] = None,
     flagged_at_iso: Optional[str] = None,
     channel: str = "sec",
@@ -516,12 +515,12 @@ def _format_free_tier_delayed_message(
 ) -> str:
     """Format the 24h-delayed free-tier post.
 
-    Mirrors the paid message layout exactly, with two additions:
-      1. A "24hr DELAYED FEED" banner after the event type.
-      2. A % change line showing the move since the news broke.
+    Mirrors the paid message layout exactly, with one addition:
+      - A "24hr DELAYED FEED" banner after the event type.
 
-    The filing link is replaced by an upsell link so free readers can
-    upgrade.  Live IB quote data (bid/ask) is omitted — it would be stale.
+    Uses only information already stored in the DB at paid-publish time.
+    No live prices, no external API calls.  The filing link is replaced
+    by an upsell link.
     """
     lines = [
         _polarity_header(signal),
@@ -551,17 +550,11 @@ def _format_free_tier_delayed_message(
         lines.append(f"  How fresh: {freshness_plain}")
     lines.append("")
 
-    # ── Price at flag time + % change since news broke ────────────────────
+    # ── Price at signal time (stored at paid-publish, no live lookup) ────
     if price_at_flag and float(price_at_flag) > 0:
         lines.append(f"💰 Share price when news broke: <b>${float(price_at_flag):.2f}</b>")
-        if price_now and float(price_now) > 0:
-            pct = (float(price_now) - float(price_at_flag)) / float(price_at_flag) * 100.0
-            s = _fmt_signed_pct(pct)
-            if s:
-                dot = "🟢" if pct > 0 else ("🔴" if pct < 0 else "⚪")
-                lines.append(f"  % Change since news broke: {dot} <b>{s}</b>")
     elif fundamentals and fundamentals.get("current_price") is not None:
-        lines.append(f"💰 Current share price: <b>${float(fundamentals['current_price']):.2f}</b>")
+        lines.append(f"💰 Share price (cached): <b>${float(fundamentals['current_price']):.2f}</b>")
 
     # ── About the company — same block as paid ───────────────────────────
     company = getattr(signal, "company_name", "") or signal.ticker
@@ -679,7 +672,6 @@ async def send_free_tier_delayed(
     signal: FormattedSignal,
     *,
     price_at_flag: Optional[float],
-    price_now: Optional[float],
     fundamentals: Optional[Dict[str, Any]] = None,
     flagged_at_iso: Optional[str] = None,
     channel: Channel = "sec",
@@ -688,7 +680,8 @@ async def send_free_tier_delayed(
 ) -> Dict[str, Any]:
     """Send the 24h-delayed post to the free-tier channel.
 
-    Called by the free_tier scheduler, not by the signal pipeline.
+    Uses only DB-stored data — no live price lookups, no external API calls
+    other than the Telegram sendMessage itself.
     Returns {sent, tier, channel, chat_id, message_id}. Never raises.
     """
     token = _token(channel)
@@ -704,7 +697,6 @@ async def send_free_tier_delayed(
     message = _format_free_tier_delayed_message(
         signal,
         price_at_flag=price_at_flag,
-        price_now=price_now,
         fundamentals=fundamentals,
         flagged_at_iso=flagged_at_iso,
         channel=channel,

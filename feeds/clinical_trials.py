@@ -157,9 +157,9 @@ class ClinicalTrialsFeedAdapter(BaseFeedAdapter):
                 "format": "json",
                 "pageSize": str(self._page_size),
                 "countTotal": "true",
-                "fields": "NCTId,BriefTitle,OfficialTitle,OverallStatus,Phase,Condition,LeadSponsorName,ResultsFirstPostDate,LastUpdatePostDate",
+                "fields": "NCTId,BriefTitle,OfficialTitle,OverallStatus,Phase,Condition,LeadSponsorName,LeadSponsorClass,ResultsFirstPostDate,LastUpdatePostDate",
                 "filter.overallStatus": "COMPLETED,TERMINATED",
-                "filter.advanced": f"AREA[ResultsFirstPostDate]RANGE[{cutoff_str},MAX]",
+                "filter.advanced": f"AREA[ResultsFirstPostDate]RANGE[{cutoff_str},MAX] AND AREA[LeadSponsorClass]INDUSTRY",
                 "sort": "ResultsFirstPostDate:desc",
             }
             if page_token:
@@ -200,8 +200,8 @@ class ClinicalTrialsFeedAdapter(BaseFeedAdapter):
             params = {
                 "format": "json",
                 "pageSize": str(self._page_size),
-                "fields": "NCTId,BriefTitle,OfficialTitle,OverallStatus,Phase,Condition,LeadSponsorName,ResultsFirstPostDate,LastUpdatePostDate",
-                "filter.advanced": f"AREA[LastUpdatePostDate]RANGE[{cutoff_str},MAX] AND AREA[Phase]PHASE3",
+                "fields": "NCTId,BriefTitle,OfficialTitle,OverallStatus,Phase,Condition,LeadSponsorName,LeadSponsorClass,ResultsFirstPostDate,LastUpdatePostDate",
+                "filter.advanced": f"AREA[LastUpdatePostDate]RANGE[{cutoff_str},MAX] AND AREA[Phase]PHASE3 AND AREA[LeadSponsorClass]INDUSTRY",
                 "filter.overallStatus": "COMPLETED,ACTIVE_NOT_RECRUITING",
                 "sort": "LastUpdatePostDate:desc",
             }
@@ -265,6 +265,26 @@ class ClinicalTrialsFeedAdapter(BaseFeedAdapter):
 
         design_mod = proto.get("designModule", {})
         phases = design_mod.get("phases", [])
+
+        # ── Pre-LLM filters: drop items with no signal value ─────────────
+        # 1. Non-industry sponsors (NIH, academia, government) don't have
+        #    a publicly-traded stock — no price catalyst is possible.
+        #    We filter at the API level too, but guard here in case the API
+        #    returns unexpected records.
+        if sponsor_class and sponsor_class.upper() not in ("INDUSTRY", ""):
+            return None
+
+        # 2. Phase 1 / Early Phase 1 trials: too early-stage to move markets.
+        #    Phase 2 kept — small-cap results can be catalysts.
+        #    NA kept only for results_posted where we already have data.
+        _skip_phases = {"PHASE1", "EARLY_PHASE1"}
+        if phases and all(p in _skip_phases for p in phases):
+            return None
+
+        # 3. No phase (NA) + status_change signal: just an admin update with
+        #    no results data — observational/registry/device studies.
+        if (not phases or phases == ["NA"]) and signal_type == "status_change":
+            return None
 
         # Ticker lookup
         ticker = _lookup_sponsor_ticker(sponsor_name)

@@ -1,0 +1,16 @@
+[Unit]
+Description=Catalyst Wire fulfillment — deliver Telegram invites + welcome emails
+After=network.target
+
+[Service]
+Type=oneshot
+User=ken
+Group=ken
+WorkingDirectory=/home/ken/Regfeed
+EnvironmentFile=/home/ken/Regfeed/.env
+ExecStart=/home/ken/Regfeed/.venv/bin/python fulfillment.py
+StandardOutput=append:/home/ken/Regfeed/fulfillment.log
+StandardError=append:/home/ken/Regfeed/fulfillment.log
+
+NoNewPrivileges=true
+PrivateTmp=true
