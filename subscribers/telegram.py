@@ -627,6 +627,7 @@ class TelegramSubscriber(BaseSubscriber):
                         buy_price=buy_price, tier=tier, channel=channel,
                         http=ctx.http, fundamentals=fundamentals,
                         ib_quote=ib_quote,
+                        ib_client=getattr(ctx, "ib_client", None),
                     )
                     sent = result.get("sent", False)
                     try:

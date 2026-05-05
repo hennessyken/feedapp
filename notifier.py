@@ -390,18 +390,26 @@ def _format_telegram_message(
     channel: str = "sec",
     fundamentals: Optional[Dict[str, Any]] = None,
     ib_quote: Optional[Dict[str, Any]] = None,
+    macro_line: Optional[str] = None,
 ) -> str:
     """Format a real-time signal post (paid tiers only in the new tiering).
 
     The free tier no longer gets a real-time post — it receives a delayed
     post 24h later via _format_free_tier_delayed_message. If called with
     tier='free' we still emit something sane for backward compatibility.
+
+    `macro_line` (optional) is a pre-rendered SPY/VIX backdrop line from
+    macro_context.fetch_macro_backdrop(). When provided it goes immediately
+    below the event title to set context for the signal.
     """
     lines = [
         _polarity_header(signal),
         signal.event.replace("_", " ").title(),
         "",
     ]
+    if macro_line:
+        lines.append(macro_line)
+        lines.append("")
     summary = human_text or signal.summary
     if summary:
         lines.append(summary)
@@ -423,34 +431,13 @@ def _format_telegram_message(
         lines.append(f"  How fresh: {freshness_plain}")
         lines.append("")
 
-        # ── Current share price + live IB market data ────────────────────
-        if buy_price is not None:
-            lines.append(f"💰 Share price when we spotted this: <b>${buy_price:.2f}</b>")
-        elif fundamentals and fundamentals.get("current_price") is not None:
-            lines.append(f"💰 Current share price: <b>${float(fundamentals['current_price']):.2f}</b>")
-
-        # Live IB quote enrichment (bid/ask spread + today's volume vs average)
+        # ── Live trading-activity context (volume only — no prices) ──────
+        # Prices are intentionally omitted: this is a watch-list tool, not
+        # a trading dashboard. Subscribers who want execution prices look
+        # them up in their broker.
         if ib_quote:
-            bid = ib_quote.get("bid")
-            ask = ib_quote.get("ask")
             vol_today = ib_quote.get("volume")
             avg_vol = fundamentals.get("avg_volume") if fundamentals else None
-            if bid and ask and float(bid) > 0 and float(ask) > 0:
-                spread = float(ask) - float(bid)
-                mid = (float(bid) + float(ask)) / 2.0
-                spread_pct = spread / mid * 100.0
-                ease = (
-                    "easy to buy/sell right now"
-                    if spread_pct < 0.15 else (
-                        "small gap between buy and sell prices"
-                        if spread_pct < 0.5 else
-                        "wider gap — factor this in if trading"
-                    )
-                )
-                lines.append(
-                    f"  Bid / Ask: ${float(bid):.2f} / ${float(ask):.2f}"
-                    f"  (spread ${spread:.3f} — {ease})"
-                )
             if vol_today and avg_vol and float(avg_vol) > 0:
                 ratio = float(vol_today) / float(avg_vol)
                 if ratio >= 2.0:
@@ -467,10 +454,10 @@ def _format_telegram_message(
 
         # ── About the company ────────────────────────────────────────────
         company = getattr(signal, "company_name", "") or signal.ticker
-        ref_price = buy_price
-        if ref_price is None and fundamentals:
-            ref_price = fundamentals.get("current_price")
-        fund_lines = _format_fundamentals_block(fundamentals, reference_price=ref_price)
+        # No reference_price — keeps the 52-week range as historical
+        # context only, without the "now about X% up that range" pointer
+        # which would re-introduce the current price implicitly.
+        fund_lines = _format_fundamentals_block(fundamentals, reference_price=None)
         if fund_lines:
             lines.append("")
             lines.append(f"🏢 <b>About {company}</b>")
@@ -490,17 +477,24 @@ def _format_telegram_message(
     lines.append("")
     now_str = datetime.now(timezone.utc).strftime("%-d %b %Y  %H:%M UTC")
     lines.append(f"Source: {signal.source}  |  {now_str}")
-    lines.append("For information only. Not advice.")
+    lines.append("")
+    lines.append("⚠️ <b>Watch-list signal — not investment advice.</b>")
+    lines.append(
+        "Treat this as a research candidate, not a buy/sell instruction. "
+        "We deliver as fast as our pipeline allows, but institutional traders "
+        "with direct exchange feeds and pre-built order routers will often "
+        "have moved the price before retail can react. Always do your own research."
+    )
     return "\n".join(lines)
 
 
 _UPSELL_LINKS: Dict[str, str] = {
-    "sec": "https://im.page/catalyst-wire-sec",
-    "fda": "https://im.page/catalyst-wire-fda",
+    "sec": "https://sec.catalystwire.org",
+    "fda": "https://fda.catalystwire.org",
 }
 _UPSELL_LABELS: Dict[str, str] = {
-    "sec": "Live SEC feed →",
-    "fda": "Live FDA / EMA / Clinical Trials feed →",
+    "sec": "Subscribe to live SEC alerts →",
+    "fda": "Subscribe to live FDA / EMA / Clinical Trials alerts →",
 }
 
 
@@ -550,16 +544,11 @@ def _format_free_tier_delayed_message(
         lines.append(f"  How fresh: {freshness_plain}")
     lines.append("")
 
-    # ── Price at signal time (stored at paid-publish, no live lookup) ────
-    if price_at_flag and float(price_at_flag) > 0:
-        lines.append(f"💰 Share price when news broke: <b>${float(price_at_flag):.2f}</b>")
-    elif fundamentals and fundamentals.get("current_price") is not None:
-        lines.append(f"💰 Share price (cached): <b>${float(fundamentals['current_price']):.2f}</b>")
-
     # ── About the company — same block as paid ───────────────────────────
+    # Share price intentionally omitted (watch-list framing, not trading).
     company = getattr(signal, "company_name", "") or signal.ticker
     fund_lines = _format_fundamentals_block(
-        fundamentals, reference_price=price_at_flag,
+        fundamentals, reference_price=None,
     )
     if fund_lines:
         lines.append("")
@@ -584,7 +573,13 @@ def _format_free_tier_delayed_message(
     except (ValueError, AttributeError):
         ts_str = raw_ts
     lines.append(f"Source: {signal.source}  |  News detected {ts_str}")
-    lines.append("Delayed Feed. For information only. Not advice.")
+    lines.append("")
+    lines.append("⚠️ <b>24-hour delayed watch-list signal — not investment advice.</b>")
+    lines.append(
+        "Treat as a research candidate only. By the time you see this on the "
+        "free feed, paid subscribers (and far ahead of them, institutional "
+        "traders) have already had a full day to react. Always do your own research."
+    )
     return "\n".join(lines)
 
 
@@ -625,10 +620,15 @@ async def send_signal(
     http: Optional[httpx.AsyncClient] = None,
     fundamentals: Optional[Dict[str, Any]] = None,
     ib_quote: Optional[Dict[str, Any]] = None,
+    ib_client: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """Send a real-time signal to the correct product channel + tier.
 
     Returns {sent, tier, channel, chat_id, message_id}. Never raises.
+
+    `ib_client` (optional) is used to fetch the SPY/VIX macro backdrop line
+    that prefaces paid-tier posts. If None or unreachable, the post is
+    rendered without the macro line — graceful degrade.
     """
     token = _token(channel)
     chat_id = _chat_id(tier, channel)
@@ -640,9 +640,21 @@ async def send_signal(
                     tier, channel, bool(token), bool(chat_id), signal.ticker)
         return result
 
+    # Macro context for paid posts only — free tier gets the 24h-delayed
+    # message via send_free_tier_delayed() which doesn't include macro
+    # (would be stale by the time it fires).
+    macro_line: Optional[str] = None
+    if ib_client is not None and tier in ("pro", "pro_smallcap"):
+        try:
+            from macro_context import fetch_macro_backdrop
+            macro_line = await fetch_macro_backdrop(ib_client)
+        except Exception as e:
+            logger.warning("macro backdrop fetch failed: %s", e)
+
     message = _format_telegram_message(
         signal, human_text, buy_price=buy_price, tier=tier,
         channel=channel, fundamentals=fundamentals, ib_quote=ib_quote,
+        macro_line=macro_line,
     )
     payload = {
         "chat_id": chat_id,

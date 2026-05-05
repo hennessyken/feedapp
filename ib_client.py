@@ -256,6 +256,67 @@ class IBClient:
         p = quote.get("price")
         return float(p) if p else None
 
+    # ── Index quotes (VIX, SPX, etc.) ─────────────────────────────────────────
+
+    def _sync_get_index_quote(
+        self, symbol: str, exchange: str = "CBOE", currency: str = "USD"
+    ) -> Dict[str, Any]:
+        """Index quote — VIX, SPX, NDX. Returns {price, last, close, change_pct}.
+
+        VIX is published only during regular SPX option-trading hours
+        (9:30am–4:15pm ET); outside that window IB returns the last close.
+        """
+        try:
+            from ib_insync import Index  # type: ignore[import]
+            ib = self._sync_ensure_connected()
+
+            contract = Index(symbol, exchange, currency)
+            if not ib.qualifyContracts(contract):
+                logger.warning("IB index: contract not found for %s", symbol)
+                return {}
+
+            tickers_list = ib.reqTickers(contract)
+            if not tickers_list:
+                logger.warning("IB index: reqTickers no data for %s", symbol)
+                return {}
+
+            tk    = tickers_list[0]
+            last  = _safe_float(tk.last)
+            close = _safe_float(tk.close)
+            price = last or close
+            if not price:
+                return {}
+
+            result: Dict[str, Any] = {"price": price}
+            if last:
+                result["last"] = last
+            if close:
+                result["close"] = close
+                if last:
+                    result["change_pct"] = round((last - close) / close * 100, 2)
+            return result
+        except Exception as e:
+            logger.warning("IB index: get_index_quote failed for %s: %s", symbol, e)
+            return {}
+
+    async def get_index_quote(
+        self, symbol: str, *, exchange: str = "CBOE", currency: str = "USD"
+    ) -> Dict[str, Any]:
+        """Async wrapper around _sync_get_index_quote. Always safe to call."""
+        s = (symbol or "").strip().upper()
+        if not s:
+            return {}
+        loop = asyncio.get_running_loop()
+        try:
+            return await asyncio.wait_for(
+                loop.run_in_executor(
+                    self._executor, self._sync_get_index_quote, s, exchange, currency,
+                ),
+                timeout=_QUOTE_TIMEOUT,
+            )
+        except Exception:
+            return {}
+
     async def get_prices(self, tickers: List[str]) -> Dict[str, Optional[float]]:
         """Fetch prices for a list of tickers concurrently."""
         tasks = {t: asyncio.create_task(self.get_price(t)) for t in tickers}

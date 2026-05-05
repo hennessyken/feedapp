@@ -1,7 +1,9 @@
 """Stripe-payment → Telegram-invite + welcome-email fulfillment worker.
 
-Reads each marketing site's subscribers.db, picks up new paying customers
-that haven't been welcomed yet, generates a one-time Telegram channel invite
+Handles the SEC and FDA marketing sites.
+
+Reads each site's subscribers.db, picks up new paying customers that
+haven't been welcomed yet, generates a one-time Telegram channel invite
 link, and emails it to them. Marks each row delivered (or records the error
 and retries up to MAX_ATTEMPTS times).
 
@@ -11,30 +13,24 @@ at any time; rows already `delivered_at` are skipped.
 Required env (in Regfeed/.env):
 
     # SMTP — defaults to Gmail, override host/port for Hotmail/Workspace/etc.
-    # The "password" is an App Password, NOT your account password.
-    # Gmail: https://myaccount.google.com/apppasswords (requires 2FA)
-    # Hotmail/Outlook: https://account.live.com/proofs/AppPassword
     SMTP_HOST=smtp.gmail.com           # smtp-mail.outlook.com for Hotmail
     SMTP_PORT=465                      # 587 for Hotmail (uses STARTTLS)
     SMTP_USER=youraccount@gmail.com
-    SMTP_PASSWORD=xxxxxxxxxxxxxxxx
-    SMTP_FROM_ADDRESS=hello@catalystwire.org   # what recipients see
+    SMTP_PASSWORD=xxxxxxxxxxxxxxxx     # App Password, NOT your account password
+    SMTP_FROM_ADDRESS=hello@catalystwire.org
     SMTP_FROM_NAME=Catalyst Wire
 
-    # Per-site Telegram chat ids and bot tokens (re-uses existing notifier vars
-    # for SEC + FDA; Frontier needs new ones).
+    # Per-site membership bot tokens + paid channel chat ids.
     TELEGRAM_BOT_TOKEN_SEC_MEMBERSHIP=...
     TELEGRAM_CHAT_ID_SEC_PRO=-100...
     TELEGRAM_BOT_TOKEN_FDA_MEMBERSHIP=...
     TELEGRAM_CHAT_ID_FDA_PRO=-100...
-    TELEGRAM_BOT_TOKEN_FRONTIER=...
-    TELEGRAM_CHAT_ID_FRONTIER=-100...
 
 The membership bot must be an admin of the corresponding channel with
 "Invite Users via Link" permission.
 
 Usage:
-    python fulfillment.py             # process all configured sites once
+    python fulfillment.py             # process both sites once
     python fulfillment.py --dry-run   # log only, no Telegram/email/DB writes
     python fulfillment.py --site sec  # process a single site
 """
@@ -103,16 +99,6 @@ SITES = [
         product_url="https://fda.catalystwire.org",
         short_pitch="Real-time FDA, ClinicalTrials.gov, and EMA alerts "
                     "delivered to Telegram in seconds.",
-    ),
-    SiteConfig(
-        site_id="frontier",
-        db_path="/home/ken/frontier-site/subscribers.db",
-        bot_token_env="TELEGRAM_BOT_TOKEN_FRONTIER",
-        chat_id_env="TELEGRAM_CHAT_ID_FRONTIER",
-        product_name="Frontier Briefing",
-        product_url="https://frontier.catalystwire.org",
-        short_pitch="30 hand-scored arXiv and PubMed papers a day, AI-summarised "
-                    "in plain English.",
     ),
 ]
 
@@ -198,8 +184,9 @@ def render_email(site: SiteConfig, invite_link: str) -> tuple[str, str]:
         f"  {invite_link}\n\n"
         f"After joining, send the bot a /mykey message to receive your API "
         f"key (if your plan includes API access).\n\n"
-        f"Manage or cancel your subscription anytime from your Stripe "
-        f"customer portal — link is in your payment receipt.\n\n"
+        f"Payments are processed securely by Stripe — we never see your card "
+        f"details. Manage or cancel your subscription anytime from your "
+        f"Stripe customer portal (link is in your payment receipt).\n\n"
         f"— {site.product_name}\n"
         f"  {site.product_url}\n"
     )
@@ -219,8 +206,9 @@ def render_email(site: SiteConfig, invite_link: str) -> tuple[str, str]:
 </p>
 <hr style="border:none;border-top:1px solid #eee;margin:24px 0">
 <p style="color:#888;font-size:12px">
-  Manage or cancel your subscription anytime from your Stripe customer portal —
-  link is in your payment receipt.<br>
+  <strong>Payments processed securely by Stripe.</strong> We never see your
+  card details. Manage or cancel your subscription anytime from your Stripe
+  customer portal — link is in your payment receipt.<br><br>
   — <a href="{site.product_url}" style="color:#888">{site.product_name}</a>
 </p>
 </body></html>"""

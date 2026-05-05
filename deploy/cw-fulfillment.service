@@ -1,5 +1,5 @@
 [Unit]
-Description=Catalyst Wire fulfillment — deliver Telegram invites + welcome emails
+Description=Catalyst Wire SEC/FDA fulfillment — deliver Telegram invites + welcome emails
 After=network.target
 
 [Service]
