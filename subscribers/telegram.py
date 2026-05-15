@@ -622,6 +622,45 @@ class TelegramSubscriber(BaseSubscriber):
                     if anchor_price is not None:
                         await ctx.db.update_price_at_flag(item.item_id, anchor_price)
 
+                    # ── Per-ticker daily cap ─────────────────────────────────
+                    # Prevent same-ticker storms (e.g. VTRS fired 12× in 4 min on
+                    # 2026-05-07 from EMA generic-drug re-authorizations). A real
+                    # catalyst rarely produces more than 2-3 distinct sent posts
+                    # in 24h; beyond that it's almost always source-side noise.
+                    MAX_PER_TICKER_PER_DAY = 3
+                    sent_today = await ctx.db.count_sent_today(ticker, channel)
+                    if sent_today >= MAX_PER_TICKER_PER_DAY:
+                        logger.info(
+                            "SIGNAL_THROTTLED: tier=%s channel=%s ticker=%s sent_today=%d cap=%d title=%s",
+                            tier, channel, ticker, sent_today, MAX_PER_TICKER_PER_DAY,
+                            (item.title or "")[:80],
+                        )
+                        await ctx.db.write_signal_log(
+                            item_id=item.item_id,
+                            feed_source=item.feed_source,
+                            ticker=ticker, company_name=company_name,
+                            form_type=str(meta.get("form_type") or ""),
+                            event_type=event_type, title=item.title,
+                            url=item.url or "", published_at=item.published_at or "",
+                            ticker_source=ticker_source,
+                            keyword_score=screen.score,
+                            keyword_category=screen.event_category,
+                            matched_keywords=list(screen.matched_keywords),
+                            vetoed=screen.vetoed,
+                            sentry1_company=sentry1_company_prob,
+                            sentry1_price=sentry1_price_prob,
+                            sentry1_passed=sentry1_passed,
+                            impact_score=impact_out, confidence=final_confidence,
+                            action=action_label, freshness_mult=freshness_mult,
+                            disposition="dropped_throttle",
+                            drop_reason=f"per-ticker daily cap ({MAX_PER_TICKER_PER_DAY}) reached: {sent_today} already sent",
+                            tier=tier, channel=channel,
+                            price_at_flag=anchor_price,
+                            market_cap=market_cap,
+                            short_pct=(fundamentals or {}).get("short_pct_of_float"),
+                        )
+                        continue
+
                     result = await send_signal(
                         formatted, human_text=human_text,
                         buy_price=buy_price, tier=tier, channel=channel,

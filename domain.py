@@ -362,6 +362,26 @@ class KeywordScreener:
         "espp", "s-8 registration", "automatic sell-to-cover",
     ]
 
+    # ── Absolute title-level vetoes — patterns that fire BEFORE HIGH-tier
+    # scoring, regardless of what keywords also appear. These catch
+    # corporate-renaming / generic-drug re-authorization patterns from EMA
+    # and similar regulators that look like real signals to the keyword
+    # scorer but are administrative re-listings, not new approvals.
+    #
+    # The VTRS 5/7-5/8 incident: 22 posts in 24h, all "(previously X Mylan)"
+    # rebranding filings. These should never fire.
+    _ABSOLUTE_TITLE_VETO_PATTERNS: List[re.Pattern] = [
+        # "Cinacalcet Viatris (previously Cinacalcet Mylan)" — Viatris rebrand
+        re.compile(r"\(previously\s+[a-z][\w\-]+\s+\w+\)", re.IGNORECASE),
+        # "Febuxostat Viatris (previously Febuxostat Mylan)" — same pattern
+        # without parens, sometimes used
+        re.compile(r"previously\s+\w+\s+mylan\b", re.IGNORECASE),
+        # EMA bulk re-listings of generics: title format includes the generic
+        # name in parens after the brand name — these are administrative
+        # transfers between holding companies, not new authorizations.
+        re.compile(r"ema authorised:.*\(previously\s+", re.IGNORECASE),
+    ]
+
     def screen(self, title: str, snippet: str = "") -> KeywordScreenResult:
         """Score a document based on its title and optional content snippet."""
         combined = f"{title or ''} {snippet or ''}".lower()
@@ -373,6 +393,19 @@ class KeywordScreener:
 
         # Track matched phrases to prevent cross-tier double counting (#38).
         _matched_phrases: Set[str] = set()
+
+        # ── ABSOLUTE title-level vetoes (override HIGH) ──────────────────────
+        # Generic-drug rebrand re-authorizations etc. — never fire regardless
+        # of what keywords would otherwise match.
+        for pat in self._ABSOLUTE_TITLE_VETO_PATTERNS:
+            m = pat.search(title or "")
+            if m:
+                return KeywordScreenResult(
+                    score=0,
+                    event_category="VETO",
+                    matched_keywords=[f"absolute:{m.group(0)[:60]}"],
+                    vetoed=True,
+                )
 
         # ── HIGH tier (check first — HIGH matches override VETOs) ────────────
         for cat, keywords in self._HIGH.items():

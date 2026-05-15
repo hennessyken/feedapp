@@ -1305,6 +1305,31 @@ class FeedDatabase:
         row = await cur.fetchone()
         return dict(row) if row else None
 
+    async def count_sent_today(self, ticker: str, channel: str) -> int:
+        """Count how many signals for `ticker` on `channel` have already been
+        delivered today (UTC). Used by the per-ticker daily-cap throttle to
+        prevent same-ticker storms like the VTRS 12×-in-4-min EMA-rebrand
+        incident on 2026-05-07.
+
+        Returns 0 on empty ticker/channel or any error — fail-open so a DB
+        glitch never blocks all sends.
+        """
+        assert self._db
+        if not ticker or not channel:
+            return 0
+        try:
+            cur = await self._db.execute(
+                """SELECT COUNT(*) FROM signal_log
+                   WHERE ticker = ? AND channel = ?
+                     AND disposition LIKE 'sent_%'
+                     AND date(logged_at) = date('now')""",
+                (ticker.upper().strip(), channel),
+            )
+            row = await cur.fetchone()
+            return int(row[0]) if row else 0
+        except Exception:
+            return 0
+
     async def update_current_price(self, ticker: str, price: float) -> None:
         """Cache the latest known price on the fundamentals row."""
         assert self._db

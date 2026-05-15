@@ -179,11 +179,74 @@ async def broadcast_pending_free_tier(
 
 # ── Single entry-point for main.py to call each cycle ────────────────────────
 
+async def capture_price_milestones(
+    db: FeedDatabase, ib_client: Any,
+) -> Dict[str, int]:
+    """Capture +1h and +24h prices for signals that flagged at least that
+    long ago and haven't been captured yet.
+
+    Uses IB→yfinance fallback via price_history.get_current_price, so this
+    works even when IB Gateway is down (delayed yfinance is good enough for
+    outcome analysis at the watch-list timescale).
+
+    Returns counts: {captured_1h, captured_24h, failed_1h, failed_24h}.
+    """
+    from price_history import get_current_price
+
+    out = {"captured_1h": 0, "captured_24h": 0, "failed_1h": 0, "failed_24h": 0}
+    for milestone, min_age in (("1h", 1.0), ("24h", 24.0)):
+        try:
+            pending = await db.get_pending_price_milestones(
+                milestone=milestone, min_age_hours=min_age,
+            )
+        except Exception:
+            logger.exception("get_pending_price_milestones(%s) failed", milestone)
+            continue
+        for row in pending:
+            ticker = (row.get("ticker") or "").strip().upper()
+            item_id = row.get("item_id")
+            if not ticker or not item_id:
+                continue
+            try:
+                price = await get_current_price(ticker, ib_client=ib_client)
+            except Exception as e:
+                logger.warning(
+                    "price capture %s for %s failed: %s", milestone, ticker, e,
+                )
+                price = None
+            if price is None:
+                out[f"failed_{milestone}"] += 1
+                continue
+            try:
+                await db.update_price_milestone(
+                    item_id, milestone=milestone, price=float(price),
+                )
+                out[f"captured_{milestone}"] += 1
+            except Exception:
+                logger.exception(
+                    "update_price_milestone(%s, %s) failed", item_id, milestone,
+                )
+                out[f"failed_{milestone}"] += 1
+    return out
+
+
 async def run_free_tier_cycle(
     db: FeedDatabase,
     ib_client: Any,
     *,
     http: Optional[httpx.AsyncClient] = None,
 ) -> Dict[str, int]:
-    """Broadcast anything paid-published ≥24h ago. No external API calls."""
-    return await broadcast_pending_free_tier(db, http=http)
+    """Per-cycle work: capture 1h/24h price milestones for outcome analysis,
+    then broadcast any paid-published-≥24h-ago posts to the free channel.
+
+    The milestone-capture step uses yfinance as fallback when IB is unreachable
+    (closes the 0%-outcome-capture gap from the 5/12 audit)."""
+    captures = await capture_price_milestones(db, ib_client)
+    broadcasts = await broadcast_pending_free_tier(db, http=http)
+    # Merge dicts; broadcast keys (captured_24h is also there from broadcast)
+    # win on conflict only if they're non-zero — but they shouldn't collide.
+    merged: Dict[str, int] = {}
+    for d in (captures, broadcasts):
+        for k, v in d.items():
+            merged[k] = merged.get(k, 0) + (v if isinstance(v, int) else 0)
+    return merged

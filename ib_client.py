@@ -111,10 +111,23 @@ class IBClient:
         logger.info("IBClient disconnected")
 
     def _sync_get_quote(self, ticker: str) -> Dict[str, Any]:
-        """Fetch a live quote from IB. Mirrors StockFunnel's _fetch_sync."""
+        """Fetch a quote from IB. Mirrors StockFunnel's _fetch_sync.
+
+        Uses delayed market data (type 3, 15-min lag) — free on every IBKR
+        account, no per-feed subscription required. Fits the watch-list
+        framing of these signals perfectly. If the account has live
+        subscriptions, IB still returns live quotes.
+        """
         try:
             from ib_insync import Stock  # type: ignore[import]
             ib = self._sync_ensure_connected()
+
+            # 3 = delayed; falls through to live if a live subscription exists.
+            # Idempotent — safe to call on every quote.
+            try:
+                ib.reqMarketDataType(3)
+            except Exception:
+                pass
 
             contract = Stock(ticker, "SMART", "USD")
             if not ib.qualifyContracts(contract):
@@ -127,11 +140,15 @@ class IBClient:
                 return {}
 
             tk    = tickers_list[0]
-            last  = _safe_float(tk.last)
-            bid   = _safe_float(tk.bid)
-            ask   = _safe_float(tk.ask)
-            close = _safe_float(tk.close)
-            vol   = _safe_float(tk.volume)
+            # ib_insync exposes delayed quotes either on the main fields
+            # (ib_insync >= 0.9.86) or on dedicated delayed* fields. Check
+            # both so the same code works with whatever subscription tier
+            # the account has.
+            last  = _safe_float(tk.last)  or _safe_float(getattr(tk, "delayedLast", None))
+            bid   = _safe_float(tk.bid)   or _safe_float(getattr(tk, "delayedBid", None))
+            ask   = _safe_float(tk.ask)   or _safe_float(getattr(tk, "delayedAsk", None))
+            close = _safe_float(tk.close) or _safe_float(getattr(tk, "delayedClose", None))
+            vol   = _safe_float(tk.volume) or _safe_float(getattr(tk, "delayedVolume", None))
 
             # Best price: last → mid-point → previous close  (same logic as StockFunnel)
             price = (
@@ -265,10 +282,16 @@ class IBClient:
 
         VIX is published only during regular SPX option-trading hours
         (9:30am–4:15pm ET); outside that window IB returns the last close.
+        Uses delayed market data (type 3) — free on every IBKR account.
         """
         try:
             from ib_insync import Index  # type: ignore[import]
             ib = self._sync_ensure_connected()
+
+            try:
+                ib.reqMarketDataType(3)
+            except Exception:
+                pass
 
             contract = Index(symbol, exchange, currency)
             if not ib.qualifyContracts(contract):
@@ -281,8 +304,8 @@ class IBClient:
                 return {}
 
             tk    = tickers_list[0]
-            last  = _safe_float(tk.last)
-            close = _safe_float(tk.close)
+            last  = _safe_float(tk.last)  or _safe_float(getattr(tk, "delayedLast", None))
+            close = _safe_float(tk.close) or _safe_float(getattr(tk, "delayedClose", None))
             price = last or close
             if not price:
                 return {}

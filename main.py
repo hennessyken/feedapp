@@ -257,8 +257,43 @@ async def _run_analyze(
         await db.close()
 
 
+def _adaptive_poll_seconds(base: int) -> int:
+    """Cadence by US market state — match polling rate to source rhythm.
+
+    EDGAR / FDA / EMA / CT.gov all publish in bursts tied to US business
+    hours. Polling every 5 minutes overnight wastes API quota and produces
+    nothing new 99% of the time; polling every 5 minutes at market open
+    misses fresh filings by 4+ minutes on average.
+
+    Returns:
+      base // 3 during US regular market hours (9:30am-4pm ET, M-F)
+      base       during pre/after-market and weekday overnight 7am-8pm ET
+      base * 3   during weekend / late overnight 8pm-7am ET
+
+    Floor at 60s for any tier; ceiling at 1800s for the slowest.
+    """
+    try:
+        from zoneinfo import ZoneInfo
+        now_et = datetime.now(ZoneInfo("America/New_York"))
+    except Exception:
+        return base
+    if now_et.weekday() >= 5:
+        return min(1800, base * 3)
+    h, m = now_et.hour, now_et.minute
+    minutes_of_day = h * 60 + m
+    if 570 <= minutes_of_day <= 960:        # 9:30 - 16:00 ET → fast
+        return max(60, base // 3)
+    if 420 <= minutes_of_day <= 1200:       # 7:00 - 20:00 ET → normal
+        return base
+    return min(1800, base * 3)              # overnight → slow
+
+
 async def _run_continuous(config: RuntimeConfig) -> None:
-    logging.info("Continuous mode (poll every %ds)", config.poll_interval_seconds)
+    base = config.poll_interval_seconds
+    logging.info(
+        "Continuous mode (adaptive poll, base=%ds; market-hours fast / overnight slow)",
+        base,
+    )
     last_eod_date: Optional[str] = None
 
     # Create IB client once and reuse across all poll cycles
@@ -326,7 +361,8 @@ async def _run_continuous(config: RuntimeConfig) -> None:
         except Exception:
             logging.exception("Free-tier sweep failed")
 
-        await asyncio.sleep(max(1, config.poll_interval_seconds))
+        sleep_for = _adaptive_poll_seconds(config.poll_interval_seconds)
+        await asyncio.sleep(max(1, sleep_for))
 
 
 def main(argv: Optional[list[str]] = None) -> int:

@@ -346,12 +346,25 @@ _POLARITY_ARROW = {
 }
 
 
+def _esc(s: Any) -> str:
+    """HTML-escape any string for safe Telegram parse_mode='HTML'.
+
+    Catches '&', '<', '>' which are the characters that break HTML parsing.
+    Telegram rejects messages with a 400 error when these appear unescaped
+    inside what's supposed to be plain-text — common in company names like
+    "Loews & Co.", filings titled "<10% holder", merger captions, etc.
+    """
+    if s is None:
+        return ""
+    return html.escape(str(s), quote=False)
+
+
 def _polarity_header(signal: FormattedSignal) -> str:
     """First line of every post: badge + arrow + ticker + company."""
     badge = _POLARITY_BADGE.get(signal.polarity, "⚪ NEUTRAL")
     arrow = _POLARITY_ARROW.get(signal.polarity, "↔")
     company = getattr(signal, "company_name", "") or signal.ticker
-    return f"{badge}  {arrow}  {signal.ticker} — {company}"
+    return f"{badge}  {arrow}  {_esc(signal.ticker)} — {_esc(company)}"
 
 
 _API_BOT_HANDLE = {
@@ -404,15 +417,15 @@ def _format_telegram_message(
     """
     lines = [
         _polarity_header(signal),
-        signal.event.replace("_", " ").title(),
+        _esc(signal.event.replace("_", " ").title()),
         "",
     ]
     if macro_line:
-        lines.append(macro_line)
+        lines.append(macro_line)  # already built with our own HTML tags
         lines.append("")
     summary = human_text or signal.summary
     if summary:
-        lines.append(summary)
+        lines.append(_esc(summary))
         lines.append("")
 
     # ── Paid tiers: full detail ──────────────────────────────────────────
@@ -460,9 +473,9 @@ def _format_telegram_message(
         fund_lines = _format_fundamentals_block(fundamentals, reference_price=None)
         if fund_lines:
             lines.append("")
-            lines.append(f"🏢 <b>About {company}</b>")
+            lines.append(f"🏢 <b>About {_esc(company)}</b>")
             for fl in fund_lines:
-                lines.append(f"  {fl}")
+                lines.append(f"  {_esc(fl)}")
 
         # ── Source filing link — paid only ───────────────────────────────
         url = getattr(signal, "url", "") or ""
@@ -476,7 +489,7 @@ def _format_telegram_message(
 
     lines.append("")
     now_str = datetime.now(timezone.utc).strftime("%-d %b %Y  %H:%M UTC")
-    lines.append(f"Source: {signal.source}  |  {now_str}")
+    lines.append(f"Source: {_esc(signal.source)}  |  {now_str}")
     lines.append("")
     lines.append("⚠️ <b>Watch-list signal — not investment advice.</b>")
     lines.append(
@@ -518,7 +531,7 @@ def _format_free_tier_delayed_message(
     """
     lines = [
         _polarity_header(signal),
-        signal.event.replace("_", " ").title(),
+        _esc(signal.event.replace("_", " ").title()),
         "",
         "🔴 <b>24hr DELAYED FEED</b>",
         "",
@@ -527,7 +540,7 @@ def _format_free_tier_delayed_message(
     # Plain-English explanation first, deterministic summary as fallback.
     body = (human_text or "").strip() or signal.summary
     if body:
-        lines.append(body)
+        lines.append(_esc(body))
         lines.append("")
 
     # ── Signal quality — same section as paid ────────────────────────────
@@ -552,9 +565,9 @@ def _format_free_tier_delayed_message(
     )
     if fund_lines:
         lines.append("")
-        lines.append(f"🏢 <b>About {company}</b>")
+        lines.append(f"🏢 <b>About {_esc(company)}</b>")
         for fl in fund_lines:
-            lines.append(f"  {fl}")
+            lines.append(f"  {_esc(fl)}")
 
     # ── Upsell (replaces the filing link from paid posts) ─────────────────
     upsell_url = _UPSELL_LINKS.get(channel, _UPSELL_LINKS["sec"])
@@ -572,7 +585,7 @@ def _format_free_tier_delayed_message(
         ts_str = triggered_dt.strftime("%-d %b %Y  %H:%M UTC")
     except (ValueError, AttributeError):
         ts_str = raw_ts
-    lines.append(f"Source: {signal.source}  |  News detected {ts_str}")
+    lines.append(f"Source: {_esc(signal.source)}  |  News detected {_esc(ts_str)}")
     lines.append("")
     lines.append("⚠️ <b>24-hour delayed watch-list signal — not investment advice.</b>")
     lines.append(
