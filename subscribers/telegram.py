@@ -679,6 +679,27 @@ class TelegramSubscriber(BaseSubscriber):
                     except Exception:
                         pass
 
+                    # ── CRITICAL-impact FOMO stub ─────────────────────────
+                    # When a critical paid signal fires successfully, post a
+                    # bodyless teaser to the FREE channel immediately. Pure
+                    # curiosity-gap; designed as the strongest free→paid
+                    # conversion lever. Failures are logged but never block.
+                    if sent and getattr(formatted, "expected_impact", "").lower() == "critical":
+                        try:
+                            from notifier import send_critical_fomo_stub
+                            stub_result = await send_critical_fomo_stub(
+                                channel=channel,
+                                fundamentals=fundamentals,
+                                http=ctx.http,
+                            )
+                            if stub_result.get("sent"):
+                                logger.info(
+                                    "FOMO_STUB_FIRED: channel=%s for paid ticker=%s",
+                                    channel, ticker,
+                                )
+                        except Exception as e:
+                            logger.warning("FOMO stub failed: %s", e)
+
                     disposition = f"sent_{tier}" if sent else "dropped_send_failed"
                     await ctx.db.write_signal_log(
                         item_id=item.item_id,

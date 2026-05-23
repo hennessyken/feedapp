@@ -13,6 +13,7 @@ __pycache__/
 # Runtime output
 runs/
 *.log
+*.log.*
 
 # VS Code
 .vscode/

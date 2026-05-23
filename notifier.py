@@ -18,6 +18,7 @@ If no chat ID is configured for a tier, the call is a logged no-op.
 import html
 import logging
 import os
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
@@ -511,6 +512,52 @@ _UPSELL_LABELS: Dict[str, str] = {
 }
 
 
+_CAP_LABEL = {
+    "mega":  "mega cap",
+    "large": "large cap",
+    "mid":   "mid cap",
+    "small": "small cap",
+    "micro": "micro cap",
+}
+
+
+def _sector_cap_label(fundamentals: Optional[Dict[str, Any]]) -> str:
+    """Build a short 'Sector / size' line for the slim free-tier post.
+
+    Used to give free-tier readers just enough context to want the detail
+    without giving away the actual catalyst. Returns "" if we have nothing.
+    """
+    if not fundamentals:
+        return ""
+    sector = (fundamentals.get("sector") or "").strip()
+    cap_bucket = (fundamentals.get("cap_bucket") or "").strip()
+    cap_label = _CAP_LABEL.get(cap_bucket, "")
+    parts = [p for p in (sector, cap_label) if p]
+    return " / ".join(parts)
+
+
+_SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
+
+
+def _first_sentence(text: str, *, max_chars: int = 180) -> str:
+    """Take the first sentence of text, hard-capped at max_chars.
+
+    Used to slim the free-tier headline summary down to a one-liner that
+    teases the news without giving the full analysis.
+    """
+    s = (text or "").strip()
+    if not s:
+        return ""
+    # Split on sentence boundary, take first piece
+    parts = _SENTENCE_END.split(s, maxsplit=1)
+    head = parts[0].strip()
+    if len(head) > max_chars:
+        # Truncate at last word boundary before max_chars
+        cut = head[:max_chars].rsplit(" ", 1)[0]
+        head = cut + "…"
+    return head
+
+
 def _format_free_tier_delayed_message(
     signal: FormattedSignal,
     *,
@@ -520,80 +567,74 @@ def _format_free_tier_delayed_message(
     channel: str = "sec",
     human_text: str = "",
 ) -> str:
-    """Format the 24h-delayed free-tier post.
+    """Format the 24h-delayed free-tier post — slim by design.
 
-    Mirrors the paid message layout exactly, with one addition:
-      - A "24hr DELAYED FEED" banner after the event type.
+    Strategy: free tier sees ticker + company + 1-sentence summary, then a
+    clear upgrade CTA. No event_type classification, no impact rating, no
+    confidence %, no fundamentals — those are paid-tier value.
 
-    Uses only information already stored in the DB at paid-publish time.
-    No live prices, no external API calls.  The filing link is replaced
-    by an upsell link.
+    This shifts conversion pressure from pure time-delay (weak — info is
+    public) onto detail-gating (strong — analysis is unique). 24h delay
+    sets the timing anxiety; missing analysis creates the upgrade demand.
     """
-    lines = [
-        _polarity_header(signal),
-        _esc(signal.event.replace("_", " ").title()),
-        "",
-        "🔴 <b>24hr DELAYED FEED</b>",
-        "",
-    ]
-
-    # Plain-English explanation first, deterministic summary as fallback.
-    body = (human_text or "").strip() or signal.summary
-    if body:
-        lines.append(_esc(body))
-        lines.append("")
-
-    # ── Signal quality — same section as paid ────────────────────────────
-    freshness_plain = {
-        "early": "just published — you're seeing this as it happens",
-        "mid":   "published within the last day",
-        "late":  "published more than a day ago",
-    }.get(signal.latency_class, signal.latency_class or "")
-    conf_pct = int(float(signal.confidence or 0) * 100)
-    lines.append("📊 <b>Our read on this signal</b>")
-    lines.append(f"  Likely price impact: {_fmt_impact_explanation(signal.expected_impact)}")
-    lines.append(f"  How confident we are: {_fmt_confidence_explanation(conf_pct)}")
-    if freshness_plain:
-        lines.append(f"  How fresh: {freshness_plain}")
-    lines.append("")
-
-    # ── About the company — same block as paid ───────────────────────────
-    # Share price intentionally omitted (watch-list framing, not trading).
     company = getattr(signal, "company_name", "") or signal.ticker
-    fund_lines = _format_fundamentals_block(
-        fundamentals, reference_price=None,
-    )
-    if fund_lines:
-        lines.append("")
-        lines.append(f"🏢 <b>About {_esc(company)}</b>")
-        for fl in fund_lines:
-            lines.append(f"  {_esc(fl)}")
+    sector_line = _sector_cap_label(fundamentals)
 
-    # ── Upsell (replaces the filing link from paid posts) ─────────────────
-    upsell_url = _UPSELL_LINKS.get(channel, _UPSELL_LINKS["sec"])
-    upsell_label = _UPSELL_LABELS.get(channel, _UPSELL_LABELS["sec"])
-    lines.append("")
-    lines.append(f'🔓 Get the news the moment it happens: <a href="{upsell_url}">{upsell_label}</a>')
-    lines.append("🔑 Paid subscribers also get API access for their own tools and models.")
-    lines.append("")
-
-    # Footer — show the original trigger time so subscribers understand
-    # when the news was detected, not when this delayed post fired.
+    # Detected-at timestamp — frame as "yesterday" rather than absolute UTC
     raw_ts = flagged_at_iso or signal.timestamp or ""
     try:
         triggered_dt = datetime.fromisoformat(raw_ts.replace("Z", "+00:00"))
-        ts_str = triggered_dt.strftime("%-d %b %Y  %H:%M UTC")
+        hhmm = triggered_dt.strftime("%H:%M UTC")
     except (ValueError, AttributeError):
-        ts_str = raw_ts
-    lines.append(f"Source: {_esc(signal.source)}  |  News detected {_esc(ts_str)}")
+        hhmm = ""
+
+    # Just the first sentence of the LLM-generated explanation. If there's
+    # no human_text, fall back to the deterministic signal.summary trimmed
+    # the same way.
+    body = (human_text or "").strip() or (signal.summary or "")
+    one_sentence = _first_sentence(body)
+
+    upsell_url = _UPSELL_LINKS.get(channel, _UPSELL_LINKS["sec"])
+
+    lines = []
+    if hhmm:
+        lines.append(f"📰 <i>Yesterday at {_esc(hhmm)}</i>")
+        lines.append("")
+    lines.append(f"<b>${_esc(signal.ticker)}</b> — {_esc(company)}")
+    if sector_line:
+        lines.append(f"<i>{_esc(sector_line)}</i>")
     lines.append("")
-    lines.append("⚠️ <b>24-hour delayed watch-list signal — not investment advice.</b>")
+    if one_sentence:
+        lines.append(_esc(one_sentence))
+        lines.append("")
+    lines.append("This is yesterday's free feed.")
     lines.append(
-        "Treat as a research candidate only. By the time you see this on the "
-        "free feed, paid subscribers (and far ahead of them, institutional "
-        "traders) have already had a full day to react. Always do your own research."
+        f'🔓 <a href="{upsell_url}">Live alerts + full analysis →</a>'
     )
+    lines.append("")
+    lines.append("⚠️ Not investment advice. Always do your own research.")
     return "\n".join(lines)
+
+
+def format_critical_fomo_stub(channel: str, fundamentals: Optional[Dict[str, Any]] = None) -> str:
+    """Build the curiosity-gap stub posted to the FREE channel the moment a
+    CRITICAL-impact paid signal fires. No ticker, no event, no detail — just
+    sector hint + urgent upgrade CTA.
+
+    This is the strongest single conversion lever: every critical event
+    becomes an instant sales pitch to the free audience.
+    """
+    sector_line = _sector_cap_label(fundamentals) or "Unspecified sector"
+    upsell_url = _UPSELL_LINKS.get(channel, _UPSELL_LINKS["sec"])
+    return (
+        "🔒 <b>A CRITICAL signal just fired</b>\n"
+        "\n"
+        f"Sector: <i>{_esc(sector_line)}</i>\n"
+        "Detail withheld for paid subscribers.\n"
+        "This signal will be released to free in 24h.\n"
+        "\n"
+        f'⚡ <a href="{upsell_url}">Get it live →</a>'
+    )
 
 
 # ── Telegram API ──────────────────────────────────────────────────────────────
@@ -741,6 +782,51 @@ async def send_free_tier_delayed(
         result["sent"], result["message_id"] = ok, msg_id
         if ok:
             logger.info("FREE_DELAYED_SENT: ticker=%s msg_id=%s", signal.ticker, msg_id)
+        return result
+    finally:
+        if owns_client:
+            try:
+                await client.aclose()
+            except Exception:
+                pass
+
+
+async def send_critical_fomo_stub(
+    channel: Channel = "sec",
+    *,
+    fundamentals: Optional[Dict[str, Any]] = None,
+    http: Optional[httpx.AsyncClient] = None,
+) -> Dict[str, Any]:
+    """Post a 'CRITICAL signal just fired' teaser to the FREE channel.
+
+    Called right after a paid signal with expected_impact='critical' sends.
+    Strips ticker + event + body, leaves only sector + upgrade CTA. Pure
+    curiosity-gap. Returns {sent, channel, message_id}. Never raises.
+    """
+    token = _token(channel)
+    chat_id = _chat_id("free", channel)
+    result: Dict[str, Any] = {
+        "sent": False, "channel": channel, "chat_id": chat_id, "message_id": None,
+    }
+    if not token or not chat_id:
+        logger.info("FOMO_STUB_SKIPPED: channel=%s token=%s chat_id=%s",
+                    channel, bool(token), bool(chat_id))
+        return result
+
+    text = format_critical_fomo_stub(channel, fundamentals=fundamentals)
+    payload = {
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True,
+    }
+    owns_client = http is None
+    client = http or httpx.AsyncClient(timeout=_TIMEOUT_SECONDS)
+    try:
+        ok, msg_id = await _post(client, token, payload)
+        result["sent"], result["message_id"] = ok, msg_id
+        if ok:
+            logger.info("FOMO_STUB_SENT: channel=%s msg_id=%s", channel, msg_id)
         return result
     finally:
         if owns_client:
