@@ -8,6 +8,7 @@ just wrapped as a subscriber for the fan-out model.
 
 import asyncio
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -25,6 +26,37 @@ from feeds.base import FeedResult
 from pipeline import PipelineConfig, _extract_ticker_from_row, _resolve_ticker_llm, _us_market_open
 
 logger = logging.getLogger(__name__)
+
+_TICKER_RE = re.compile(r"[A-Z]{1,5}(?:\.[A-Z])?")
+
+# Legal-form / filler words that match the ticker regex but are never real
+# US tickers — they slip in when a symbol is mis-extracted from a company
+# name (e.g. "Acme, Inc." -> "INC", which was posted to a paid channel on
+# 2026-05-13). Kept deliberately NARROW: 2-letter forms like AG (First
+# Majestic), SE (Sea Ltd) and DE (Deere) ARE real tickers, so they are not
+# listed. domain.py::_STOP_TOKENS is the broader name-token strip set and is
+# wrong to reuse here for exactly that reason.
+_NON_TICKER_WORDS = frozenset({
+    "INC", "CORP", "LTD", "PLC", "LLC", "THE", "GROUP", "AND",
+    "NV", "BV", "OY", "KK", "SPA", "SL", "KG", "PT",
+})
+
+
+def _valid_ticker(t: Optional[str]) -> bool:
+    """True if `t` looks like a real ticker (1-5 letters, optional .CLASS).
+
+    Rejects empties, UNKNOWN-prefixed sentinels, and legal-form words that
+    pass the regex but are never tickers. Module-level and pure so the test
+    suite imports the *real* function (tests/test_ticker_validation.py).
+    """
+    if not t:
+        return False
+    u = t.upper().strip()
+    if u.startswith("UNKNOWN"):
+        return False
+    if u in _NON_TICKER_WORDS:
+        return False
+    return bool(_TICKER_RE.fullmatch(u))
 
 
 class TelegramSubscriber(BaseSubscriber):
@@ -121,17 +153,6 @@ class TelegramSubscriber(BaseSubscriber):
                 # by .X for share class, e.g. BRK.B). Reject LLM/cache
                 # placeholders like UNKNOWN_COMPANY_NAME so FDA items without
                 # a real ticker are not published.
-                import re as _re
-                _TICKER_RE = _re.compile(r"[A-Z]{1,5}(?:\.[A-Z])?")
-
-                def _valid_ticker(t: str) -> bool:
-                    if not t:
-                        return False
-                    u = t.upper().strip()
-                    if u.startswith("UNKNOWN"):
-                        return False
-                    return bool(_TICKER_RE.fullmatch(u))
-
                 ticker_source = "none"
                 if ticker and _valid_ticker(ticker):
                     ticker_source = "metadata"

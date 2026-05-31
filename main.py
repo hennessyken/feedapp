@@ -4,8 +4,7 @@ from __future__ import annotations
 
 Usage:
   python main.py --once           # single poll cycle (feeds + LLM + Telegram)
-  python main.py --continuous     # poll forever (auto EOD at 3:50 PM ET)
-  python main.py --eod            # end-of-day sell price check only
+  python main.py --continuous     # poll forever
 """
 
 import argparse
@@ -32,7 +31,6 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     mode = p.add_mutually_exclusive_group()
     mode.add_argument("--once", action="store_true", help="Run a single poll cycle and exit (default).")
     mode.add_argument("--continuous", action="store_true", help="Poll continuously.")
-    mode.add_argument("--eod", action="store_true", help="Run end-of-day sell price check and exit.")
     mode.add_argument("--backtest", action="store_true", help="Run historical backtest.")
     mode.add_argument("--analyze", action="store_true", help="Run strategy analyzer (collect + optimize).")
     p.add_argument("--from", dest="from_date", default=None, help="Backtest start date (YYYY-MM-DD).")
@@ -103,33 +101,6 @@ async def _run_once(config: RuntimeConfig) -> None:
     pipeline = _build_pipeline(config)
     stats = await pipeline.run()
     logging.info("Run stats:\n%s", json.dumps(stats, indent=2))
-
-
-async def _run_eod(config: RuntimeConfig) -> None:
-    """One-shot end-of-day sell price check."""
-    from zoneinfo import ZoneInfo
-    from db import FeedDatabase
-    from eod_checker import EODPriceChecker
-
-    ib = _make_ib_client(config)
-    if ib is None:
-        logging.error("EOD check requires IB_ENABLED=true and IB Gateway running")
-        return
-
-    today_et = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
-    db = FeedDatabase(config.db_path)
-
-    await db.connect()
-    try:
-        await ib.connect()
-        checker = EODPriceChecker(db, ib)
-        stats = await checker.run(today_et)
-        logging.info("EOD stats:\n%s", json.dumps(stats, indent=2))
-    except Exception:
-        logging.exception("EOD check failed")
-    finally:
-        await ib.disconnect()
-        await db.close()
 
 
 async def _run_backtest(
@@ -294,7 +265,6 @@ async def _run_continuous(config: RuntimeConfig) -> None:
         "Continuous mode (adaptive poll, base=%ds; market-hours fast / overnight slow)",
         base,
     )
-    last_eod_date: Optional[str] = None
 
     # Create IB client once and reuse across all poll cycles
     ib_client = _make_ib_client(config)
@@ -325,20 +295,6 @@ async def _run_continuous(config: RuntimeConfig) -> None:
             )
         except Exception:
             logging.exception("Poll cycle failed")
-
-        # Auto EOD sell-price check at 3:49-3:55 PM ET
-        if config.ib_enabled:
-            try:
-                from zoneinfo import ZoneInfo
-                now_et = datetime.now(ZoneInfo("America/New_York"))
-                today_str = now_et.strftime("%Y-%m-%d")
-                if (now_et.hour == 15 and 49 <= now_et.minute <= 55
-                        and last_eod_date != today_str):
-                    logging.info("Triggering automatic EOD sell-price check")
-                    await _run_eod(config)
-                    last_eod_date = today_str
-            except Exception:
-                logging.exception("Auto EOD check failed")
 
         # Free-tier delayed-release sweep: capture 1h/24h price milestones
         # and emit 24h-old queued posts to the free channel.
@@ -375,8 +331,6 @@ def main(argv: Optional[list[str]] = None) -> int:
             asyncio.run(_run_analyze(config, args.from_date, args.to_date))
         elif args.backtest:
             asyncio.run(_run_backtest(config, args.from_date, args.to_date, args.llm))
-        elif args.eod:
-            asyncio.run(_run_eod(config))
         elif args.continuous:
             asyncio.run(_run_continuous(config))
         else:

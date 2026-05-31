@@ -1,23 +1,11 @@
 """Tests for the ticker validation logic in subscribers/telegram.py.
 
-The helper is defined locally inside `TelegramSubscriber.process` so we
-reconstruct it here from the same regex — if the production regex changes,
-this test file must mirror it.
+Imports the REAL `_valid_ticker` (now module-level) so this suite actually
+locks production behaviour — previously it reimplemented the function, so the
+test passed while the live gate had a hole (legal-form words like "INC"
+slipping through and being posted as $INC).
 """
-import re
-
-
-# Mirror of the regex used in subscribers/telegram.py::process
-_TICKER_RE = re.compile(r"[A-Z]{1,5}(?:\.[A-Z])?")
-
-
-def _valid_ticker(t: str) -> bool:
-    if not t:
-        return False
-    u = t.upper().strip()
-    if u.startswith("UNKNOWN"):
-        return False
-    return bool(_TICKER_RE.fullmatch(u))
+from subscribers.telegram import _valid_ticker
 
 
 # ── Valid tickers ─────────────────────────────────────────────────────────
@@ -86,3 +74,21 @@ def test_reject_three_part_dotted():
 
 def test_reject_empty_dot_suffix():
     assert not _valid_ticker("AAPL.")
+
+
+# ── Legal-form / filler words that match the regex but aren't tickers ──────
+
+def test_reject_corp_suffix_inc():
+    # The 2026-05-13 regression: "Acme, Inc." -> "INC" -> posted as $INC.
+    assert not _valid_ticker("INC")
+
+
+def test_reject_other_corp_suffixes():
+    for w in ("CORP", "LTD", "PLC", "LLC", "THE", "GROUP"):
+        assert not _valid_ticker(w), w
+
+
+def test_still_accepts_two_letter_real_tickers():
+    # These ARE real tickers and must NOT be caught by the blocklist.
+    for w in ("DE", "SE", "AG", "F"):
+        assert _valid_ticker(w), w
