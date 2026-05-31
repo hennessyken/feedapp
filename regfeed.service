@@ -7,7 +7,9 @@ Wants=network-online.target
 Type=simple
 User=ken
 WorkingDirectory=/home/ken/Regfeed
-EnvironmentFile=/home/ken/Regfeed/.env
+# .env is loaded by the app itself (config.py → python-dotenv, absolute path),
+# exactly as the manual nohup did — so no EnvironmentFile= line is needed, and
+# the unit can't be broken by future .env shell-isms (quotes/spaces/export).
 ExecStart=/home/ken/Regfeed/.venv/bin/python main.py --continuous
 Restart=always
 RestartSec=10
