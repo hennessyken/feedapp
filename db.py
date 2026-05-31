@@ -1171,9 +1171,15 @@ class FeedDatabase:
         self, *, milestone: str, min_age_hours: float,
     ) -> List[Dict[str, Any]]:
         """Return flagged signals whose price_{milestone} hasn't been captured yet
-        and whose age since flag is at least min_age_hours.
+        and whose age since flag is between min_age_hours and 48h.
 
         Only returns items that have a ticker and a price_at_flag_at timestamp.
+
+        The 48h ceiling matters: without it, every row that never captured
+        (bogus/delisted ticker, repeated fetch failures) was re-queried every
+        sweep forever — ~260 dead rows + the $INC contract error each cycle.
+        It also prevents recording a wildly-stale "now" price as the 1h/24h
+        value when a row is picked up days late.
         """
         assert self._db
         if milestone not in ("1h", "24h"):
@@ -1186,6 +1192,7 @@ class FeedDatabase:
                   AND price_at_flag_at IS NOT NULL
                   AND {col_price} IS NULL
                   AND (julianday('now') - julianday(price_at_flag_at)) * 24.0 >= ?
+                  AND (julianday('now') - julianday(price_at_flag_at)) * 24.0 < 48.0
                 ORDER BY price_at_flag_at""",
             (float(min_age_hours),),
         )
