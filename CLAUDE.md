@@ -2,11 +2,16 @@
 
 Continuous-mode regulatory-signal bot. Polls SEC EDGAR, FDA (press + openFDA), EMA, and ClinicalTrials.gov; detects material market-moving "catalyst" events; screens them (keyword screen → LLM "Sentry"); formats plain-English posts; and fans them out to tiered Telegram channels (+ an optional Interactive Brokers trader).
 
-It is the **data engine** behind two products:
+It is the **data engine** behind two **investment** products:
 - **Catalyst Wire SEC** — `sec.catalystwire.org` (site :8011) · 2-tier (Free / Premium) · $29/mo · $290/yr
-- **Catalyst Wire FDA** — `fda.catalystwire.org` (site :8013) · 3-tier (Free / Plus / Pro) · $39/mo · $390/yr (bundles FDA + ClinicalTrials.gov + EMA)
+- **Catalyst Wire FDA** — `fda.catalystwire.org` (site :8013) · 2-tier (Free / Premium) · $39/mo · $390/yr (FDA + ClinicalTrials.gov + EMA, framed as stock catalysts)
 
 Each product has its own marketing site, Stripe billing, Telegram channels, and a (scaffolded) Play Store app.
+
+> **⚠️ Product boundary — no cross-contamination of purpose (owner directive, 2026-06):**
+> **SEC and FDA are both STOCK/investment apps** — ticker-first, severity bands, impact/confidence/fundamentals, 2-tier Free/Premium, 3-tab nav (Feed/Saved/Settings). `cw-fda-app` is now a structural clone of `cw-sec-app` (only identity differs: name, package, `fda.catalystwire.org`, FDA/EMA/ClinicalTrials source labels, FDA filter chips Approval/Trial/Regulatory/Setback). Verify with `diff <(cd cw-fda-app && find app src -name '*.ts*'|sort) <(cd cw-sec-app && find app src -name '*.ts*'|sort)` → identical file set.
+> **Disease/drug browsing (disease search, ~20yr archive, drug-info detail, "not medical advice", 3-tier Plus/Pro) belongs to Dossier/Pharmacy, NOT the FDA app.** It was removed from `cw-fda-app` (deleted `app/(tabs)/search.tsx`, `app/disease/`, `app/drug/`, `DrugCard.tsx`; reverted api/purchases/theme/SavedContext to SEC's). Do NOT reintroduce it here. The same Regfeed feed can power both — just keep the *presentation purpose* separate.
+> **Still on the FDA side and needing the same decoupling (TODO):** `cw-fda-site` `/v1/diseases` + `/v1/search` endpoints and its 3-tier Plus/Pro Stripe billing — those are Dossier/Pharmacy concerns.
 
 > **The post stream IS the product.** Optimise for *volume + perceived value of posts*, not trade edge — the owner is not trading off it. Don't over-filter.
 >
