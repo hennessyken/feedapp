@@ -9,8 +9,11 @@ from pathlib import Path
 from test_helpers import log_test_context
 
 # infrastructure.py imports config.RuntimeConfig at module level; the config
-# module may not exist in every worktree.  Stub it so the import succeeds.
-if "config" not in sys.modules:
+# module may not exist in every worktree. Prefer the REAL module — the old
+# unconditional stub poisoned sys.modules["config"] for later tests.
+try:
+    import config  # noqa: F401 — real module
+except ImportError:
     _cfg = types.ModuleType("config")
     _cfg.RuntimeConfig = type("RuntimeConfig", (), {})  # type: ignore[attr-defined]
     sys.modules["config"] = _cfg

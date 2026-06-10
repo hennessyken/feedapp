@@ -219,22 +219,24 @@ def check_yfinance(report: Report) -> None:
 
 
 def check_systemd_service(report: Report) -> None:
+    # SYSTEM unit since 2026-06-10 (was a user unit before — see CLAUDE.md
+    # gotcha #5). `is-active` and journal reads need no sudo for ken.
     try:
         out = subprocess.run(
-            ["systemctl", "--user", "is-active", "regfeed.service"],
+            ["systemctl", "is-active", "regfeed.service"],
             capture_output=True, text=True, timeout=5,
         )
         if out.stdout.strip() == "active":
             # Get last cycle info from journalctl
             jc = subprocess.run(
-                ["journalctl", "--user", "-u", "regfeed.service",
+                ["journalctl", "-u", "regfeed.service",
                  "--since", "30 minutes ago", "--no-pager", "--reverse"],
                 capture_output=True, text=True, timeout=5,
             )
             last_cycle = "no cycle seen in last 30 min"
             for line in jc.stdout.splitlines():
-                if "Cycle complete" in line:
-                    last_cycle = line[line.index("Cycle"):]
+                if "CYCLE_JSON" in line:
+                    last_cycle = line[line.index("CYCLE_JSON"):]
                     break
             report.add("Pipeline service", "ok", f"active\n{last_cycle}")
         else:

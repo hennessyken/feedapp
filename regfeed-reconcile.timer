@@ -1,5 +1,7 @@
 [Unit]
-Description=Regfeed — nightly API key membership reconcile
+Description=Regfeed — nightly API-key membership reconcile
+# 03:30 UTC: deliberately BEFORE the site-repo Stripe reconcile crons
+# (04:05 / 04:15 UTC) so the two mechanisms never overlap.
 Requires=regfeed-reconcile.service
 
 [Timer]

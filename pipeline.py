@@ -12,12 +12,14 @@ Full pipeline:
 
 import asyncio
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import httpx
 
 from db import FeedDatabase
+from ops_alerts import send_ops_alert_async
 from spend_tracker import SpendTracker
 from domain import KeywordScreener
 from feeds.base import BaseFeedAdapter, FeedResult
@@ -28,6 +30,73 @@ from feeds.clinical_trials import ClinicalTrialsFeedAdapter
 from subscribers.base import BaseSubscriber, SubscriberContext
 
 logger = logging.getLogger(__name__)
+
+# ── Feed-outage watchdog (module-level: FeedPipeline is rebuilt per cycle) ────
+#
+# _safe_fetch logs-and-swallows feed failures so one broken feed can't kill
+# the cycle — but that also means a feed outage looks exactly like a quiet
+# news day. Track consecutive failures per feed and total fetch silence
+# across ALL feeds; alert the ops chat (silently no-ops without ops creds).
+#
+# The silence window defaults to 24h because individual feeds (and weekends)
+# are legitimately quiet for many hours. Set PIPELINE_SILENCE_ALERT_HOURS=0
+# to disable.
+_FEED_FAILURE_ALERT_THRESHOLD = 3
+
+_feed_failure_streaks: Dict[str, int] = {}
+_last_nonzero_fetch_at: Optional[datetime] = None
+_silence_alerted: bool = False
+
+
+def _silence_alert_hours() -> float:
+    try:
+        return float(os.getenv("PIPELINE_SILENCE_ALERT_HOURS", "24") or 24)
+    except (TypeError, ValueError):
+        return 24.0
+
+
+async def _note_feed_failure(name: str, error: Exception) -> None:
+    """Record a feed failure; alert ops once the streak hits the threshold."""
+    streak = _feed_failure_streaks.get(name, 0) + 1
+    _feed_failure_streaks[name] = streak
+    if streak == _FEED_FAILURE_ALERT_THRESHOLD:
+        await send_ops_alert_async(
+            f"REGFEED FEED OUTAGE: '{name}' has failed {streak} cycles in a "
+            f"row. Last error: {type(error).__name__}: {str(error)[:300]}\n"
+            f"Failures are swallowed per-feed, so the post stream just goes "
+            f"quiet — check the regfeed.service journal."
+        )
+
+
+def _note_feed_success(name: str) -> None:
+    """Reset the failure streak (log recovery if we had alerted)."""
+    streak = _feed_failure_streaks.pop(name, 0)
+    if streak >= _FEED_FAILURE_ALERT_THRESHOLD:
+        logger.info("Feed %s recovered after %d consecutive failures", name, streak)
+
+
+async def _check_fetch_silence(total_fetched: int) -> None:
+    """Alert once if NO feed has returned any item for the silence window."""
+    global _last_nonzero_fetch_at, _silence_alerted
+    now = datetime.now(timezone.utc)
+    if total_fetched > 0:
+        _last_nonzero_fetch_at = now
+        _silence_alerted = False
+        return
+    if _last_nonzero_fetch_at is None:
+        _last_nonzero_fetch_at = now  # start the clock on first cycle
+        return
+    hours = _silence_alert_hours()
+    if hours <= 0 or _silence_alerted:
+        return
+    silent_h = (now - _last_nonzero_fetch_at).total_seconds() / 3600.0
+    if silent_h >= hours:
+        _silence_alerted = True
+        await send_ops_alert_async(
+            f"REGFEED SILENT: no feed has returned a single item for "
+            f"{silent_h:.1f}h (threshold {hours:.0f}h). Either every source "
+            f"is down or fetching is broken — this is NOT a normal quiet day."
+        )
 
 
 def _extract_ticker_from_row(item: Dict[str, Any]) -> str:
@@ -387,6 +456,9 @@ class FeedPipeline:
             else:
                 logger.info("No relevant items to analyze")
 
+        # Outage watchdog: total silence across all feeds for too long → alert
+        await _check_fetch_silence(stats["total_fetched"])
+
         elapsed = (datetime.now(timezone.utc) - started).total_seconds()
         stats["elapsed_seconds"] = round(elapsed, 2)
         stats["finished_at"] = datetime.now(timezone.utc).isoformat()
@@ -480,11 +552,18 @@ class FeedPipeline:
     async def _safe_fetch(
         self, adapter: BaseFeedAdapter, name: str
     ) -> List[FeedResult]:
-        """Fetch with error isolation — one feed failure doesn't kill others."""
+        """Fetch with error isolation — one feed failure doesn't kill others.
+
+        Failures are tracked per feed (module-level) so a persistent outage
+        raises an ops alert instead of silently looking like a quiet day.
+        """
         try:
-            return await adapter.fetch()
+            results = await adapter.fetch()
+            _note_feed_success(name)
+            return results
         except Exception as e:
             logger.error("Feed %s failed: %s", name, e)
+            await _note_feed_failure(name, e)
             return []
 
     async def _enrich_edgar(

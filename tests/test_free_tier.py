@@ -95,26 +95,37 @@ async def test_broadcast_noop_outside_window():
     db.get_pending_free_tier.assert_not_awaited()
 
 
+def _make_db(rows):
+    """MagicMock FeedDatabase with the async methods the broadcast loop uses."""
+    db = MagicMock()
+    db.get_pending_free_tier = AsyncMock(return_value=rows)
+    db.get_fundamentals = AsyncMock(return_value=None)
+    db.claim_free_tier = AsyncMock(return_value=True)
+    db.release_free_tier_claim = AsyncMock()
+    db.mark_free_tier_sent = AsyncMock()
+    return db
+
+
 @pytest.mark.asyncio
 async def test_broadcast_skips_items_without_ticker():
-    db = MagicMock()
-    db.get_pending_free_tier = AsyncMock(return_value=[
+    db = _make_db([
         {"ticker": "", "item_id": "x"},
         {"ticker": None, "item_id": "y"},
     ])
-    db.mark_free_tier_sent = AsyncMock()
-    db.get_fundamentals = AsyncMock(return_value=None)
 
     with patch("free_tier._in_delivery_window", return_value=True):
         result = await broadcast_pending_free_tier(db)
 
     assert result["broadcast"] == 0
     assert result["skipped"] == 2
+    db.claim_free_tier.assert_not_awaited()
     db.mark_free_tier_sent.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_broadcast_fetches_current_price_and_sends():
+async def test_broadcast_claims_then_sends_db_stored_data():
+    """Claim-before-send (at-most-once) with all fields read from the DB row —
+    no live price lookups in the broadcast path."""
     row = {
         "ticker": "ACME",
         "item_id": "abc123",
@@ -128,32 +139,59 @@ async def test_broadcast_fetches_current_price_and_sends():
         "price_at_flag": 10.0,
         "price_at_flag_at": "2026-04-21T12:00:00Z",
         "published_at": "2026-04-21T11:00:00Z",
+        "telegram_sent_at": "2026-04-21T12:00:00Z",
         "human_text": "Plain-English summary.",
     }
-    db = MagicMock()
-    db.get_pending_free_tier = AsyncMock(return_value=[row])
-    db.get_fundamentals = AsyncMock(return_value=None)
-    db.mark_free_tier_sent = AsyncMock()
+    db = _make_db([row])
+    call_order = []
+    db.claim_free_tier = AsyncMock(
+        side_effect=lambda *_a, **_k: call_order.append("claim") or True)
 
-    fake_send = AsyncMock(return_value={"sent": True, "message_id": 42})
+    fake_send = AsyncMock(
+        side_effect=lambda *_a, **_k: call_order.append("send")
+        or {"sent": True, "message_id": 42})
 
     with patch("free_tier._in_delivery_window", return_value=True), \
-         patch("free_tier.send_free_tier_delayed", fake_send), \
-         patch("price_history.get_current_price", AsyncMock(return_value=11.0)):
+         patch("free_tier.send_free_tier_delayed", fake_send):
         result = await broadcast_pending_free_tier(db)
 
     assert result == {"broadcast": 1, "skipped": 0}
-    # Verify current price was passed (not a captured 24h-after price)
+    # Claim must happen BEFORE the Telegram send (idempotency, finding #11)
+    assert call_order == ["claim", "send"]
     kwargs = fake_send.await_args.kwargs
-    assert kwargs["price_now"] == 11.0
     assert kwargs["price_at_flag"] == 10.0
     assert kwargs["channel"] == "sec"  # M_A on edgar → sec
     assert kwargs["human_text"] == "Plain-English summary."
+    assert kwargs["flagged_at_iso"] == "2026-04-21T12:00:00Z"
     db.mark_free_tier_sent.assert_awaited_once_with("abc123", message_id=42)
+    db.release_free_tier_claim.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_broadcast_handles_send_failure_gracefully():
+async def test_broadcast_skips_row_claimed_by_another_process():
+    """If the atomic claim is lost (duplicate process raced us), do NOT send."""
+    row = {
+        "ticker": "ACME", "item_id": "abc123",
+        "feed_source": "edgar", "event_type": "M_A",
+        "impact_score": 75, "confidence": 80, "polarity": "positive",
+        "rationale": "event_type=M_A",
+    }
+    db = _make_db([row])
+    db.claim_free_tier = AsyncMock(return_value=False)
+
+    fake_send = AsyncMock()
+
+    with patch("free_tier._in_delivery_window", return_value=True), \
+         patch("free_tier.send_free_tier_delayed", fake_send):
+        result = await broadcast_pending_free_tier(db)
+
+    assert result == {"broadcast": 0, "skipped": 1}
+    fake_send.assert_not_awaited()
+    db.mark_free_tier_sent.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_broadcast_releases_claim_on_send_failure():
     row = {
         "ticker": "ACME", "item_id": "z",
         "feed_source": "fda", "event_type": "REGULATORY_DECISION",
@@ -161,18 +199,42 @@ async def test_broadcast_handles_send_failure_gracefully():
         "price_at_flag": 10.0, "price_at_flag_at": "2026-04-21T12:00:00Z",
         "rationale": "event_type=REGULATORY_DECISION",
     }
-    db = MagicMock()
-    db.get_pending_free_tier = AsyncMock(return_value=[row])
-    db.get_fundamentals = AsyncMock(return_value=None)
-    db.mark_free_tier_sent = AsyncMock()
+    db = _make_db([row])
 
     fake_send = AsyncMock(return_value={"sent": False})
 
     with patch("free_tier._in_delivery_window", return_value=True), \
-         patch("free_tier.send_free_tier_delayed", fake_send), \
-         patch("price_history.get_current_price", AsyncMock(return_value=None)):
+         patch("free_tier.send_free_tier_delayed", fake_send):
         result = await broadcast_pending_free_tier(db)
 
     assert result["broadcast"] == 0
     assert result["skipped"] == 1
+    # Claim released so the next sweep retries this row
+    db.release_free_tier_claim.assert_awaited_once_with("z")
     db.mark_free_tier_sent.assert_not_awaited()
+
+
+# ── claim_free_tier / release_free_tier_claim (real temp DB) ───────────────
+
+@pytest.mark.asyncio
+async def test_claim_free_tier_is_atomic_and_releasable(tmp_path):
+    from db import FeedDatabase
+
+    db = FeedDatabase(str(tmp_path / "claim.db"))
+    await db.connect()
+    try:
+        await db._db.execute(
+            "INSERT INTO feed_items (item_id, feed_source, title, url, "
+            "published_at, created_at, status, free_tier_sent) "
+            "VALUES ('c1', 'edgar', 't', 'http://x', "
+            "'2026-06-09T12:00:00Z', '2026-06-09T12:00:00Z', 'relevant', 0)",
+        )
+        await db._db.commit()
+
+        assert await db.claim_free_tier("c1") is True     # first claim wins
+        assert await db.claim_free_tier("c1") is False    # second loses
+
+        await db.release_free_tier_claim("c1")
+        assert await db.claim_free_tier("c1") is True     # claimable again
+    finally:
+        await db.close()

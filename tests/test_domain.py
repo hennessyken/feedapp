@@ -152,17 +152,19 @@ class TestKeywordScreener:
         assert result.event_category == "MATERIAL_CONTRACT"
         assert not result.vetoed
 
-    # -- LOW tier ----------------------------------------------------------
+    # -- Management change (MEDIUM tier — was LOW before the 8-K item map) --
 
     def test_low_ceo_appointment(self):
+        # "ceo appointment" lives in the MEDIUM tier (30 pts) — management
+        # changes map to 8-K item 5.02, a material event, not LOW-tier noise.
         log_test_context("test_low_ceo_appointment",
                          input={"title": "Board announces ceo appointment"},
-                         expected={"score": 15, "category": "MANAGEMENT_CHANGE"})
+                         expected={"score": 30, "category": "MANAGEMENT_CHANGE"})
         result = self.screener.screen("Board announces ceo appointment")
         log_test_context("test_low_ceo_appointment",
                          result={"score": result.score, "category": result.event_category},
-                         passed=(result.score == 15 and result.event_category == "MANAGEMENT_CHANGE"))
-        assert result.score == 15
+                         passed=(result.score == 30 and result.event_category == "MANAGEMENT_CHANGE"))
+        assert result.score == 30
         assert result.event_category == "MANAGEMENT_CHANGE"
         assert not result.vetoed
 
@@ -171,13 +173,13 @@ class TestKeywordScreener:
     def test_amplifier_material_adds_5(self):
         log_test_context("test_amplifier_material_adds_5",
                          input={"title": "Material ceo appointment announced"},
-                         expected={"score": 20})
+                         expected={"score": 35})
         result = self.screener.screen("Material ceo appointment announced")
-        # LOW(15) + amplifier "material" in title(5) = 20
+        # MEDIUM(30) + amplifier "material" in title(5) = 35
         log_test_context("test_amplifier_material_adds_5",
                          result={"score": result.score},
-                         passed=(result.score == 20))
-        assert result.score == 20
+                         passed=(result.score == 35))
+        assert result.score == 35
         assert "amp:material" in result.matched_keywords
 
     def test_amplifier_cap_max_10(self):
@@ -187,14 +189,14 @@ class TestKeywordScreener:
         result = self.screener.screen(
             "Major significant substantial unprecedented record ceo appointment"
         )
-        # LOW(15) + amplifiers capped at 10 = 25
+        # MEDIUM(30) + amplifiers capped at 10 = 40
         amp_keywords = [kw for kw in result.matched_keywords if kw.startswith("amp:")]
         amp_pts = len(amp_keywords) * 5
         log_test_context("test_amplifier_cap_max_10",
                          result={"score": result.score, "amp_count": len(amp_keywords)},
                          passed=(amp_pts <= 10))
         assert amp_pts <= 10
-        assert result.score == 25  # 15 (LOW) + 10 (max amp)
+        assert result.score == 40  # 30 (MEDIUM) + 10 (max amp)
 
     # -- VETO --------------------------------------------------------------
 
@@ -508,6 +510,12 @@ class TestDeterministicEventScorer:
     def setup_method(self):
         self.scorer = DeterministicEventScorer()
 
+    # NOTE: scorer applies magnitude/novelty/certainty adjustments with
+    # non-neutral DEFAULTS (novelty=first_disclosure +5/+5, certainty=
+    # confirmed +5/+5). Tests pass explicit neutral values so the base
+    # table + span adjustments are tested in isolation.
+    _NEUTRAL = {"magnitude": "moderate", "novelty": "update", "certainty": "expected"}
+
     def test_guidance_raise_3_evidence_spans(self):
         log_test_context("test_guidance_raise_3_evidence_spans",
                          input={"event_type": "GUIDANCE_RAISE", "spans": 3},
@@ -515,6 +523,7 @@ class TestDeterministicEventScorer:
         extraction = {
             "event_type": "GUIDANCE_RAISE",
             "evidence_spans": ["span1", "span2", "span3"],
+            **self._NEUTRAL,
         }
         result = self.scorer.score(
             extraction=extraction,
@@ -538,6 +547,7 @@ class TestDeterministicEventScorer:
         extraction = {
             "event_type": "EARNINGS_BEAT",
             "evidence_spans": ["only one"],
+            **self._NEUTRAL,
         }
         result = self.scorer.score(
             extraction=extraction,
@@ -559,6 +569,7 @@ class TestDeterministicEventScorer:
         extraction = {
             "event_type": "EARNINGS_BEAT",
             "evidence_spans": ["a", "b", "c", "d", "e"],
+            **self._NEUTRAL,
         }
         result = self.scorer.score(
             extraction=extraction,
@@ -573,12 +584,18 @@ class TestDeterministicEventScorer:
         assert result.confidence == 75  # 70 + 5
 
     def test_zero_evidence_spans_ignore(self):
+        # BEHAVIOR CHANGE (deliberate): the batch-mode ranker strips
+        # evidence_spans to save tokens, so an EMPTY list is now treated as
+        # neutral (no confidence adjustment) instead of a hard "ignore".
+        # Only a MISSING/non-list evidence_spans with no keyword_score falls
+        # back to ignore (see test_missing_evidence_spans_keyword_path).
         log_test_context("test_zero_evidence_spans_ignore",
                          input={"event_type": "GUIDANCE_RAISE", "spans": 0},
-                         expected={"action": "ignore"})
+                         expected={"action": "trade", "impact": 80})
         extraction = {
             "event_type": "GUIDANCE_RAISE",
             "evidence_spans": [],
+            **self._NEUTRAL,
         }
         result = self.scorer.score(
             extraction=extraction,
@@ -588,10 +605,10 @@ class TestDeterministicEventScorer:
         )
         log_test_context("test_zero_evidence_spans_ignore",
                          result={"action": result.action, "confidence": result.confidence},
-                         passed=(result.action == "ignore"))
-        assert result.action == "ignore"
-        assert result.confidence == 0
-        assert result.impact_score == 10
+                         passed=(result.action == "trade"))
+        assert result.action == "trade"
+        assert result.confidence == 75   # base conf, no span adjustment
+        assert result.impact_score == 80
 
     def test_missing_evidence_spans_keyword_path(self):
         log_test_context("test_missing_evidence_spans_keyword_path",
@@ -710,6 +727,7 @@ class TestDeterministicEventScorer:
         extraction = {
             "event_type": "COMPLETELY_UNKNOWN",
             "evidence_spans": ["x", "y"],
+            **self._NEUTRAL,
         }
         result = self.scorer.score(
             extraction=extraction,
@@ -734,14 +752,16 @@ class TestFreshnessDecay:
     """Tests for freshness_decay()."""
 
     def test_none_returns_floor(self):
+        # Unknown age now returns 0.80 (not the 0.20 floor) — valid signals
+        # with unparseable dates were being silently downranked.
         log_test_context("test_none_returns_floor",
                          input={"age_hours": None},
-                         expected={"result": 0.20})
+                         expected={"result": 0.80})
         result = freshness_decay(None)
         log_test_context("test_none_returns_floor",
                          result={"value": result},
-                         passed=(result == 0.20))
-        assert result == 0.20
+                         passed=(result == 0.80))
+        assert result == 0.80
 
     def test_zero_returns_one(self):
         log_test_context("test_zero_returns_one",
@@ -786,14 +806,15 @@ class TestFreshnessDecay:
         assert result == 0.20
 
     def test_non_numeric_string_returns_floor(self):
+        # Same unknown-age rule as test_none_returns_floor: 0.80, not 0.20.
         log_test_context("test_non_numeric_string_returns_floor",
                          input={"age_hours": "not_a_number"},
-                         expected={"result": 0.20})
+                         expected={"result": 0.80})
         result = freshness_decay("not_a_number")
         log_test_context("test_non_numeric_string_returns_floor",
                          result={"value": result},
-                         passed=(result == 0.20))
-        assert result == 0.20
+                         passed=(result == 0.80))
+        assert result == 0.80
 
 
 # =========================================================================

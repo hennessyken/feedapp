@@ -1,0 +1,20 @@
+# Coverage config for scripts/test.sh (pytest --cov).
+# source = . gives an honest whole-repo baseline: never-imported legacy
+# modules (feeds.py monolith, application.py, ...) show up at 0% instead
+# of being hidden.
+[run]
+source = .
+omit =
+    tests/*
+    .venv/*
+    tools/*
+    scripts/*
+    web/*
+    deploy/*
+    docs/*
+    test_invite.py
+    start_api.sh
+
+[report]
+skip_empty = True
+precision = 1

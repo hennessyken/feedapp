@@ -14,8 +14,13 @@ import pytest
 # Add project root to path so imports work
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-# Stub config module (deleted from worktree but imported at module level)
-if "config" not in sys.modules:
+# Import the real config module when it exists (it does in this repo);
+# only stub it in worktrees where it was deleted. The old unconditional
+# stub poisoned sys.modules["config"] for every later test in the run
+# (test_smoke's RuntimeConfig assertions failed full-suite but passed solo).
+try:
+    import config  # noqa: F401 — real module
+except ImportError:
     _cfg = types.ModuleType("config")
     _cfg.RuntimeConfig = type("RuntimeConfig", (), {})  # type: ignore[attr-defined]
     _cfg.GLOBAL_FEEDS = {}  # type: ignore[attr-defined]

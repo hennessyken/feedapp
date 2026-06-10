@@ -7,8 +7,9 @@ __pycache__/
 *.pyc
 *.pyo
 
-# Secrets
+# Secrets — never track ANY .env variant (.env.local, .env.backup, ...)
 .env
+.env.*
 
 # Runtime output
 runs/
@@ -26,8 +27,17 @@ ibgateway/
 *.db-shm
 *.db-wal
 
+# Test / coverage artifacts
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+
 # Archives / large binaries
 *.zip
+
+# OpenAI batch-job results (large .jsonl — bloated git history past 50MB)
+batch_jobs/
 
 .gui.pid
 .gui.log

@@ -136,7 +136,11 @@ async def test_free_tier_cycle_tolerates_no_db_content():
         await db.connect()
         try:
             stats = await run_free_tier_cycle(db, ib_client=None)
-            assert stats == {"captured_24h": 0, "broadcast": 0, "skipped": 0}
+            assert stats == {
+                "captured_1h": 0, "captured_24h": 0,
+                "failed_1h": 0, "failed_24h": 0,
+                "broadcast": 0, "skipped": 0,
+            }
         finally:
             await db.close()
 

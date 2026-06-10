@@ -54,6 +54,8 @@ from dotenv import load_dotenv
 
 from reg_commons.site_kit import SubscriberStore
 
+from ops_alerts import send_ops_alert
+
 load_dotenv(Path(__file__).parent / ".env")
 
 logging.basicConfig(
@@ -217,6 +219,50 @@ def render_email(site: SiteConfig, invite_link: str) -> tuple[str, str]:
 
 # ── Site processing ─────────────────────────────────────────────────────
 
+def count_exhausted(store: SubscriberStore, *, max_attempts: int = MAX_ATTEMPTS) -> int:
+    """Paying customers whose welcome delivery permanently gave up.
+
+    These rows are EXCLUDED from list_undelivered (delivery_attempts >=
+    max_attempts) so without an alert the money path goes silent: the
+    customer paid but never gets their invite. Returns 0 on any error.
+    """
+    try:
+        with store.connect() as conn:
+            return conn.execute(
+                """SELECT COUNT(*) FROM subscribers
+                   WHERE status='active'
+                     AND delivered_at IS NULL
+                     AND delivery_attempts >= ?""",
+                (max_attempts,),
+            ).fetchone()[0]
+    except Exception:
+        logger.exception("count_exhausted failed")
+        return 0
+
+
+def _alert_delivery_failures(site: SiteConfig, store: SubscriberStore,
+                             failed: int) -> None:
+    """Ops alert when fulfillment fails — fires only on runs where a NEW
+    failure happened (bounded: at most MAX_ATTEMPTS alerts per stuck row),
+    and reports any rows that have now permanently exhausted retries.
+
+    Silently no-ops when TELEGRAM_OPS_* env vars are unset (see ops_alerts).
+    """
+    exhausted = count_exhausted(store)
+    lines = [
+        f"FULFILLMENT FAILURE [{site.site_id}]: "
+        f"{failed} delivery attempt(s) failed this run.",
+    ]
+    if exhausted:
+        lines.append(
+            f"{exhausted} paying subscriber(s) have EXHAUSTED all "
+            f"{MAX_ATTEMPTS} attempts and will NOT be retried — "
+            f"manual fix needed (see delivery_error in {site.db_path})."
+        )
+    lines.append("Log: /home/ken/Regfeed/fulfillment.log")
+    send_ops_alert("\n".join(lines))
+
+
 def process_site(site: SiteConfig, *, dry_run: bool = False) -> dict:
     if not Path(site.db_path).exists():
         logger.info("[%s] db not found at %s — skipping", site.site_id, site.db_path)
@@ -268,6 +314,8 @@ def process_site(site: SiteConfig, *, dry_run: bool = False) -> dict:
             )
             if not dry_run:
                 store.mark_delivery_failed(sub_id, err)
+    if failed and not dry_run:
+        _alert_delivery_failures(site, store, failed)
     return {"site": site.site_id, "delivered": delivered, "failed": failed}
 
 

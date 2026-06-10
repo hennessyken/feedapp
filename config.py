@@ -80,6 +80,13 @@ class RuntimeConfig:
         ).strip()
     )
     edgar_days_back: int = field(default_factory=lambda: _env_int("EDGAR_DAYS_BACK", 1))  # today only on first start
+    # EDGAR_FORMS is the explicit allowlist of form types fetched from EFTS —
+    # including amendment (`*/A`) forms, which are DELIBERATE, not a bug:
+    #   S-1/A — where IPO price ranges/final terms first appear (the original
+    #           S-1 usually has no pricing); often the real catalyst.
+    #   4/A   — corrections to insider-purchase filings (Form-4 adapter).
+    # Nothing downstream drops `*/A`; the keyword screener + Sentry decide
+    # materiality per filing. See CLAUDE.md gotcha #4 (rewritten 2026-06-10).
     edgar_forms: str = field(
         default_factory=lambda: (os.getenv("EDGAR_FORMS") or "8-K,6-K,S-1,S-1/A").strip()
     )

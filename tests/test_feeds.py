@@ -1,172 +1,278 @@
-"""Tests for feeds.py — _parse_datetime, _stable_hash, and FeedItem dedup."""
+"""Tests for the feeds/ package — stable_hash, FeedResult dedup, EMA date
+parsing, the shared 429/Retry-After handling in feeds.base, the EMA
+conditional GET (If-Modified-Since / 304), and the daily CIK-map TTL.
 
-from datetime import datetime, timezone, timedelta
+NOTE (2026-06-10): this file previously tested the legacy monolithic
+feeds.py (FeedItem / _parse_datetime / _stable_hash) which is shadowed by
+the feeds/ package and no longer importable. Rewritten for the live code.
+"""
+from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from test_helpers import log_test_context
-from feeds import FeedItem, _parse_datetime, _stable_hash
+from feeds.base import (
+    BaseFeedAdapter,
+    FeedResult,
+    _retry_after_seconds,
+    stable_hash,
+)
+from feeds.ema import EmaFeedAdapter
 
 
-# ── _parse_datetime unit tests ───────────────────────────────────────────────
-
-class TestParseDatetime:
-    def test_aware_datetime_returned_as_is(self):
-        dt = datetime(2026, 1, 15, 10, 30, 0, tzinfo=timezone.utc)
-        log_test_context("parse_dt_aware", input=str(dt))
-        result = _parse_datetime(dt)
-        assert result == dt
-        assert result.tzinfo == timezone.utc
-
-    def test_naive_datetime_gets_utc(self):
-        dt = datetime(2026, 1, 15, 10, 30, 0)
-        log_test_context("parse_dt_naive", input=str(dt))
-        result = _parse_datetime(dt)
-        assert result == dt.replace(tzinfo=timezone.utc)
-        assert result.tzinfo == timezone.utc
-
-    def test_iso_string_z_suffix(self):
-        log_test_context("parse_dt_iso_z", input="2026-01-15T10:30:00Z")
-        result = _parse_datetime("2026-01-15T10:30:00Z")
-        assert result == datetime(2026, 1, 15, 10, 30, 0, tzinfo=timezone.utc)
-
-    def test_iso_string_with_offset(self):
-        log_test_context("parse_dt_iso_offset", input="2026-01-15T10:30:00+09:00")
-        result = _parse_datetime("2026-01-15T10:30:00+09:00")
-        # Should parse with the +09:00 offset intact
-        assert result is not None
-        # Convert to UTC for comparison: 10:30 JST = 01:30 UTC
-        utc_equiv = result.astimezone(timezone.utc)
-        assert utc_equiv.hour == 1
-        assert utc_equiv.minute == 30
-
-    def test_compact_datetime(self):
-        log_test_context("parse_dt_compact", input="20260115103000")
-        result = _parse_datetime("20260115103000")
-        assert result == datetime(2026, 1, 15, 10, 30, 0, tzinfo=timezone.utc)
-
-    def test_date_only(self):
-        log_test_context("parse_dt_date_only", input="20260115")
-        result = _parse_datetime("20260115")
-        assert result == datetime(2026, 1, 15, 0, 0, 0, tzinfo=timezone.utc)
-
-    def test_none_input(self):
-        log_test_context("parse_dt_none", input=None)
-        assert _parse_datetime(None) is None
-
-    def test_invalid_string(self):
-        log_test_context("parse_dt_invalid", input="not-a-date")
-        assert _parse_datetime("not-a-date") is None
-
-    def test_integer_timestamp_parsed_as_compact_string(self):
-        log_test_context("parse_dt_int", input=1705312200)
-        # Integer is converted to str "1705312200" which matches compact YYYYMMDD... format
-        result = _parse_datetime(1705312200)
-        # str(1705312200) = "1705312200" → parsed as "17053122" + "00" or similar
-        # Just verify it returns a datetime (not None) — the parsed value is nonsensical
-        assert isinstance(result, datetime)
-
-
-# ── _stable_hash unit tests ──────────────────────────────────────────────────
+# ── stable_hash ──────────────────────────────────────────────────────────────
 
 class TestStableHash:
     def test_deterministic(self):
         log_test_context("stable_hash_deterministic")
-        h1 = _stable_hash("hello world")
-        h2 = _stable_hash("hello world")
-        assert h1 == h2
+        assert stable_hash("hello world") == stable_hash("hello world")
 
     def test_different_inputs_different_hashes(self):
         log_test_context("stable_hash_different")
-        h1 = _stable_hash("alpha")
-        h2 = _stable_hash("beta")
-        assert h1 != h2
+        assert stable_hash("alpha") != stable_hash("beta")
 
-    def test_length_always_8_hex(self):
+    def test_length_always_12_hex(self):
         log_test_context("stable_hash_length")
         for val in ["", "a", "hello world", "x" * 10000]:
-            h = _stable_hash(val)
-            assert len(h) == 8
-            # Verify it's valid hex
-            int(h, 16)
-
-    def test_empty_string_valid(self):
-        log_test_context("stable_hash_empty")
-        h = _stable_hash("")
-        assert len(h) == 8
-        int(h, 16)  # valid hex
+            h = stable_hash(val)
+            assert len(h) == 12
+            int(h, 16)  # valid hex
 
 
-# ── FeedItem dedup logic tests ───────────────────────────────────────────────
+# ── FeedResult dedup (mirrors the seen-set merge in EmaFeedAdapter.fetch) ───
 
-def _make_feed_item(
-    item_id: str,
-    published_at: datetime | None = None,
-    us_ticker: str = "TEST",
-    title: str = "Test Item",
-) -> FeedItem:
-    return FeedItem(
-        feed="TEST_FEED",
+def _make_result(item_id: str, title: str = "Test") -> FeedResult:
+    return FeedResult(
+        feed_source="test",
         item_id=item_id,
-        us_ticker=us_ticker,
-        home_ticker="TST",
-        company_name="Test Co",
         title=title,
         url="https://example.com",
-        published_at=published_at,
     )
 
 
-class TestFeedItemDedup:
-    """Test the dedup + sort logic from search_watchlist_feeds merge layer."""
-
+class TestFeedResultDedup:
     @staticmethod
-    def _dedup_and_sort(items: list[FeedItem]) -> list[FeedItem]:
-        """Replicate the merge logic from search_watchlist_feeds."""
-        seen: set[str] = set()
-        deduped: list[FeedItem] = []
+    def _dedup(items):
+        seen, out = set(), []
         for item in items:
             if item.item_id not in seen:
                 seen.add(item.item_id)
-                deduped.append(item)
-        _epoch = datetime.fromtimestamp(0, tz=timezone.utc)
-        deduped.sort(
-            key=lambda it: it.published_at if it.published_at is not None else _epoch,
-            reverse=True,
-        )
-        return deduped
+                out.append(item)
+        return out
 
     def test_same_item_id_deduped(self):
         log_test_context("dedup_same_id")
-        t1 = datetime(2026, 1, 15, 10, 0, 0, tzinfo=timezone.utc)
-        items = [
-            _make_feed_item("dup-001", published_at=t1, title="First"),
-            _make_feed_item("dup-001", published_at=t1, title="Duplicate"),
-        ]
-        result = self._dedup_and_sort(items)
+        items = [_make_result("dup", "First"), _make_result("dup", "Second")]
+        result = self._dedup(items)
         assert len(result) == 1
         assert result[0].title == "First"
 
     def test_different_item_ids_kept(self):
         log_test_context("dedup_different_ids")
-        t1 = datetime(2026, 1, 15, 10, 0, 0, tzinfo=timezone.utc)
-        t2 = datetime(2026, 1, 15, 11, 0, 0, tzinfo=timezone.utc)
-        items = [
-            _make_feed_item("item-001", published_at=t1),
-            _make_feed_item("item-002", published_at=t2),
-        ]
-        result = self._dedup_and_sort(items)
-        assert len(result) == 2
+        assert len(self._dedup([_make_result("a"), _make_result("b")])) == 2
 
-    def test_sorted_by_published_at_descending(self):
-        log_test_context("dedup_sort_desc")
-        t_old = datetime(2026, 1, 15, 8, 0, 0, tzinfo=timezone.utc)
-        t_mid = datetime(2026, 1, 15, 10, 0, 0, tzinfo=timezone.utc)
-        t_new = datetime(2026, 1, 15, 12, 0, 0, tzinfo=timezone.utc)
-        items = [
-            _make_feed_item("old", published_at=t_old),
-            _make_feed_item("new", published_at=t_new),
-            _make_feed_item("mid", published_at=t_mid),
-        ]
-        result = self._dedup_and_sort(items)
-        assert [r.item_id for r in result] == ["new", "mid", "old"]
+    def test_feed_result_is_frozen(self):
+        log_test_context("feed_result_frozen")
+        item = _make_result("x")
+        with pytest.raises(Exception):
+            item.title = "mutated"
+
+
+# ── EMA date parsing ─────────────────────────────────────────────────────────
+
+class TestEmaParseDate:
+    def test_ema_dd_mm_yyyy(self):
+        log_test_context("ema_date_ddmmyyyy", input="01/04/2026")
+        dt = EmaFeedAdapter._parse_date("01/04/2026")
+        assert dt == datetime(2026, 4, 1, tzinfo=timezone.utc)
+
+    def test_iso_date(self):
+        dt = EmaFeedAdapter._parse_date("2026-01-15")
+        assert dt == datetime(2026, 1, 15, tzinfo=timezone.utc)
+
+    def test_iso_datetime_z(self):
+        dt = EmaFeedAdapter._parse_date("2026-01-15T10:30:00Z")
+        assert dt == datetime(2026, 1, 15, 10, 30, tzinfo=timezone.utc)
+
+    def test_empty_returns_none(self):
+        assert EmaFeedAdapter._parse_date("") is None
+
+    def test_garbage_returns_none(self):
+        assert EmaFeedAdapter._parse_date("not-a-date") is None
+
+
+# ── 429 / Retry-After handling (feeds.base) ──────────────────────────────────
+
+def _resp(status: int, *, headers=None, json_data=None):
+    resp = MagicMock()
+    resp.status_code = status
+    resp.headers = headers or {}
+    resp.json = MagicMock(return_value=json_data if json_data is not None else {})
+    resp.text = ""
+    if status >= 400:
+        import httpx
+        resp.raise_for_status = MagicMock(
+            side_effect=httpx.HTTPStatusError("err", request=MagicMock(), response=resp)
+        )
+    else:
+        resp.raise_for_status = MagicMock()
+    return resp
+
+
+class _DummyAdapter(BaseFeedAdapter):
+    name = "dummy"
+
+    async def fetch(self):
+        return []
+
+
+@pytest.mark.asyncio
+async def test_get_json_retries_429_honouring_retry_after(monkeypatch):
+    """A 429 must sleep for Retry-After seconds then retry — not hammer."""
+    http = MagicMock()
+    http.get = AsyncMock(side_effect=[
+        _resp(429, headers={"Retry-After": "7"}),
+        _resp(200, json_data={"ok": True}),
+    ])
+    sleeps = []
+
+    async def fake_sleep(s):
+        sleeps.append(s)
+
+    monkeypatch.setattr("feeds.base.asyncio.sleep", fake_sleep)
+    adapter = _DummyAdapter(http)
+    data = await adapter._get_json("https://example.com/x")
+    log_test_context("retry_429", sleeps=sleeps)
+    assert data == {"ok": True}
+    assert sleeps == [7.0]
+    assert http.get.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_get_json_gives_up_after_max_retries(monkeypatch):
+    import httpx
+    http = MagicMock()
+    http.get = AsyncMock(return_value=_resp(429, headers={"Retry-After": "1"}))
+
+    async def fake_sleep(s):
+        pass
+
+    monkeypatch.setattr("feeds.base.asyncio.sleep", fake_sleep)
+    adapter = _DummyAdapter(http)
+    with pytest.raises(httpx.HTTPStatusError):
+        await adapter._get_json("https://example.com/x")
+    assert http.get.await_count == 3  # initial + 2 retries
+
+
+def test_retry_after_seconds_parses_and_caps():
+    assert _retry_after_seconds("7") == 7.0
+    assert _retry_after_seconds("9999") == 30.0   # capped
+    assert _retry_after_seconds(None) == 2.0      # default
+    assert _retry_after_seconds("Wed, 21 Oct 2026 07:28:00 GMT") == 2.0
+
+
+# ── EMA conditional GET (If-Modified-Since / 304) ────────────────────────────
+
+@pytest.mark.asyncio
+async def test_ema_conditional_get_sends_if_modified_since_and_skips_on_304():
+    import feeds.ema as ema_mod
+
+    url = "https://example.com/medicines.json"
+    ema_mod._last_modified.pop(url, None)
+
+    http = MagicMock()
+    first = _resp(200, headers={"Last-Modified": "Wed, 10 Jun 2026 04:02:01 GMT"},
+                  json_data={"data": []})
+    second = _resp(304)
+    http.get = AsyncMock(side_effect=[first, second])
+
+    adapter = EmaFeedAdapter(http)
+
+    data1 = await adapter._get_json_conditional(url)
+    assert data1 == {"data": []}
+    # First call must NOT send If-Modified-Since (nothing cached yet)
+    headers1 = http.get.await_args_list[0].kwargs["headers"]
+    assert "If-Modified-Since" not in headers1
+
+    data2 = await adapter._get_json_conditional(url)
+    assert data2 is None  # 304 → caller treats as "no new items"
+    headers2 = http.get.await_args_list[1].kwargs["headers"]
+    assert headers2["If-Modified-Since"] == "Wed, 10 Jun 2026 04:02:01 GMT"
+
+    ema_mod._last_modified.pop(url, None)
+
+
+@pytest.mark.asyncio
+async def test_ema_fetch_medicines_returns_empty_on_304():
+    import feeds.ema as ema_mod
+
+    ema_mod._last_modified[ema_mod._EMA_MEDICINES_JSON] = "Wed, 10 Jun 2026 04:02:01 GMT"
+    http = MagicMock()
+    http.get = AsyncMock(return_value=_resp(304))
+    adapter = EmaFeedAdapter(http)
+    results = await adapter._fetch_medicines()
+    assert results == []
+    ema_mod._last_modified.pop(ema_mod._EMA_MEDICINES_JSON, None)
+
+
+# ── CIK-map daily TTL (feeds.edgar) ──────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_cik_map_refetches_after_ttl():
+    import feeds.edgar as edgar_mod
+
+    payload = {"0": {"cik_str": 320193, "ticker": "AAPL", "title": "Apple Inc."}}
+    http = MagicMock()
+    http.get = AsyncMock(return_value=_resp(200, json_data=payload))
+
+    saved = (edgar_mod._cik_ticker_map, edgar_mod._sec_company_seed,
+             edgar_mod._cik_map_loaded_at)
+    try:
+        edgar_mod._cik_ticker_map = {}
+        edgar_mod._sec_company_seed = {}
+        edgar_mod._cik_map_loaded_at = None
+
+        # 1st call: loads
+        await edgar_mod._ensure_cik_map(http, "test-agent")
+        assert http.get.await_count == 1
+        assert edgar_mod._cik_ticker_map.get("320193") == "AAPL"
+
+        # 2nd call inside TTL: cached, no refetch
+        await edgar_mod._ensure_cik_map(http, "test-agent")
+        assert http.get.await_count == 1
+
+        # Age the map past the TTL: must refetch
+        edgar_mod._cik_map_loaded_at = (
+            datetime.now(timezone.utc)
+            - timedelta(seconds=edgar_mod._CIK_MAP_TTL_SECONDS + 60)
+        )
+        await edgar_mod._ensure_cik_map(http, "test-agent")
+        assert http.get.await_count == 2
+    finally:
+        (edgar_mod._cik_ticker_map, edgar_mod._sec_company_seed,
+         edgar_mod._cik_map_loaded_at) = saved
+
+
+@pytest.mark.asyncio
+async def test_cik_map_keeps_old_map_on_refresh_failure():
+    import feeds.edgar as edgar_mod
+
+    http = MagicMock()
+    http.get = AsyncMock(side_effect=RuntimeError("SEC down"))
+
+    saved = (edgar_mod._cik_ticker_map, edgar_mod._sec_company_seed,
+             edgar_mod._cik_map_loaded_at)
+    try:
+        edgar_mod._cik_ticker_map = {"320193": "AAPL"}
+        edgar_mod._sec_company_seed = {}
+        edgar_mod._cik_map_loaded_at = (
+            datetime.now(timezone.utc)
+            - timedelta(seconds=edgar_mod._CIK_MAP_TTL_SECONDS + 60)
+        )
+        await edgar_mod._ensure_cik_map(http, "test-agent")
+        # Refresh failed — stale map must survive (stale beats empty)
+        assert edgar_mod._cik_ticker_map == {"320193": "AAPL"}
+    finally:
+        (edgar_mod._cik_ticker_map, edgar_mod._sec_company_seed,
+         edgar_mod._cik_map_loaded_at) = saved

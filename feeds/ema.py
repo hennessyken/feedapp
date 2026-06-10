@@ -29,6 +29,16 @@ logger = logging.getLogger(__name__)
 _EMA_MEDICINES_JSON = "https://www.ema.europa.eu/en/documents/report/medicines-output-medicines_json-report_en.json"
 _EMA_NEWS_JSON = "https://www.ema.europa.eu/en/documents/report/news-json-report_en.json"
 
+# Conditional-GET state, module-level because the adapter is rebuilt every
+# poll cycle. EMA regenerates these exports only twice a day (06:00/18:00
+# Amsterdam) but the medicines JSON is ~10MB — re-downloading it every
+# ~100s market-hours cycle was up to ~8GB/day. The endpoint serves
+# `Last-Modified` (verified 2026-06-10), so we send `If-Modified-Since`
+# and treat a 304 as "no new items": everything in the unchanged file was
+# already parsed and deduped into the DB on the previous fetch.
+# Maps URL → Last-Modified header value from the most recent 200 response.
+_last_modified: Dict[str, str] = {}
+
 # MAH → US ticker for major pharma companies active in EU.
 _MAH_TICKERS: Dict[str, str] = {
     "pfizer": "PFE",
@@ -127,16 +137,37 @@ class EmaFeedAdapter(BaseFeedAdapter):
                      len(results), len(news_items), len(med_items))
         return results
 
+    # ── Conditional GET ───────────────────────────────────────────────
+
+    async def _get_json_conditional(self, url: str) -> Optional[Any]:
+        """GET `url` with If-Modified-Since; returns None when unchanged (304).
+
+        Falls back to a plain fetch when no Last-Modified is cached yet
+        (first cycle after process start).
+        """
+        headers: Dict[str, str] = {"User-Agent": "Regfeed/1.0"}
+        cached = _last_modified.get(url)
+        if cached:
+            headers["If-Modified-Since"] = cached
+        resp = await self._http.get(url, headers=headers)
+        if resp.status_code == 304:
+            logger.debug("EMA %s unchanged (304) — skipping download", url)
+            return None
+        resp.raise_for_status()
+        lm = resp.headers.get("Last-Modified")
+        if lm:
+            _last_modified[url] = lm
+        return resp.json()
+
     # ── News JSON ─────────────────────────────────────────────────────
 
     async def _fetch_news(self) -> List[FeedResult]:
         try:
-            data = await self._get_json(
-                _EMA_NEWS_JSON,
-                headers={"User-Agent": "Regfeed/1.0"},
-            )
+            data = await self._get_json_conditional(_EMA_NEWS_JSON)
         except Exception as e:
             logger.warning("EMA news JSON fetch failed: %s", e)
+            return []
+        if data is None:   # 304 — file unchanged since last parse
             return []
 
         cutoff = datetime.now(timezone.utc) - timedelta(days=self._max_age_days)
@@ -191,12 +222,11 @@ class EmaFeedAdapter(BaseFeedAdapter):
 
     async def _fetch_medicines(self) -> List[FeedResult]:
         try:
-            data = await self._get_json(
-                _EMA_MEDICINES_JSON,
-                headers={"User-Agent": "Regfeed/1.0"},
-            )
+            data = await self._get_json_conditional(_EMA_MEDICINES_JSON)
         except Exception as e:
             logger.warning("EMA medicines JSON fetch failed: %s", e)
+            return []
+        if data is None:   # 304 — ~10MB download skipped, nothing new
             return []
 
         cutoff = datetime.now(timezone.utc) - timedelta(days=self._max_age_days)

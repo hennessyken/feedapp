@@ -140,12 +140,13 @@ def test_paid_message_no_financial_jargon_in_badge():
     assert "BEARISH" not in msg
 
 
-def test_paid_message_shows_share_price():
+def test_paid_message_omits_share_price():
+    # Prices are deliberately NOT shown — this is a watch-list tool, not a
+    # trading dashboard. Subscribers look up execution prices in their broker.
     sig = make_signal()
     msg = _format_telegram_message(sig, tier="pro", channel="sec", buy_price=42.50)
-    # Price is wrapped in <b> tags for bold
-    assert "Share price when we spotted this:" in msg
-    assert "$42.50" in msg
+    assert "Share price" not in msg
+    assert "$42.50" not in msg
 
 
 def test_paid_message_no_api_key_reminder():
@@ -168,123 +169,106 @@ def test_paid_message_polarity_badges():
 
 
 # ── _format_free_tier_delayed_message ─────────────────────────────────────
+#
+# The free post is SLIM BY DESIGN (detail-gating conversion lever): ticker +
+# company + 1-sentence summary + upgrade CTA. No price moves, no event_type,
+# no impact/confidence, no fundamentals block — those are paid-tier value.
 
-def test_free_tier_shows_single_pct_change_label():
+def test_free_tier_is_slim_no_price_move_lines():
     sig = make_signal()
     msg = _format_free_tier_delayed_message(
-        sig, price_at_flag=10.0, price_now=10.73, channel="fda",
+        sig, price_at_flag=10.0, channel="fda",
     )
-    assert "% Change since news broke: 🟢 <b>+7.3%</b>" in msg
-    # Should NOT dump the underlying prices — label only.
+    assert "% Change since news broke" not in msg
     assert "Share price an hour before" not in msg
     assert "Share price a day later" not in msg
+    assert "Price before news:" not in msg
 
 
-def test_free_tier_negative_move_shows_minus():
-    sig = make_signal(polarity="negative")
+def test_free_tier_shows_ticker_and_company():
+    sig = make_signal(ticker="ABCD", company="Acme Corp")
     msg = _format_free_tier_delayed_message(
-        sig, price_at_flag=100.0, price_now=92.5, channel="sec",
+        sig, price_at_flag=10.0, channel="sec",
     )
-    assert "% Change since news broke: 🔴 <b>-7.5%</b>" in msg
+    assert "<b>$ABCD</b>" in msg
+    assert "Acme Corp" in msg
 
 
-def test_free_tier_omits_move_line_when_missing_baseline():
+def test_free_tier_no_paid_detail_leak():
+    # Detail-gating: impact rating / confidence % / API upsell are paid-only.
     sig = make_signal()
     msg = _format_free_tier_delayed_message(
-        sig, price_at_flag=None, price_now=10.0, channel="sec",
+        sig, price_at_flag=10.0, channel="sec",
     )
-    assert "% Change since news broke" not in msg
+    assert "Likely price impact" not in msg
+    assert "How confident we are" not in msg
+    assert "API access" not in msg
 
 
-def test_free_tier_omits_move_line_when_missing_current():
+def test_free_tier_uses_human_text_first_sentence():
     sig = make_signal()
     msg = _format_free_tier_delayed_message(
-        sig, price_at_flag=10.0, price_now=None, channel="sec",
-    )
-    assert "% Change since news broke" not in msg
-
-
-def test_free_tier_contains_api_key_upsell():
-    # Free tier should advertise API access as a paid benefit.
-    sig = make_signal()
-    msg = _format_free_tier_delayed_message(
-        sig, price_at_flag=10.0, price_now=11.0, channel="sec",
-    )
-    assert "API access" in msg
-    assert "Paid subscribers" in msg
-
-
-def test_free_tier_uses_human_text_when_provided():
-    sig = make_signal()
-    msg = _format_free_tier_delayed_message(
-        sig,
-        price_at_flag=10.0, price_now=11.0, channel="sec",
-        human_text="The company announced a merger with Beta Corp.",
+        sig, price_at_flag=10.0, channel="sec",
+        human_text="The company announced a merger with Beta Corp. More detail here.",
     )
     assert "The company announced a merger with Beta Corp." in msg
+    # Only the FIRST sentence is teased — the rest is paid-tier value.
+    assert "More detail here" not in msg
 
 
 def test_free_tier_falls_back_to_deterministic_summary():
     sig = make_signal(company="Acme Corp", event="M_A")
     msg = _format_free_tier_delayed_message(
-        sig, price_at_flag=10.0, price_now=11.0, channel="sec", human_text="",
+        sig, price_at_flag=10.0, channel="sec", human_text="",
     )
-    # Deterministic summary uses the signal's own summary text
-    assert sig.summary in msg
+    # Falls back to the first sentence of the signal's own summary
+    assert sig.summary.split(". ")[0] in msg
 
 
 def test_free_tier_fda_upsell_link():
     sig = make_signal(source="fda")
     msg = _format_free_tier_delayed_message(
-        sig, price_at_flag=10.0, price_now=11.0, channel="fda",
+        sig, price_at_flag=10.0, channel="fda",
     )
-    assert "catalyst-wire-fda" in msg
-    assert "catalyst-wire-sec" not in msg
+    assert "fda.catalystwire.org" in msg
+    assert "sec.catalystwire.org" not in msg
 
 
 def test_free_tier_sec_upsell_link():
     sig = make_signal(source="edgar")
     msg = _format_free_tier_delayed_message(
-        sig, price_at_flag=10.0, price_now=11.0, channel="sec",
+        sig, price_at_flag=10.0, channel="sec",
     )
-    assert "catalyst-wire-sec" in msg
-    assert "catalyst-wire-fda" not in msg
+    assert "sec.catalystwire.org" in msg
+    assert "fda.catalystwire.org" not in msg
 
 
-def test_free_tier_price_before_after_not_shown():
-    """The before/after price line is removed — only the % change is shown."""
+def test_free_tier_says_yesterdays_feed():
     sig = make_signal()
     msg = _format_free_tier_delayed_message(
-        sig, price_at_flag=190.0, price_now=200.0, channel="sec",
+        sig, price_at_flag=None,
     )
-    assert "Price before news:" not in msg
-    assert "% Change since news broke" in msg
+    assert "This is yesterday's free feed." in msg
+    assert "Not investment advice" in msg
 
 
-def test_free_tier_delayed_banner_present():
+def test_free_tier_flagged_at_shown_as_yesterday():
     sig = make_signal()
     msg = _format_free_tier_delayed_message(
-        sig, price_at_flag=None, price_now=None,
-    )
-    assert "24hr DELAYED FEED" in msg
-
-
-def test_free_tier_footer_says_delayed_feed():
-    sig = make_signal()
-    msg = _format_free_tier_delayed_message(
-        sig, price_at_flag=None, price_now=None,
-    )
-    assert "Delayed Feed" in msg
-    assert "Not advice" in msg
-
-
-def test_free_tier_flagged_at_shown_in_footer():
-    sig = make_signal()
-    msg = _format_free_tier_delayed_message(
-        sig, price_at_flag=None, price_now=None,
+        sig, price_at_flag=None,
         flagged_at_iso="2026-04-23T10:30:00Z",
     )
-    assert "23 Apr 2026" in msg
+    assert "Yesterday at 10:30 UTC" in msg
+
+
+def test_free_tier_escapes_html_in_company():
+    # Regression guard for gotcha #1 — unescaped & / < / > broke 36% of sends.
+    sig = make_signal(company="Loews & Co <Holdings>")
+    msg = _format_free_tier_delayed_message(
+        sig, price_at_flag=None, channel="sec", human_text="",
+    )
+    assert "Loews &amp; Co" in msg
+    assert "<Holdings>" not in msg
 
 
 # ── _fmt_avg_volume ───────────────────────────────────────────────────────────
@@ -464,16 +448,19 @@ def test_fundamentals_block_short_pct_shown():
 
 # ── paid message: IB quote enrichment ────────────────────────────────────────
 
-def test_paid_message_ib_bid_ask_shown():
+def test_paid_message_ib_quote_shows_volume_not_prices():
+    # Bid/ask prices are deliberately omitted (watch-list tool, not a trading
+    # dashboard) — the IB quote contributes only the trading-volume context.
     sig = make_signal()
-    fund = _make_fund()
+    fund = _make_fund(avg_volume=10_000_000)
     ib_quote = {"price": 42.50, "bid": 42.45, "ask": 42.55, "volume": 5_000_000}
     msg = _format_telegram_message(
         sig, tier="pro", fundamentals=fund, buy_price=42.50, ib_quote=ib_quote,
     )
-    assert "Bid / Ask" in msg
-    assert "42.45" in msg
-    assert "42.55" in msg
+    assert "Bid / Ask" not in msg
+    assert "42.45" not in msg
+    assert "42.55" not in msg
+    assert "Trading today:" in msg
 
 
 def test_paid_message_ib_volume_very_heavy():
@@ -518,15 +505,18 @@ def test_paid_message_fundamentals_block_included():
     assert "NASDAQ" in msg
 
 
-def test_free_tier_fundamentals_block_included():
+def test_free_tier_fundamentals_reduced_to_sector_teaser():
+    # Free tier gets only a one-line "Sector / size" teaser — the full
+    # fundamentals block is paid-tier value (detail-gating).
     sig = make_signal()
     fund = _make_fund()
     msg = _format_free_tier_delayed_message(
-        sig, price_at_flag=40.0, price_now=42.0,
+        sig, price_at_flag=40.0,
         fundamentals=fund, channel="sec",
     )
-    assert "About Acme Corp" in msg
-    assert "Technology" in msg
+    assert "Technology / mega cap" in msg
+    assert "About Acme Corp" not in msg
+    assert "NASDAQ" not in msg
 
 
 # ── _safe_float from ib_client ────────────────────────────────────────────────
@@ -614,3 +604,64 @@ class TestIBClientInterface:
         assert client._host == "192.168.1.1"
         assert client._port == 7497
         assert client._client_id == 5
+
+
+# ── _post: Telegram 429 flood-control handling ────────────────────────────────
+
+class _FakeResp:
+    def __init__(self, status_code: int, json_data: Optional[dict] = None):
+        self.status_code = status_code
+        self._json = json_data or {}
+        self.text = str(self._json)
+
+    def json(self):
+        return self._json
+
+
+@pytest.mark.asyncio
+async def test_post_429_sleeps_for_retry_after(monkeypatch):
+    """A 429 must wait parameters.retry_after seconds before retrying.
+
+    Regression for the tight-retry loop that burned every retry inside the
+    flood-control window (~29 lost sends in 30 days).
+    """
+    from unittest.mock import AsyncMock, MagicMock
+    from notifier import _post
+
+    client = MagicMock()
+    client.post = AsyncMock(side_effect=[
+        _FakeResp(429, {"ok": False, "parameters": {"retry_after": 17}}),
+        _FakeResp(200, {"ok": True, "result": {"message_id": 7}}),
+    ])
+    sleeps = []
+
+    async def fake_sleep(s):
+        sleeps.append(s)
+
+    monkeypatch.setattr("notifier.asyncio.sleep", fake_sleep)
+    ok, msg_id = await _post(client, "token", {"chat_id": "1", "text": "x"})
+    assert ok is True
+    assert msg_id == 7
+    assert sleeps == [17.0]
+
+
+@pytest.mark.asyncio
+async def test_post_429_retry_after_is_capped(monkeypatch):
+    """A pathological retry_after must not stall the pipeline for hours."""
+    from unittest.mock import AsyncMock, MagicMock
+    from notifier import _post, _MAX_RETRY_AFTER_SECONDS
+
+    client = MagicMock()
+    client.post = AsyncMock(return_value=_FakeResp(
+        429, {"ok": False, "parameters": {"retry_after": 86400}},
+    ))
+    sleeps = []
+
+    async def fake_sleep(s):
+        sleeps.append(s)
+
+    monkeypatch.setattr("notifier.asyncio.sleep", fake_sleep)
+    ok, msg_id = await _post(client, "token", {"chat_id": "1", "text": "x"})
+    assert ok is False
+    assert all(s <= _MAX_RETRY_AFTER_SECONDS for s in sleeps)
+    assert len(sleeps) == 2  # slept before each retry, not after the last

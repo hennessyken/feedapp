@@ -1,13 +1,23 @@
 [Unit]
-Description=Regfeed — reconcile API key channel memberships
+Description=Regfeed — reconcile API-key channel grants (revoke channels the user left)
+# Scope: API-key channel ACL hygiene ONLY (reconcile_memberships.py →
+# db.revoke_channel via getChatMember). Stripe paid-membership kicks are a
+# SEPARATE mechanism and stay on the site-repo crontabs:
+#   cw-sec-site/reconcile.py 04:05 UTC · cw-fda-site/reconcile.py 04:15 UTC
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=oneshot
 User=ken
+Group=ken
 WorkingDirectory=/home/ken/Regfeed
+# Same proven pattern as cw-fulfillment.service — this .env parses cleanly
+# under systemd (no shell-isms).
 EnvironmentFile=/home/ken/Regfeed/.env
 ExecStart=/home/ken/Regfeed/.venv/bin/python reconcile_memberships.py
 StandardOutput=journal
 StandardError=journal
+
+NoNewPrivileges=true
+PrivateTmp=true

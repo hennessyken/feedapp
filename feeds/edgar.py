@@ -26,19 +26,32 @@ logger = logging.getLogger(__name__)
 # SEC company tickers — maps CIK → ticker for ~10k public companies
 _COMPANY_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 
-# In-memory CIK→ticker cache (loaded once per process)
+# Refresh the CIK→ticker map daily. The bot is a long-running process and
+# a load-once map meant newly listed tickers (precisely the S-1/IPO names
+# this feed targets) stayed unresolvable for weeks — `dropped_no_ticker`
+# was the #2 drop bucket. SEC regenerates the file nightly (~03:00 ET).
+_CIK_MAP_TTL_SECONDS = 24 * 3600
+
+# In-memory CIK→ticker cache (refreshed every _CIK_MAP_TTL_SECONDS)
 _cik_ticker_map: Dict[str, str] = {}
 # company_tickers.json also carries the company title — store it so we can
 # bulk-seed the company_ticker_cache table without a second HTTP request.
 # Maps normalised company name → (original_title, ticker).
 _sec_company_seed: Dict[str, tuple] = {}
-_cik_map_loaded = False
+_cik_map_loaded_at: Optional[datetime] = None
 
 
 async def _ensure_cik_map(http: httpx.AsyncClient, user_agent: str) -> None:
-    """Download SEC CIK→ticker mapping (once per process)."""
-    global _cik_ticker_map, _sec_company_seed, _cik_map_loaded
-    if _cik_map_loaded:
+    """Download SEC CIK→ticker mapping (cached, re-fetched daily).
+
+    On refresh failure the previous map is kept — stale beats empty.
+    """
+    global _cik_ticker_map, _sec_company_seed, _cik_map_loaded_at
+    now = datetime.now(timezone.utc)
+    if (
+        _cik_map_loaded_at is not None
+        and (now - _cik_map_loaded_at).total_seconds() < _CIK_MAP_TTL_SECONDS
+    ):
         return
     try:
         resp = await http.get(
@@ -48,18 +61,24 @@ async def _ensure_cik_map(http: httpx.AsyncClient, user_agent: str) -> None:
         )
         resp.raise_for_status()
         data = resp.json()
+        # Build fresh dicts, then swap atomically — a failed parse must not
+        # leave a half-built map behind.
+        new_map: Dict[str, str] = {}
+        new_seed: Dict[str, tuple] = {}
         for entry in data.values():
             cik = str(entry["cik_str"])
             ticker = entry.get("ticker", "")
             title = entry.get("title", "")
             if cik and ticker:
-                _cik_ticker_map[cik] = ticker.upper()
+                new_map[cik] = ticker.upper()
             if ticker and title:
                 from db import _normalise_company
                 key = _normalise_company(title)
                 if key:
-                    _sec_company_seed[key] = (title, ticker.upper())
-        _cik_map_loaded = True
+                    new_seed[key] = (title, ticker.upper())
+        _cik_ticker_map = new_map
+        _sec_company_seed = new_seed
+        _cik_map_loaded_at = now
         logger.info(
             "Loaded SEC CIK→ticker map: %d entries (%d company names for cache seed)",
             len(_cik_ticker_map), len(_sec_company_seed),
@@ -305,9 +324,9 @@ class EdgarFeedAdapter(BaseFeedAdapter):
             params.append(("q", self._query))
         headers = {"User-Agent": self._user_agent}
 
-        resp = await self._http.get(_EFTS_SEARCH_URL, params=params, headers=headers)
-        resp.raise_for_status()
-        data = resp.json()
+        # _get_json (feeds.base) honours 429/Retry-After — SEC enforces its
+        # 10 req/s fair-access limit with ~10-minute IP blocks.
+        data = await self._get_json(_EFTS_SEARCH_URL, params=params, headers=headers)
 
         return data.get("hits", {}).get("hits", [])
 

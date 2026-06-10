@@ -12,6 +12,7 @@ other than the Telegram sendMessage itself.
 This module is called periodically by the main loop.
 """
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -38,6 +39,11 @@ logger = logging.getLogger(__name__)
 _ET = ZoneInfo("America/New_York")
 _WINDOW_START_HOUR = 7   # 7:00 am ET
 _WINDOW_END_HOUR   = 21  # 9:00 pm ET
+
+# Inter-send pacing — Telegram allows ~20 msgs/min into one channel; a burst
+# of queued 24h-old posts (post-VTRS-storm backlogs) can exceed that and
+# trigger flood-control 429s. 3s spacing keeps a full sweep safely under it.
+_BROADCAST_PACING_SECONDS = 3.0
 
 
 def _in_delivery_window() -> bool:
@@ -130,13 +136,23 @@ async def broadcast_pending_free_tier(
 
     pending = await db.get_pending_free_tier()
 
-    for row in pending:
+    for i, row in enumerate(pending):
         ticker = (row.get("ticker") or "").upper().strip()
         if not ticker:
             stats["skipped"] += 1
             continue
 
+        # Claim BEFORE sending (at-most-once). A crash — or a duplicate
+        # bot process, see the 2026-06-10 incident — between send and mark
+        # used to re-post; now the row is atomically claimed first and
+        # released only on a clean send failure.
+        claimed = False
         try:
+            claimed = await db.claim_free_tier(row["item_id"])
+            if not claimed:
+                stats["skipped"] += 1   # another process beat us to it
+                continue
+
             # All data comes from the DB — no IB, no yfinance, no HTTP.
             fund = await db.get_fundamentals(ticker)   # cached only
             signal = _row_to_formatted_signal(row)
@@ -164,10 +180,25 @@ async def broadcast_pending_free_tier(
                 )
                 stats["broadcast"] += 1
             else:
+                # Clean failure (send_free_tier_delayed never raises) —
+                # release the claim so the next sweep retries.
+                await db.release_free_tier_claim(row["item_id"])
+                claimed = False
                 stats["skipped"] += 1
         except Exception as e:
             logger.warning("[free_tier] broadcast failed for %s: %s", ticker, e)
+            if claimed:
+                try:
+                    await db.release_free_tier_claim(row["item_id"])
+                except Exception:
+                    logger.exception(
+                        "[free_tier] release claim failed for %s", row.get("item_id"),
+                    )
             stats["skipped"] += 1
+
+        # Pace the loop — stay under Telegram's ~20 msgs/min/channel limit.
+        if i < len(pending) - 1:
+            await asyncio.sleep(_BROADCAST_PACING_SECONDS)
 
     if stats["broadcast"] or stats["skipped"]:
         logger.info(

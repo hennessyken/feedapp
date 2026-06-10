@@ -15,6 +15,7 @@ Env vars:
 If no chat ID is configured for a tier, the call is a logged no-op.
 """
 
+import asyncio
 import html
 import logging
 import os
@@ -30,6 +31,10 @@ logger = logging.getLogger(__name__)
 
 _MAX_RETRIES = 2
 _TIMEOUT_SECONDS = 10
+# Telegram flood control: a 429 means the bot is blocked for `retry_after`
+# seconds and retrying EARLIER extends the penalty. Honour it, but cap the
+# wait so a pathological value can't stall the whole pipeline cycle.
+_MAX_RETRY_AFTER_SECONDS = 60.0
 
 Tier = Literal["free", "pro", "pro_smallcap"]
 
@@ -653,7 +658,24 @@ async def _post(
                 msg_id = (data.get("result") or {}).get("message_id")
                 return True, msg_id
             if resp.status_code == 429:
-                last_err = RuntimeError(f"HTTP 429 attempt {attempt+1}")
+                # Flood control — Telegram tells us exactly how long to wait
+                # (parameters.retry_after). Retrying sooner extends the block
+                # and used to burn all retries inside the penalty window
+                # (~29 lost sends/month before this fix).
+                retry_after = 1.0
+                try:
+                    retry_after = float(
+                        (resp.json().get("parameters") or {}).get("retry_after")
+                        or 1.0
+                    )
+                except Exception:
+                    pass
+                retry_after = max(0.0, min(retry_after, _MAX_RETRY_AFTER_SECONDS))
+                last_err = RuntimeError(
+                    f"HTTP 429 attempt {attempt+1} (retry_after={retry_after:.0f}s)"
+                )
+                if attempt < _MAX_RETRIES:
+                    await asyncio.sleep(retry_after)
                 continue
             logger.error("TG_FAILED: status=%d body=%s",
                          resp.status_code, resp.text[:200])

@@ -1300,6 +1300,37 @@ class FeedDatabase:
         )
         await self._db.commit()
 
+    async def claim_free_tier(self, item_id: str) -> bool:
+        """Atomically claim an item for free-tier broadcast (mark-before-send).
+
+        Sets free_tier_sent=1 only if it is still 0, returning True when this
+        caller won the claim. Guarantees at-most-once delivery: a crash (or a
+        duplicate process) between send and mark can no longer re-post — the
+        failure mode flips to the safe side (post lost, not duplicated).
+        """
+        assert self._db
+        now = datetime.now(timezone.utc).isoformat()
+        cur = await self._db.execute(
+            """UPDATE feed_items
+               SET free_tier_sent = 1, free_tier_sent_at = ?
+               WHERE item_id = ? AND free_tier_sent = 0""",
+            (now, item_id),
+        )
+        await self._db.commit()
+        return bool(cur.rowcount)
+
+    async def release_free_tier_claim(self, item_id: str) -> None:
+        """Undo claim_free_tier after a failed send so a later sweep retries."""
+        assert self._db
+        await self._db.execute(
+            """UPDATE feed_items
+               SET free_tier_sent = 0, free_tier_sent_at = NULL,
+                   free_tier_message_id = NULL
+               WHERE item_id = ?""",
+            (item_id,),
+        )
+        await self._db.commit()
+
     async def get_fundamentals(self, ticker: str) -> Optional[Dict[str, Any]]:
         """Lookup the cached fundamentals row for a ticker."""
         assert self._db
