@@ -1,6 +1,6 @@
 # Regfeed (Catalyst Wire) — PRODUCTION
 
-Updated 2026-06-10. Companion to `CLAUDE.md` (how it works) and
+Updated 2026-06-12. Companion to `CLAUDE.md` (how it works) and
 `/home/ken/reviews/Regfeed-phase0-2-2026-06-10.md` (full findings).
 Products: **Catalyst Wire SEC** ($29/mo · $290/yr) and **FDA** ($39/mo · $390/yr).
 
@@ -19,31 +19,20 @@ Ready for paying customers when, per product:
 - **`regfeed.service` installed + active** (system systemd, enabled, reboot-safe). Single instance verified: PID 3047740 since 13:13. *(Jun 10)*
 - **Duplicate-bot incident resolved** — user-level unit stopped + disabled, stray nohup killed. Two pipelines had raced the same DB/channels (double posts, locked WAL). *(Jun 10)*
 - **Fix wave live since 13:13**: 429 `retry_after` handling, fulfillment-failure ops alerts, feed-outage watchdog, free-tier claim-before-send, EMA conditional fetch, CIK TTL refresh, and more. *(Jun 10)*
-- **Test suite green**: 410 passed, 38.5% coverage (whole-repo honest baseline — never-imported legacy modules count as 0%). Run via `scripts/test.sh`. *(Jun 10)*
-- **Ops alerts wired in code** (`fulfillment.py`, `pipeline.py` → `ops_alerts.py`) and now fall back to `/home/ken/.ops.env` (same convention as the portfolio watchdog). **Values still EMPTY → alerts silently disabled.** *(Jun 10)*
-- **Backups covered by tonight's portfolio system** — `/home/ken/bin/backup_portfolio.sh` (`regfeed.db`, cw-sec/fda `payments.db` + `subscribers.db`; sqlite `.backup`, never `cp`) + `/home/ken/bin/ops_watchdog.py` (regfeed unit active + `CYCLE_JSON` < 2h in market hours). **Do not build a second backup path.** *(Jun 10)*
-- **Log hygiene**: 137MB stale logs gzipped to ~5.5MB; size-guard `scripts/trim_logs.sh` added (stale-gzip, `fulfillment.log` size-rotation, archive pruning). *(Jun 10)*
+- **Test suite green**: 414 passed, 38.7% coverage (whole-repo honest baseline — never-imported legacy modules count as 0%). Run via `scripts/test.sh`. *(Jun 12)*
+- **Ops alerts wired in code** (`fulfillment.py`, `pipeline.py`, `spend_tracker.py` → `ops_alerts.py`) and now fall back to `/home/ken/.ops.env` (same convention as the portfolio watchdog). **Values still EMPTY → alerts silently disabled.** *(Jun 12)*
+- **Backups covered by tonight's portfolio system** — `/home/ken/bin/backup_portfolio.sh` (`regfeed.db`, cw-sec/fda `payments.db` + `subscribers.db`; sqlite `.backup`, never `cp`) + `/home/ken/bin/ops_watchdog.py` (regfeed unit active + `CYCLE_JSON` < 2h in market hours). Crontab lines verified 2026-06-12. **Do not build a second backup path.**
+- **Log hygiene**: 137MB stale logs gzipped to ~5.5MB; size-guard `scripts/trim_logs.sh` added and daily cron line verified (stale-gzip, `fulfillment.log` size-rotation, archive pruning). *(Jun 12)*
+- **Two-tier channel routing fixed and loaded**: `pro_smallcap` now falls back to the product's Pro channel (`SEC_PRO`/`FDA_PRO`) and will not use a global `TELEGRAM_CHAT_ID` when product-specific chat IDs are configured. `regfeed.service` restarted at 17:40 CEST; post-restart cycle completed with `errors: []`. Health check is green: 15 ok, 0 warn, 0 fail. *(Jun 12)*
+- **Ops alerts live**: `/home/ken/.ops.env` has `TELEGRAM_OPS_BOT_TOKEN` + `TELEGRAM_OPS_CHAT_ID` set, mode 600, and `send_ops_alert('regfeed ops test')` returned `True`. *(Jun 12)*
+- **`regfeed-reconcile.timer` installed + active**: enabled, active, next run scheduled for 2026-06-13 03:31:58 CEST; manual `regfeed-reconcile.service` run completed with `errors: 0`. *(Jun 12)*
 - Sites (:8011/:8013), `cw-fulfillment.timer` (60s), Stripe reconcile crons (04:05/04:15 UTC), secrets hygiene (`.env` mode 600, never in git) — all verified in today's review. *(Jun 10)*
 
 ## Remaining (ordered)
 
-1. **[ken-sudo] Install `regfeed-reconcile.timer`** (unit files refreshed today; scope = API-key channel grants only, Stripe kicks stay on the site crons):
-   ```bash
-   sudo cp /home/ken/Regfeed/regfeed-reconcile.service /home/ken/Regfeed/regfeed-reconcile.timer /etc/systemd/system/
-   sudo systemctl daemon-reload
-   sudo systemctl enable --now regfeed-reconcile.timer
-   systemctl list-timers regfeed-reconcile.timer --no-pager
-   sudo systemctl start regfeed-reconcile.service && journalctl -u regfeed-reconcile -n 20 --no-pager   # first run now, eyeball it
-   ```
-2. **[ken-dashboard] Fill `/home/ken/.ops.env`** — `TELEGRAM_OPS_BOT_TOKEN` (BotFather, NEW dedicated ops bot) + `TELEGRAM_OPS_CHAT_ID` (private chat). Then `sudo systemctl restart regfeed.service` to pick up today's fallback code (`cw-fulfillment` is a fresh process every 60s — picks it up alone). **Until this is done, no alert can reach you.**
-3. **[ken-sudo] Install the trim-logs cron line** (or the logrotate alternative below):
-   ```
-   23 5 * * * /home/ken/Regfeed/scripts/trim_logs.sh >> /home/ken/Regfeed/trim_logs.log 2>&1
-   ```
-4. **[ken-dashboard] Free-tier gating decision** — keep the research-confirmed 3-lever stack (24h delay + detail-gating + CRITICAL stub); decide: (a) add metered "live sample" (2–3 real-time signals/month to free channels)? (b) instrument conversion (free-channel joins → Stripe checkouts)? No code until decided.
-5. **[ken-dashboard] Ship the mobile apps** — `cw-sec-app` / `cw-fda-app` scaffolded, typecheck-clean, store assets done. Run **/ship-android** per app: fresh EAS projectId each (never Frontier's), reuse the RevenueCat service account, Play App Content "Financial features = **No**", closed testing ≥12 testers / 14-day gate.
-6. **[ken-sudo] Verify tonight's backup + watchdog crons landed** (`crontab -l` should show `backup_portfolio.sh` and `ops_watchdog.py` lines from today's parallel build), then do one restore drill via the **db-backup** skill.
-7. **[claude, small] Route the $10 LLM spend alert through `ops_alerts`** — `spend_tracker._send_telegram_text` wants a generic `TELEGRAM_BOT_TOKEN`, which `.env` doesn't define (only `_SEC`/`_FDA` variants), so spend alerts are **silently skipped** today (cumulative $0.68 — nothing missed yet). Do after item 2.
+1. **[ken-dashboard] Free-tier gating decision** — keep the research-confirmed 3-lever stack (24h delay + detail-gating + CRITICAL stub); decide: (a) add metered "live sample" (2–3 real-time signals/month to free channels)? (b) instrument conversion (free-channel joins → Stripe checkouts)? No code until decided.
+2. **[ken-dashboard] Ship the mobile apps** — `cw-sec-app` / `cw-fda-app` scaffolded, typecheck-clean, store assets done. Run **/ship-android** per app: fresh EAS projectId each (never Frontier's), reuse the RevenueCat service account, Play App Content "Financial features = **No**", closed testing ≥12 testers / 14-day gate.
+3. **[ken-sudo] Do one restore drill via the db-backup skill** now that `backup_portfolio.sh` and `ops_watchdog.py` crontab lines are verified.
 
 ## Runbooks
 

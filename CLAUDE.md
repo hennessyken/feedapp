@@ -112,7 +112,7 @@ The old version of this gotcha ("all `*/A` dropped on purpose") was **wrong** �
 - The live `.env` `EDGAR_FORMS` also includes `8-K/A`, `SC 13D/A`, `SC TO-T/A` — corrections that mostly re-state old news; the keyword screener + Sentry-1 decide materiality per filing, which is the intended mechanism. If 8-K/A-style noise ever becomes a problem, remove those from `EDGAR_FORMS` (the allowlist) — do NOT add a blanket `*/A` drop.
 
 ### 5. The live bot runs under SYSTEM systemd (`regfeed.service`) — beware duplicate instances
-Since 2026-06-10 the bot is `/etc/systemd/system/regfeed.service` (enabled, restart-on-reboot). History: it started as a nohup, then a **user-level** unit (`~/.config/systemd/user/regfeed.service`, `Restart=always`), and on 2026-06-10 installing the system unit *alongside* the still-running user unit produced **two full pipelines racing the same DB and channels** (duplicate posts, doubled LLM spend, constant `WAL checkpoint failed: database table is locked`). The user unit was stopped + disabled the same day. Before starting anything, check `ps -eo pid,lstart,cmd | grep "main.py --continuous"` shows exactly ONE instance — a bare `kill` of a systemd-managed PID just respawns it; stop the owning unit. (Membership reconcile still runs via **crontab** from the site repos at 04:05/04:15 UTC — `regfeed-reconcile.timer` remains uninstalled.)
+Since 2026-06-10 the bot is `/etc/systemd/system/regfeed.service` (enabled, restart-on-reboot). History: it started as a nohup, then a **user-level** unit (`~/.config/systemd/user/regfeed.service`, `Restart=always`), and on 2026-06-10 installing the system unit *alongside* the still-running user unit produced **two full pipelines racing the same DB and channels** (duplicate posts, doubled LLM spend, constant `WAL checkpoint failed: database table is locked`). The user unit was stopped + disabled the same day. Before starting anything, check `ps -eo pid,lstart,cmd | grep "main.py --continuous"` shows exactly ONE instance — a bare `kill` of a systemd-managed PID just respawns it; stop the owning unit. (Membership reconcile is covered by **both** `regfeed-reconcile.timer` — installed + active, verified 2026-06-17, last ran 03:33 UTC — **and** the site-repo crontabs at 04:05/04:15 UTC. Earlier notes here said the timer "remains uninstalled"; that was stale.)
 
 ### 6. Outcome tracking: yfinance fallback works — read `feed_items`, not `signal_log`
 IB Gateway disconnects constantly; historically outcome capture was 0–2% (IB-only era). With the yfinance fallback wired into `free_tier.capture_price_milestones`, capture is now **77% / 73%** (`price_1h`/`price_24h` over the 30d of telegram-sent items to 2026-06-10) in **`feed_items`**. The same-named columns in `signal_log` are a never-backfilled point-in-time artifact (100% NULL) — any report reading them will wrongly conclude capture is broken.
@@ -145,7 +145,7 @@ Env-driven via `.env` (`config.py`, `override=False`). **Actual** defaults (diff
 - `SUBSCRIBER_TELEGRAM=true`, `SUBSCRIBER_TRADER=false`
 - `PIPELINE_SILENCE_ALERT_HOURS=24` (feed-outage watchdog; 0 disables)
 
-Secrets in `.env` (gitignored): `OPENAI_API_KEY`, `ADMIN_API_KEY`; Telegram — `TELEGRAM_BOT_TOKEN_{SEC,FDA}` (posting), `_{SEC,FDA}_MEMBERSHIP` (invites/kicks), `_{SEC,FDA}_CMD` (commands); `TELEGRAM_CHAT_ID_{SEC,FDA}_{FREE,PRO}`; SMTP block. Optional: `TELEGRAM_OPS_BOT_TOKEN` + `TELEGRAM_OPS_CHAT_ID` for the private ops alerts (`ops_alerts.py`) — read from process env with fallback to `/home/ken/.ops.env` (file exists since 2026-06-10 but both values still EMPTY); unset = alerts silently disabled, never falls back to product channels.
+Secrets in `.env` (gitignored): `OPENAI_API_KEY`, `ADMIN_API_KEY`; Telegram — `TELEGRAM_BOT_TOKEN_{SEC,FDA}` (posting), `_{SEC,FDA}_MEMBERSHIP` (invites/kicks), `_{SEC,FDA}_CMD` (commands); `TELEGRAM_CHAT_ID_{SEC,FDA}_{FREE,PRO}`; SMTP block. Optional: `TELEGRAM_OPS_BOT_TOKEN` + `TELEGRAM_OPS_CHAT_ID` for the private ops alerts (`ops_alerts.py`) — read from process env with fallback to `/home/ken/.ops.env` (**populated 2026-06-12 — both values SET; `_ops_creds()` returns ARMED, so ops alerts are LIVE**, verified 2026-06-17). If ever unset, alerts silently disable, never falling back to product channels.
 
 ---
 
@@ -157,7 +157,7 @@ Secrets in `.env` (gitignored): `OPENAI_API_KEY`, `ADMIN_API_KEY`; Telegram — 
 - **Telegram:** 4 channels (SEC/FDA × free/paid); 3 bot tokens per product.
 - **Payments:** Stripe Checkout on the sites → `fulfillment.py` (~60s) → one-time invite link + welcome email; RevenueCat for mobile. Cancel-kicks via reconcile.
 - **Hosting:** single Contabo VM, **Caddy** reverse proxy. Backend UIs behind a gateway: IP allowlist + Basic Auth + Let's Encrypt; marketing sites stay public.
-- **systemd (installed/active):** `regfeed.service` (the live bot, since 2026-06-10), `cw-sec`, `cw-fda` (sites), `cw-sec-bot`, `cw-fda-bot`, + fulfillment timers. **NOT installed:** `regfeed-reconcile.timer` (reconcile runs from the site repos' crontabs instead). A leftover **user-level** `~/.config/systemd/user/regfeed.service` was stopped + disabled 2026-06-10 after it ran a duplicate pipeline (gotcha #5) — don't re-enable it.
+- **systemd (installed/active):** `regfeed.service` (the live bot, since 2026-06-10), `regfeed-reconcile.timer` (**installed + active — verified 2026-06-17**; earlier docs said "NOT installed", that was stale), `cw-sec`, `cw-fda` (sites), `cw-sec-bot`, `cw-fda-bot`, + fulfillment timers. Reconcile is therefore doubly covered — by this timer AND the site-repo crontabs. A leftover **user-level** `~/.config/systemd/user/regfeed.service` was stopped + disabled 2026-06-10 after it ran a duplicate pipeline (gotcha #5) — don't re-enable it.
 - **Crontab reconcile (UTC):** SEC 04:05, FDA 04:15 (via `cw-sec-site/reconcile.py` / `cw-fda-site/reconcile.py`).
 
 ---
@@ -175,12 +175,12 @@ Secrets in `.env` (gitignored): `OPENAI_API_KEY`, `ADMIN_API_KEY`; Telegram — 
 - [ ] Swap mobile AdMob test IDs → real before public launch
 
 **Other TODO:**
-- [x] Convert Regfeed bot to an installed systemd unit (done 2026-06-10 — `regfeed.service`; reconcile stays on the site-repo crons, `regfeed-reconcile.timer` intentionally uninstalled)
+- [x] Convert Regfeed bot to an installed systemd unit (done 2026-06-10 — `regfeed.service`; `regfeed-reconcile.timer` is ALSO installed + active as of 2026-06-17, alongside the site-repo crons)
 - [x] Test suite repaired (2026-06-10): **410 passed**, 38.5% whole-repo coverage — run via `scripts/test.sh` (tests/ only; never run root-level `test_invite.py`, it hits live Telegram)
 - [x] Nightly backup for `regfeed.db` / `payments.db` / sites' `subscribers.db` — built 2026-06-10 as the portfolio job `/home/ken/bin/backup_portfolio.sh` → `/home/ken/backups/<Project>/<date>/` (first Regfeed backup landed 15:31 that day; sqlite `.backup`, never `cp` — gotcha #9). **Cron line not yet installed** (Ken — PRODUCTION.md item 6); restore drills via the db-backup skill
 - [ ] Build `reg-commons/tests/` (feed_kit / payments_kit / bot_kit — left mid-work)
 - [ ] Growth lever for SEC volume: add 10-K / 10-Q earnings feed (SEC has 2 sources vs FDA's 5 — the gap is structural)
-- [ ] Fill `TELEGRAM_OPS_BOT_TOKEN` / `TELEGRAM_OPS_CHAT_ID` in `/home/ken/.ops.env` (file created 2026-06-10, values still empty) so the fulfillment-failure + feed-outage alerts actually fire (silently disabled until then), then `sudo systemctl restart regfeed`
+- [x] Fill `TELEGRAM_OPS_BOT_TOKEN` / `TELEGRAM_OPS_CHAT_ID` in `/home/ken/.ops.env` — **done (populated 2026-06-12; `_ops_creds()` → ARMED, verified 2026-06-17)**; fulfillment-failure + feed-outage + spend alerts now fire. Restart `regfeed` after any future token change so the long-running process reloads the file.
 
 ---
 

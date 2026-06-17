@@ -21,6 +21,8 @@ from signal_formatter import FormattedSignal
 from notifier import (
     classify_channel,
     classify_tier,
+    get_configured_channels,
+    _chat_id,
     _fmt_avg_volume,
     _fmt_beta,
     _fmt_confidence_explanation,
@@ -117,6 +119,49 @@ def test_tier_confidence_fraction_not_integer():
     # 0.85 must map to pro (85% >= 70%), not free.
     sig = make_signal(confidence=0.85, impact="low")
     assert classify_tier(sig) == "pro"
+
+
+# ── channel config ────────────────────────────────────────────────────────
+
+def _clear_channel_env(monkeypatch):
+    for key in (
+        "TELEGRAM_CHAT_ID_SEC_FREE",
+        "TELEGRAM_CHAT_ID_SEC_PRO",
+        "TELEGRAM_CHAT_ID_SEC_SMALLCAP",
+        "TELEGRAM_CHAT_ID_FDA_FREE",
+        "TELEGRAM_CHAT_ID_FDA_PRO",
+        "TELEGRAM_CHAT_ID_FDA_SMALLCAP",
+        "TELEGRAM_CHAT_ID_FREE",
+        "TELEGRAM_CHAT_ID_PRO",
+        "TELEGRAM_CHAT_ID_SMALLCAP",
+        "TELEGRAM_CHAT_ID",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+
+def test_smallcap_falls_back_to_product_pro_channel(monkeypatch):
+    _clear_channel_env(monkeypatch)
+    monkeypatch.setenv("TELEGRAM_CHAT_ID_SEC_PRO", "-100-sec-pro")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "-100-global-other-product")
+
+    assert _chat_id("pro_smallcap", "sec") == "-100-sec-pro"
+    assert get_configured_channels()["sec"]["pro_smallcap"] == "-100-sec-pro"
+
+
+def test_product_specific_config_blocks_global_chat_fallback(monkeypatch):
+    _clear_channel_env(monkeypatch)
+    monkeypatch.setenv("TELEGRAM_CHAT_ID_SEC_FREE", "-100-sec-free")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "-100-global-other-product")
+
+    assert _chat_id("pro", "sec") is None
+
+
+def test_global_chat_fallback_kept_for_single_channel_legacy(monkeypatch):
+    _clear_channel_env(monkeypatch)
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "-100-legacy")
+
+    assert _chat_id("pro", "sec") == "-100-legacy"
+    assert _chat_id("pro_smallcap", "sec") == "-100-legacy"
 
 
 # ── _format_telegram_message (paid tier) ──────────────────────────────────
@@ -639,9 +684,10 @@ async def test_post_429_sleeps_for_retry_after(monkeypatch):
         sleeps.append(s)
 
     monkeypatch.setattr("notifier.asyncio.sleep", fake_sleep)
-    ok, msg_id = await _post(client, "token", {"chat_id": "1", "text": "x"})
+    ok, msg_id, err = await _post(client, "token", {"chat_id": "1", "text": "x"})
     assert ok is True
     assert msg_id == 7
+    assert err is None
     assert sleeps == [17.0]
 
 
@@ -661,7 +707,8 @@ async def test_post_429_retry_after_is_capped(monkeypatch):
         sleeps.append(s)
 
     monkeypatch.setattr("notifier.asyncio.sleep", fake_sleep)
-    ok, msg_id = await _post(client, "token", {"chat_id": "1", "text": "x"})
+    ok, msg_id, err = await _post(client, "token", {"chat_id": "1", "text": "x"})
     assert ok is False
+    assert err and "exhausted retries" in err
     assert all(s <= _MAX_RETRY_AFTER_SECONDS for s in sleeps)
     assert len(sleeps) == 2  # slept before each retry, not after the last

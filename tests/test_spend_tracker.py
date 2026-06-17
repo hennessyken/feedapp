@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import tempfile
 from typing import Any, Dict
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -170,6 +169,23 @@ class TestSpendTracker:
                 msg = mock_tg.call_args[0][0]
                 assert "$10" in msg
                 assert "Spend Alert" in msg
+        finally:
+            await tracker.close()
+
+    @pytest.mark.asyncio
+    async def test_alert_routes_through_ops_alerts(self, db_path):
+        """Spend alerts use the shared ops-alert transport, not product chats."""
+        tracker = SpendTracker(db_path=db_path)
+        await tracker.connect()
+        try:
+            with patch("spend_tracker.send_ops_alert_async", new_callable=AsyncMock) as mock_ops:
+                mock_ops.return_value = True
+                await tracker.record("gpt-4o", {
+                    "input_tokens": 1_000_000,
+                    "output_tokens": 1_000_000,
+                })
+                mock_ops.assert_called_once()
+                assert "OpenAI Spend Alert" in mock_ops.call_args[0][0]
         finally:
             await tracker.close()
 

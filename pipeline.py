@@ -100,18 +100,45 @@ async def _check_fetch_silence(total_fetched: int) -> None:
 
 
 def _extract_ticker_from_row(item: Dict[str, Any]) -> str:
-    """Extract ticker from a feed_items DB row."""
+    """Return the tradeable ticker for a feed_items DB row, or "" if none.
+
+    Priority:
+      1. The RESOLVED ``ticker`` column (set by update_signal_analysis at send
+         time — this is where the LLM/cache-resolved US ticker lives for
+         FDA/EMA/ClinicalTrials items whose raw feed payload has no symbol).
+      2. ``raw_metadata`` ticker/symbol (EDGAR items carry this from the CIK map).
+
+    It NEVER falls back to ``feed_source``. The old version did, so an FDA/EMA/
+    clinical row with a resolved ticker of e.g. "ABT" was looked up at IB as
+    the literal string "FDA"/"EMA"/"CLINICAL_TRIALS" — an "Unknown contract"
+    that can never resolve, leaving the row pending forever and re-hitting IB
+    every market-hours cycle (~53k bogus contract lookups/day). UNKNOWN_*
+    placeholders are also rejected.
+    """
     import json as _json
+
+    def _clean(t: Any) -> str:
+        s = str(t or "").strip().upper()
+        return "" if s.startswith("UNKNOWN_") or s.startswith("UNKNOWN") else s
+
+    # 1. Resolved column wins.
+    resolved = _clean(item.get("ticker"))
+    if resolved:
+        return resolved
+
+    # 2. Fall back to the original feed metadata.
     meta_str = item.get("raw_metadata") or ""
     if meta_str:
         try:
             meta = _json.loads(meta_str)
-            ticker = str(meta.get("ticker") or meta.get("symbol") or "").strip().upper()
-            if ticker:
-                return ticker
+            mticker = _clean(meta.get("ticker") or meta.get("symbol"))
+            if mticker:
+                return mticker
         except (ValueError, TypeError):
             pass
-    return str(item.get("feed_source") or "").strip().upper()
+
+    # 3. No tradeable ticker — do NOT fall back to feed_source.
+    return ""
 
 
 def _us_market_open(now_et: datetime) -> bool:

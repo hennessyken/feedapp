@@ -10,7 +10,7 @@ All commands verified working 2026-06-10. Repo: `/home/ken/Regfeed`. Ops source 
 Ground rules:
 - **Claude cannot sudo.** Anything marked **[ken-sudo]** — print the command for Ken, he runs it and pastes output back.
 - **Exactly ONE pipeline instance, ever** (CLAUDE.md gotcha #5). Never bare-`kill` the systemd PID — it respawns. Never start a second `main.py --continuous`.
-- **Never post to product channels.** Ops alerts go through `ops_alerts.py` only (reads `TELEGRAM_OPS_BOT_TOKEN`/`TELEGRAM_OPS_CHAT_ID` from env, falls back to `/home/ken/.ops.env`; silent no-op while unset — both values EMPTY as of 2026-06-10).
+- **Never post to product channels.** Ops alerts go through `ops_alerts.py` only (reads `TELEGRAM_OPS_BOT_TOKEN`/`TELEGRAM_OPS_CHAT_ID` from env, falls back to `/home/ken/.ops.env`; **both values are SET / `_ops_creds()` → ARMED as of 2026-06-12, verified 2026-06-17** — so alerts now fire; silent no-op only if ever unset).
 - **Never `cp` the live DB** (gotcha #9) — `sqlite3 .backup` / `VACUUM INTO` semantics only.
 
 ## 1. Start / stop / restart (SYSTEM systemd unit)
@@ -104,7 +104,7 @@ tail -3 /home/ken/cw-fda-site/reconcile.log
 
 A `reconcile done` line dated today (04:05/04:15 UTC) = ran. `'telegram': True` = bot reachable.
 
-**(b) API-key channel grants** — `regfeed-reconcile.timer` (runs `reconcile_memberships.py` at 03:30 UTC). Unit files live in this repo, refreshed 2026-06-10, **NOT yet installed** (`systemctl status regfeed-reconcile.timer` → "could not be found"). Install is **[ken-sudo]** — exact commands in `PRODUCTION.md` Remaining item 1. Don't confuse the two: installing (b) does NOT replace the site crons in (a).
+**(b) API-key channel grants** — `regfeed-reconcile.timer` (runs `reconcile_memberships.py` at 03:30 UTC). **Installed + active — verified 2026-06-17** (`systemctl is-active regfeed-reconcile.timer` → `active`; last ran 03:33 UTC). Earlier runbook text said "NOT yet installed"; that was stale. Don't confuse the two: this timer does NOT replace the site crons in (a) — both run.
 
 ## 5. DB quick queries (read-only)
 

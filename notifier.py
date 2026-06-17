@@ -292,20 +292,40 @@ def _chat_id(tier: str, channel: Channel = "sec") -> Optional[str]:
 
     Lookup order:
     1. Channel-specific env var  (TELEGRAM_CHAT_ID_SEC_PRO, etc.)
-    2. Legacy env var            (TELEGRAM_CHAT_ID_PRO, etc.)
-    3. Ultimate legacy fallback  (TELEGRAM_CHAT_ID)
+    2. pro_smallcap -> channel-specific pro, for two-tier deployments
+    3. Legacy env var            (TELEGRAM_CHAT_ID_PRO, etc.)
+    4. pro_smallcap -> legacy pro
+    5. Ultimate legacy fallback  (TELEGRAM_CHAT_ID), only when this channel
+       has no channel-specific chat IDs. This avoids cross-product routing
+       when one product-specific tier is missing.
     """
     env_var = _CHANNEL_TIER_ENV.get(channel, {}).get(tier)
     if env_var:
         cid = (os.environ.get(env_var) or "").strip()
         if cid:
             return cid
+    if tier == "pro_smallcap":
+        pro_env = _CHANNEL_TIER_ENV.get(channel, {}).get("pro")
+        if pro_env:
+            cid = (os.environ.get(pro_env) or "").strip()
+            if cid:
+                return cid
     # Legacy single-channel fallback
     legacy_var = _LEGACY_TIER_ENV.get(tier)
     if legacy_var:
         cid = (os.environ.get(legacy_var) or "").strip()
         if cid:
             return cid
+    if tier == "pro_smallcap":
+        cid = (os.environ.get(_LEGACY_TIER_ENV["pro"]) or "").strip()
+        if cid:
+            return cid
+    channel_has_specific_config = any(
+        (os.environ.get(var) or "").strip()
+        for var in _CHANNEL_TIER_ENV.get(channel, {}).values()
+    )
+    if channel_has_specific_config:
+        return None
     return (os.environ.get("TELEGRAM_CHAT_ID") or "").strip() or None
 
 
@@ -646,17 +666,26 @@ def format_critical_fomo_stub(channel: str, fundamentals: Optional[Dict[str, Any
 
 async def _post(
     client: httpx.AsyncClient, token: str, payload: Dict[str, Any],
-) -> Tuple[bool, Optional[int]]:
-    """POST to Telegram sendMessage. Returns (ok, message_id)."""
+) -> Tuple[bool, Optional[int], Optional[str]]:
+    """POST to Telegram sendMessage. Returns (ok, message_id, error_reason).
+
+    error_reason is None on success and a short (<=~180 char) human-readable
+    string on failure — the HTTP status + body snippet (e.g. "HTTP 400: Bad
+    Request: can't parse entities..."), an exhausted-retries summary, or the
+    exception type. The status/body were previously only logged; returning
+    them lets callers persist *why* a send failed into signal_log.drop_reason
+    instead of leaving it blank, so a failure spike can be diagnosed without
+    grepping the journal.
+    """
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    last_err: Optional[Exception] = None
+    last_err: Optional[str] = None
     for attempt in range(_MAX_RETRIES + 1):
         try:
             resp = await client.post(url, json=payload, timeout=_TIMEOUT_SECONDS)
             if resp.status_code == 200:
                 data = resp.json()
                 msg_id = (data.get("result") or {}).get("message_id")
-                return True, msg_id
+                return True, msg_id, None
             if resp.status_code == 429:
                 # Flood control — Telegram tells us exactly how long to wait
                 # (parameters.retry_after). Retrying sooner extends the block
@@ -671,19 +700,22 @@ async def _post(
                 except Exception:
                     pass
                 retry_after = max(0.0, min(retry_after, _MAX_RETRY_AFTER_SECONDS))
-                last_err = RuntimeError(
-                    f"HTTP 429 attempt {attempt+1} (retry_after={retry_after:.0f}s)"
-                )
+                last_err = f"HTTP 429 attempt {attempt+1} (retry_after={retry_after:.0f}s)"
                 if attempt < _MAX_RETRIES:
                     await asyncio.sleep(retry_after)
                 continue
-            logger.error("TG_FAILED: status=%d body=%s",
-                         resp.status_code, resp.text[:200])
-            return False, None
+            reason = f"HTTP {resp.status_code}: {resp.text[:160]}"
+            logger.error("TG_FAILED: %s", reason)
+            return False, None, reason
         except (httpx.TimeoutException, httpx.ConnectError) as e:
-            last_err = e
-    logger.error("TG_FAILED: exhausted retries — %s", last_err)
-    return False, None
+            last_err = f"{type(e).__name__}: {str(e)[:120]}"
+        except Exception as e:  # never let a send crash the pipeline cycle
+            reason = f"{type(e).__name__}: {str(e)[:140]}"
+            logger.error("TG_FAILED: %s", reason)
+            return False, None, reason
+    reason = f"exhausted retries — {last_err}"
+    logger.error("TG_FAILED: %s", reason)
+    return False, None, reason
 
 
 async def send_signal(
@@ -709,11 +741,13 @@ async def send_signal(
     token = _token(channel)
     chat_id = _chat_id(tier, channel)
     result: Dict[str, Any] = {
-        "sent": False, "tier": tier, "channel": channel, "chat_id": chat_id, "message_id": None,
+        "sent": False, "tier": tier, "channel": channel, "chat_id": chat_id,
+        "message_id": None, "error": None,
     }
     if not token or not chat_id:
         logger.info("SIGNAL_SKIPPED: tier=%s channel=%s token=%s chat_id=%s ticker=%s",
                     tier, channel, bool(token), bool(chat_id), signal.ticker)
+        result["error"] = "creds missing (token or chat_id not configured)"
         return result
 
     # Macro context for paid posts only — free tier gets the 24h-delayed
@@ -742,8 +776,8 @@ async def send_signal(
     owns_client = http is None
     client = http or httpx.AsyncClient(timeout=_TIMEOUT_SECONDS)
     try:
-        ok, msg_id = await _post(client, token, payload)
-        result["sent"], result["message_id"] = ok, msg_id
+        ok, msg_id, err = await _post(client, token, payload)
+        result["sent"], result["message_id"], result["error"] = ok, msg_id, err
         if ok:
             logger.info("SIGNAL_SENT: tier=%s ticker=%s msg_id=%s",
                         tier, signal.ticker, msg_id)
@@ -800,8 +834,8 @@ async def send_free_tier_delayed(
     owns_client = http is None
     client = http or httpx.AsyncClient(timeout=_TIMEOUT_SECONDS)
     try:
-        ok, msg_id = await _post(client, token, payload)
-        result["sent"], result["message_id"] = ok, msg_id
+        ok, msg_id, err = await _post(client, token, payload)
+        result["sent"], result["message_id"], result["error"] = ok, msg_id, err
         if ok:
             logger.info("FREE_DELAYED_SENT: ticker=%s msg_id=%s", signal.ticker, msg_id)
         return result
@@ -845,8 +879,8 @@ async def send_critical_fomo_stub(
     owns_client = http is None
     client = http or httpx.AsyncClient(timeout=_TIMEOUT_SECONDS)
     try:
-        ok, msg_id = await _post(client, token, payload)
-        result["sent"], result["message_id"] = ok, msg_id
+        ok, msg_id, err = await _post(client, token, payload)
+        result["sent"], result["message_id"], result["error"] = ok, msg_id, err
         if ok:
             logger.info("FOMO_STUB_SENT: channel=%s msg_id=%s", channel, msg_id)
         return result
@@ -965,7 +999,7 @@ async def send_eod_summary(
     owns = http is None
     client = http or httpx.AsyncClient(timeout=_TIMEOUT_SECONDS)
     try:
-        ok, _ = await _post(client, token, payload)
+        ok, _, _ = await _post(client, token, payload)
         if ok:
             logger.info("EOD_SUMMARY_SENT: tier=%s %s — %d signals",
                         tier, signal_date, len(items))

@@ -24,6 +24,7 @@ from domain import (
 )
 from feeds.base import FeedResult
 from pipeline import PipelineConfig, _extract_ticker_from_row, _resolve_ticker_llm, _us_market_open
+from sponsor_ticker_map import resolve_sponsor_ticker
 
 logger = logging.getLogger(__name__)
 
@@ -167,6 +168,23 @@ class TelegramSubscriber(BaseSubscriber):
                         logger.info(
                             "[telegram] Ticker from cache: %s → %s",
                             company_name, ticker,
+                        )
+
+                # Curated sponsor → US-listed-parent map (ViiV→GSK, Celgene→BMY,
+                # CSL Behring→CSLLY, …). Deterministic, hand-verified, US-only —
+                # recovers subsidiaries the LLM correctly leaves blank, BEFORE
+                # spending a gpt-5-nano call. Sentry-1 still gates materiality.
+                if not ticker and company_name:
+                    mapped = resolve_sponsor_ticker(company_name)
+                    if mapped and _valid_ticker(mapped):
+                        ticker = mapped.upper().strip()
+                        ticker_source = "sponsor_map"
+                        logger.info(
+                            "[telegram] Ticker from sponsor map: %s → %s",
+                            company_name, ticker,
+                        )
+                        await ctx.db.cache_ticker(
+                            company_name, ticker, source="sponsor_map",
                         )
 
                 if not ticker and llm is not None:
@@ -672,7 +690,7 @@ class TelegramSubscriber(BaseSubscriber):
                             sentry1_price=sentry1_price_prob,
                             sentry1_passed=sentry1_passed,
                             impact_score=impact_out, confidence=final_confidence,
-                            action=action_label, freshness_mult=freshness_mult,
+                            action=final_action, freshness_mult=round(freshness_mult, 4),
                             disposition="dropped_throttle",
                             drop_reason=f"per-ticker daily cap ({MAX_PER_TICKER_PER_DAY}) reached: {sent_today} already sent",
                             tier=tier, channel=channel,
@@ -722,6 +740,14 @@ class TelegramSubscriber(BaseSubscriber):
                             logger.warning("FOMO stub failed: %s", e)
 
                     disposition = f"sent_{tier}" if sent else "dropped_send_failed"
+                    # Persist WHY a paid send failed (Telegram HTTP status +
+                    # body snippet) instead of leaving drop_reason blank — these
+                    # are silently-lost PAID posts, so the reason is what lets a
+                    # failure spike be diagnosed (parse-400 vs 429-flood) without
+                    # journal archaeology.
+                    send_drop_reason = (
+                        "" if sent else (result.get("error") or "send failed")[:200]
+                    )
                     await ctx.db.write_signal_log(
                         item_id=item.item_id,
                         feed_source=item.feed_source,
@@ -740,6 +766,7 @@ class TelegramSubscriber(BaseSubscriber):
                         impact_score=impact_out, confidence=final_confidence,
                         action=final_action, freshness_mult=round(freshness_mult, 4),
                         disposition=disposition,
+                        drop_reason=send_drop_reason,
                         tier=tier,
                         channel=channel,
                         price_at_flag=buy_price,

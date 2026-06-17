@@ -10,11 +10,12 @@ Usage is persisted to SQLite so it survives restarts.
 
 import json
 import logging
-import os
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 import aiosqlite
+
+from ops_alerts import send_ops_alert_async
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +121,11 @@ class SpendTracker:
 
     async def connect(self) -> None:
         self._db = await aiosqlite.connect(self._db_path)
+        # This is a SECOND connection to the same regfeed.db that the pipeline's
+        # FeedDatabase also holds open. Wait on lock contention instead of
+        # failing instantly — this is a primary cause of the WAL-checkpoint
+        # "database table is locked" warnings the pipeline used to emit.
+        await self._db.execute("PRAGMA busy_timeout=5000")
         await self._db.executescript(_SPEND_SCHEMA)
         await self._db.commit()
 
@@ -269,25 +275,13 @@ class SpendTracker:
 
 
 # ---------------------------------------------------------------------------
-# Telegram helper (lightweight, no dependency on notifier.py)
+# Ops alert helper
 # ---------------------------------------------------------------------------
 
 async def _send_telegram_text(text: str) -> bool:
-    """Send a plain text message via Telegram. Returns True on success."""
-    import httpx
+    """Send a spend alert through the shared ops-alert route.
 
-    token = (os.environ.get("TELEGRAM_BOT_TOKEN") or "").strip()
-    chat_id = (os.environ.get("TELEGRAM_CHAT_ID") or "").strip()
-    if not token or not chat_id:
-        logger.info("Spend alert skipped — Telegram credentials not configured")
-        return False
-
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = {"chat_id": chat_id, "text": text, "disable_web_page_preview": True}
-
-    async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.post(url, json=payload, timeout=10)
-        if resp.status_code == 200:
-            return True
-        logger.error("Spend alert Telegram failed: %d %s", resp.status_code, resp.text[:200])
-        return False
+    Kept as a small compatibility wrapper for existing tests/tools that patch
+    the old helper name.
+    """
+    return await send_ops_alert_async(text)

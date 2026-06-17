@@ -259,12 +259,20 @@ def _adaptive_poll_seconds(base: int) -> int:
     return min(1800, base * 3)              # overnight → slow
 
 
+# How often (in poll cycles) to run a TRUNCATE WAL checkpoint. The hot-path
+# checkpoint is PASSIVE (never truncates while a 2nd connection is open), so
+# the WAL file is shrunk back to zero out-of-band here during the free-tier
+# sweep — a low-traffic moment where the exclusive lock is easy to get.
+_WAL_TRUNCATE_EVERY_CYCLES = 30
+
+
 async def _run_continuous(config: RuntimeConfig) -> None:
     base = config.poll_interval_seconds
     logging.info(
         "Continuous mode (adaptive poll, base=%ds; market-hours fast / overnight slow)",
         base,
     )
+    cycle_count = 0
 
     # Create IB client once and reuse across all poll cycles
     ib_client = _make_ib_client(config)
@@ -277,6 +285,7 @@ async def _run_continuous(config: RuntimeConfig) -> None:
             ib_client = None
 
     while True:
+        cycle_count += 1
         try:
             pipeline = _build_pipeline(config, ib_client=ib_client)
             stats = await pipeline.run()
@@ -304,6 +313,12 @@ async def _run_continuous(config: RuntimeConfig) -> None:
             _db = FeedDatabase(config.db_path)
             await _db.connect()
             try:
+                # Periodically shrink the WAL file back to zero (the per-cycle
+                # checkpoints are PASSIVE and don't truncate). Done here because
+                # the pipeline + SpendTracker connections are closed by now, so
+                # the exclusive TRUNCATE lock is uncontended.
+                if cycle_count % _WAL_TRUNCATE_EVERY_CYCLES == 0:
+                    await _db.wal_checkpoint_truncate()
                 ft_stats = await run_free_tier_cycle(_db, ib_client)
                 if any(ft_stats.values()):
                     logging.info(

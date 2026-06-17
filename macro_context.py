@@ -212,7 +212,7 @@ def _format_line(
         suffix = ""
         if vix_val is not None:
             suffix = f"; VIX last closed at <b>{vix_val:.0f}</b>"
-        spy_part = spy_phrase.replace("S&P 500", "S&P futures") if spy_phrase else ""
+        spy_part = spy_phrase.replace("S&amp;P 500", "S&amp;P futures") if spy_phrase else ""
         return (
             f"📡 <b>Market backdrop:</b> pre-market. "
             f"{spy_part}{suffix}. Regular session opens {state.next_open_label}."
@@ -239,13 +239,20 @@ def _format_line(
 # ── Phrase builders ──────────────────────────────────────────────────────────
 
 def _spy_phrase(pct: Optional[float]) -> str:
-    """'S&P 500 +0.4%' / 'S&P 500 −1.8%' / 'S&P 500 flat' / '' if unknown."""
+    """'S&P 500 +0.4%' / 'S&P 500 −1.8%' / 'S&P 500 flat' / '' if unknown.
+
+    The ampersand is emitted as the HTML entity '&amp;' because this line is
+    appended to Telegram posts with parse_mode='HTML' WITHOUT going through
+    _esc() (it carries intentional <b>/<i> tags). A raw '&' makes Telegram
+    reject the whole message with 'can't parse entities' (gotcha #1) — this
+    silently dropped paid posts whenever a macro backdrop line was present.
+    """
     if pct is None:
         return ""
     if abs(pct) < 0.1:
-        return "S&P 500 flat"
+        return "S&amp;P 500 flat"
     sign = "+" if pct > 0 else "−"
-    return f"S&P 500 <b>{sign}{abs(pct):.1f}%</b>"
+    return f"S&amp;P 500 <b>{sign}{abs(pct):.1f}%</b>"
 
 
 def _vix_phrase(val: Optional[float]) -> str:

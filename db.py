@@ -320,6 +320,13 @@ class FeedDatabase:
         await self._db.executescript(SCHEMA)
         await self._db.execute("PRAGMA journal_mode=WAL")
         await self._db.execute("PRAGMA foreign_keys=ON")
+        # Wait (rather than fail instantly) on lock contention. Multiple
+        # connections touch this DB each cycle — the per-cycle FeedDatabase,
+        # main.py's free-tier-sweep FeedDatabase, and SpendTracker — so a
+        # checkpoint or write could otherwise hit "database is locked" the
+        # moment another connection holds the file. 5s is far longer than any
+        # real critical section here.
+        await self._db.execute("PRAGMA busy_timeout=5000")
         await self._db.commit()
         await self._migrate_columns()
         await self._migrate_backtest_signals_llm()
@@ -806,13 +813,38 @@ class FeedDatabase:
             pass  # Table doesn't exist yet
 
     async def wal_checkpoint(self) -> None:
-        """Truncate the WAL file to prevent bloat. Call periodically."""
+        """Hot-path checkpoint — runs on every close (per cycle).
+
+        Uses PASSIVE: it checkpoints whatever frames it can WITHOUT taking the
+        exclusive lock and returns cleanly when another connection holds the
+        file. The old TRUNCATE mode needed that exclusive lock and, with a
+        second connection (SpendTracker / the free-tier-sweep DB) almost always
+        open, failed ~206×/day with "WAL checkpoint failed: database table is
+        locked" — pure log noise (durability is unaffected; data is already
+        committed, only WAL-file truncation was skipped). Periodic real
+        truncation is handled out-of-band by wal_checkpoint_truncate().
+        """
+        if self._db:
+            try:
+                await self._db.execute("PRAGMA wal_checkpoint(PASSIVE)")
+                logger.debug("WAL checkpoint (PASSIVE) completed")
+            except Exception as e:
+                logger.debug("WAL checkpoint (PASSIVE) skipped: %s", e)
+
+    async def wal_checkpoint_truncate(self) -> None:
+        """Maintenance checkpoint — shrinks the WAL file back to zero.
+
+        Needs the exclusive lock, so call it from a LOW-traffic moment (e.g.
+        once every N cycles from the continuous loop), never on the hot path.
+        With busy_timeout set it now waits for the lock instead of erroring;
+        any residual failure is logged at debug and retried next time.
+        """
         if self._db:
             try:
                 await self._db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
                 logger.debug("WAL checkpoint (TRUNCATE) completed")
             except Exception as e:
-                logger.warning("WAL checkpoint failed: %s", e)
+                logger.debug("WAL checkpoint (TRUNCATE) skipped: %s", e)
 
     async def close(self) -> None:
         if self._db:
@@ -1103,11 +1135,25 @@ class FeedDatabase:
         await self._db.commit()
 
     async def get_pending_buy_prices(self) -> List[Dict[str, Any]]:
-        """Get items with a signal_date but no buy_price yet (queued overnight)."""
+        """Get items with a signal_date but no buy_price yet (queued overnight).
+
+        Guarded like the sibling milestone/free-tier queries:
+          - skip UNKNOWN_* placeholder tickers (never resolve at IB)
+          - 4-day age cap (created_at) so genuinely-unfillable rows
+            (delisted / foreign-only / a 2-month-old overnight queue) stop
+            being re-queried every market-hours cycle. Without it the queue
+            grew unbounded and hammered IB with contract lookups that can
+            never succeed. 4 days comfortably covers a Friday-after-close
+            signal whose first fill chance is the next Monday/Tuesday open.
+          - NULL ticker is still allowed through (extraction falls back to
+            raw_metadata) — only an explicit UNKNOWN_* is excluded.
+        """
         assert self._db
         cur = await self._db.execute(
             """SELECT * FROM feed_items
                WHERE signal_date IS NOT NULL AND buy_price IS NULL
+                 AND (ticker IS NULL OR ticker NOT LIKE 'UNKNOWN_%')
+                 AND (julianday('now') - julianday(created_at)) < 4.0
                ORDER BY signal_date, published_at""",
         )
         rows = await cur.fetchall()
